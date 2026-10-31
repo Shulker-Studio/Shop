@@ -66,7 +66,7 @@ SignEditResult planSignEdit(
 ) {
     auto const signConfig = toSignConfig(config);
 
-    // 两道闸只对「正面已经有主的商店牌」生效：普通告示牌一个字都不能碰
+    // 两道闸只对「正面看起来已经是商店牌」的牌子生效：普通告示牌一个字都不能碰
     // （DESIGN §5.1.1），所以先看改前的文本。
     //
     // 注：Before 事件里 `SignBlockActor` 还是旧文本，包里才是新文本（DESIGN §6.1），
@@ -74,7 +74,6 @@ SignEditResult planSignEdit(
     // （现在严格合法）：改配置、换管理员名、外部工具写脏数据，都不该让保护失效。
     SignOwnerHandoff handoff;
     std::string      existingOwnerName; // 已有商店的第 1 行该写谁（§11：写店主，不写点击者）
-    bool             existingAdminShop = false;
 
     if (auto* sign = signBlockActorAt(region, signPos); sign != nullptr) {
         auto const existing = parseShopSignFront(*sign, signConfig);
@@ -82,11 +81,11 @@ SignEditResult planSignEdit(
             auto const owner = readShopOwner(*sign, existing);
             auto const actor = shopActorOf(owner.xuid, editor.getXuid(), editor.isOperator());
 
-            // 归属交接：改之前已经是商店（哪怕没有容器），归属就不该跟着编辑者走。
+            // 归属交接：改之前已经是商店就不该跟着编辑者走（除管理员店 ⇄ 普通店之外）。
             handoff.wasShop           = true;
+            handoff.previousAdminShop = owner.adminShop;
             handoff.previousOwnerXuid = owner.xuid;
             existingOwnerName         = owner.displayName;
-            existingAdminShop         = owner.adminShop;
 
             // 两道闸：不是你的商店不放，上了蜡的牌谁都不放（DESIGN §9.2）。
             if (auto reason = signTextEditRejection(actor, sign->mIsWaxed, owner.displayName, owner.adminShop)) {
@@ -112,12 +111,13 @@ SignEditResult planSignEdit(
         return {.outcome = SignEditOutcome::Rejected, .message = messageFor(lookup.error)};
     }
 
-    // 第 1 行由服务器说了算：管理员店写配置名；已经是别人的商店就写原店主的名字
-    // （OP 代改不改归属，DESIGN §11）；新建才写本次编辑者。
+    // 第 1 行由服务器说了算：管理员店写配置名；已经属于别人的商店就写原店主的名字
+    // （OP 代改不改归属，DESIGN §11）；新建才写本次编辑者。写谁与归属写谁同源
+    // （都问 `keepsPreviousOwner`），不会出现“第 1 行是 A、店主是 B”的错位。
     std::string ownerName = config.adminShopName;
     if (!parsed.spec->adminShop) {
-        bool const keepExistingOwner = handoff.wasShop && !existingOwnerName.empty() && !existingAdminShop;
-        ownerName                    = keepExistingOwner ? existingOwnerName : editor.getNameTag();
+        bool const keepPrevious = handoff.keepsPreviousOwner(/*newAdminShop=*/false);
+        ownerName               = keepPrevious && !existingOwnerName.empty() ? existingOwnerName : editor.getNameTag();
     }
 
     auto const formatted = formatShopSign(*parsed.spec, ownerName, lookup.itemName);

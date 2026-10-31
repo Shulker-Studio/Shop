@@ -62,7 +62,8 @@ void recordShopOwner(
     }
 
     auto const signConfig = toSignConfig(config);
-    if (!isShopSignFront(*sign, signConfig)) {
+    auto const parsed     = parseShopSignFront(*sign, signConfig);
+    if (!parsed.ok()) {
         return; // 普通告示牌、非法商店牌：一个字都不碰
     }
 
@@ -76,8 +77,9 @@ void recordShopOwner(
         return;
     }
 
-    // 目标归属：改之前已经是商店就保住原店主；第一次成为商店就写给编辑者。
-    bool const  keepPrevious = handoff.wasShop && !handoff.previousOwnerXuid.empty();
+    // 目标归属：改之前已经是同一家商店就保住原店主；第一次成为商店（或管理员店
+    // 与普通店互转）就写给编辑者。判定只调 `keepsPreviousOwner`，与第 1 行写谁同源。
+    bool const  keepPrevious = handoff.keepsPreviousOwner(parsed.spec->adminShop);
     std::string desired      = keepPrevious ? handoff.previousOwnerXuid : editor.getXuid();
 
     std::string const& recorded = sign->mTextFront->mLastEditXuid;

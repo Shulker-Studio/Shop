@@ -22,23 +22,12 @@ enum class SignEditOutcome {
     Normalized,   ///< 合法：把规范化后的四行写回包
 };
 
-/// 一次编辑的「归属交接」：Before 阶段判出，After 阶段用（DESIGN §5.4）。
-///
-/// 归属规则：「牌子第一次成为商店时，归属写给编辑者；之后改牌面不改归属」。
-/// 后者包括两种人：OP 代改别人的牌（§9.2 允许），以及引擎可能自己改掉 `mLastEditXuid`
-/// 的情况（§6.5 第 3 条）。所以 After 阶段要拿得到「改之前是谁的」。
-struct SignOwnerHandoff {
-    /// 改之前正面是不是一块像样的商店牌。不是 → 这次编辑让它成了商店，归属写编辑者。
-    bool wasShop = false;
-    /// 改之前记的店主 XUID。可能为空（牌子没记下）。
-    std::string previousOwnerXuid;
-};
-
 struct SignEditResult {
     SignEditOutcome outcome = SignEditOutcome::NotAShopSign;
     std::string     message;        ///< Rejected 时发给玩家的原因
     std::string     normalizedText; ///< Normalized 时写回 `event.text()`
     /// Normalized 时的归属交接；由事件层在 After 事件里交给 `recordShopOwner`。
+    /// 结构体本身在 `shop/SignProtection.h`（它是纯数据 + 一个判据，可以单测）。
     SignOwnerHandoff ownerHandoff;
 };
 
@@ -90,10 +79,10 @@ struct ShopInteraction {
     /// 这块牌已经上蜡：连店主也要先除蜡才能改文本（DESIGN §9.2）。
     /// 上蜡只是编辑开关，不影响商店语义，交易照常。
     /// 这里是「整块牌子」的属性，与 `shop` 有没有值（能不能交易）无关。
-    bool waxed;
+    bool waxed = false;
     /// 玩家看的是正面还是背面。背面不弹表单（决定在 `planSignTouch` 里），
     /// 但物品类操作还是受保护：上蜡改的是整块牌子（DESIGN §5.5 / §9.2）。
-    bool facingFront;
+    bool facingFront = true;
 };
 
 /// 看待一块商店牌（点牌路径）。

@@ -1,6 +1,5 @@
 #pragma once
 
-#include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -40,6 +39,25 @@ bool canManageShop(ShopActor actor);
 ///   会被第一个改它的人接手，已记在票面的已知边界里。
 bool mayEditShopSignText(ShopActor actor);
 
+/// 一次编辑的「归属交接」：Before 阶段（`planSignEdit`）判出，After 阶段（`recordShopOwner`）用。
+///
+/// 归属规则（DESIGN §5.4）：「牌子第一次成为商店时写给编辑者，之后改牌面不改归属」。
+/// 后者包括两种人：OP 代改别人的牌（§9.2 允许），以及引擎可能自己改掉 `mLastEditXuid`
+/// 的情况（§6.5 第 3 条）。所以 After 阶段要拿得到「改之前是谁的」。
+struct SignOwnerHandoff {
+    bool        wasShop           = false; ///< 改之前正面是不是一块像样的商店牌
+    bool        previousAdminShop = false; ///< 改之前是不是管理员商店（互转算换了家店）
+    std::string previousOwnerXuid;         ///< 改之前记的店主 XUID，可能为空
+
+    /// 这次编辑该不该保住原店主。判定只写在这里：第 1 行写谁（`planSignEdit`）与
+    /// 归属写谁（`recordShopOwner`）都调它，不允许任何一边另写一套条件。
+    ///
+    /// 管理员店 ⇄ 普通店互转不算“保住”：管理权只给 OP（§11），换了个店就该换归属。
+    [[nodiscard]] bool keepsPreviousOwner(bool newAdminShop) const {
+        return wasShop && !previousOwnerXuid.empty() && previousAdminShop == newAdminShop;
+    }
+};
+
 /// 提交阶段的一道总闸：这块牌的正面文本现在能不能被这个人改。
 ///
 /// 返回空 = 放行；非空 = 直接发给玩家的拒绝理由。「谁能改」与「上蜡冻住了」两条规则
@@ -54,6 +72,9 @@ std::string ownerOnlyEditMessage(std::string const& ownerName, bool adminShop);
 
 /// 牌子上了蜡、改不动时的提示：连店主也要先除蜡（DESIGN §9.2）。
 std::string waxedSignEditMessage();
+
+/// 商店牌还在、但附着格不是可用容器时点牌：没有表单可弹，也别把编辑界面递给非店主。
+std::string shopBoxMissingMessage();
 
 /// 手持物品对告示牌会做的事（DESIGN §9.2 的「牌面防护」那一组）。
 ///
@@ -74,8 +95,12 @@ enum class SignTouch : std::uint8_t {
 /// 归一化（小写、去命名空间前缀、只留字母与数字）让判定不依赖引擎给的是
 /// `minecraft:red_dye` 还是展示名——两种写法都会落到同一个键。
 ///
-/// 表是白名单：不认识的一律 `None`。误判成 `None` 只会让店主少一次染色、多弹一次表单，
-/// 不会给非店主开出一条改牌的路——方向是安全的。
+/// 先查白名单（16 种染料 + 7 种斧头 + 墨囊/荧光墨囊/蜜蜡），再按形状兜底：
+/// 以 `dye` 结尾的一律算染料，以 `axe` 结尾且不是 `pickaxe` 的算斧头。兜底是为了
+/// 新版本加了颜色或材质时不至于**静默放行**——这类漏判在正面只会多弹一次表单，
+/// 在背面就等于没保护（背面本来就归原版处理）。
+///
+/// 认不出的仍然回落 `None`，那时当作普通物品：正面弹表单、背面放行（§5.5）。
 SignTouch classifySignTouch(std::string_view itemTypeName);
 
 /// 一次点击该做什么。
@@ -91,7 +116,7 @@ struct SignTouchDecision {
     std::string message;
 };
 
-/// 判定一次点击需要的既成事实。写成结构体而不是一串 bool：五个布尔实参没人读得懂。
+/// 判定一次点击需要的既成事实。写成结构体而不是一串实参：一半是 bool，位置参数没人读得懂。
 struct SignTouchContext {
     SignTouch touch       = SignTouch::None;  ///< 手里那件物品会做什么
     ShopActor actor       = ShopActor::Other; ///< 这个人是谁（`shopActorOf` 的结果）

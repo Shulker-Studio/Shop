@@ -23,9 +23,10 @@ ll::event::ListenerPtr gSignEditedListener;
 ///
 /// 只存一条：同一块牌的两个事件是连着来的（服务端线程上一个接一个），
 /// 而「上一次被 Rejected（没有 After）」的残留会在下一次 Before 时被覆写。
-/// 取用前还要比对牌位与编辑者，对不上就当没存。
+/// 取用前比对牌位（含维度）与编辑者：任何一边对不上就不消费，也不吃别的牌子的 After。
 struct PendingOwnerHandoff {
     Cell             sign;
+    int              dimension = 0; ///< `DimensionType` 的整数值：`Cell` 只描述维度内的一格
     std::string      editorXuid;
     SignOwnerHandoff handoff;
 };
@@ -63,6 +64,7 @@ void onSignEdit(SignEditBeforeEvent& event) {
         // 归属留给 After 阶段（那时文本才真写进去），先把它存下。
         gPendingOwnerHandoff = PendingOwnerHandoff{
             .sign       = toCell(event.pos()),
+            .dimension  = static_cast<int>(region.getDimensionId()),
             .editorXuid = player.getXuid(),
             .handoff    = result.ownerHandoff,
         };
@@ -74,6 +76,15 @@ void onSignEdit(SignEditBeforeEvent& event) {
 /// 而 ADR-0005 的店主判定依赖它。目标归属来自 Before 阶段存下的交接——不是
 /// 「记的 XUID ≠ 编辑者就覆盖」：改牌面不改归属（§5.4）。
 void onSignEdited(SignEditAfterEvent const& event) {
+    auto& player = event.self();
+
+    // 先比对，匹配才消费：别的牌子、别的玩家、别的维度的事件不该吃掉这条待用的交接
+    // （吃掉会让引擎没写 XUID 的牌子退化成无主牌，那是一条静默降级的路）。
+    bool const matches =
+        gPendingOwnerHandoff && gPendingOwnerHandoff->sign == toCell(event.pos())
+        && gPendingOwnerHandoff->dimension == static_cast<int>(player.getDimensionBlockSource().getDimensionId())
+        && gPendingOwnerHandoff->editorXuid == player.getXuid();
+
     // 背面是布告板：不读、不写、不校验（DESIGN §5.5）。
     if (event.textSide() != SignTextSide::Front) {
         return;
@@ -84,16 +95,13 @@ void onSignEdited(SignEditAfterEvent const& event) {
         return;
     }
 
-    // 交接只能取一次：没对应的 Before（不是我们放行的编辑）就当没存。
-    auto pending = std::move(gPendingOwnerHandoff);
-    gPendingOwnerHandoff.reset();
-
-    auto& player = event.self();
-    if (!pending || pending->sign != toCell(event.pos()) || pending->editorXuid != player.getXuid()) {
-        return; // 别的模组或别的手势写进来的：归属不是我们该动的事
+    if (!matches) {
+        return; // 不是我们放行的那次编辑：归属不是我们该动的事
     }
 
-    recordShopOwner(player.getDimensionBlockSource(), event.pos(), player, *config, pending->handoff);
+    auto handoff = std::move(gPendingOwnerHandoff->handoff);
+    gPendingOwnerHandoff.reset();
+    recordShopOwner(player.getDimensionBlockSource(), event.pos(), player, *config, handoff);
 }
 
 } // namespace

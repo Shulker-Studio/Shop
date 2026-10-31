@@ -66,9 +66,14 @@ void onInteractBlock(ll::event::player::PlayerInteractBlockEvent& event) {
         return;
     }
 
-    // 弹表单：只有「现在能交易」的商店牌才有表单可弹。牌子还在、但附着格不是可用容器时
-    // （店暂时停摆），放行给原版编辑界面——改牌的权限仍然由提交阶段把关（DESIGN §9.2）。
+    // 店暂时停摆（附着格不是可用容器）：没有表单可弹。店主与 OP 仍然可以改牌面
+    // （放行给原版编辑界面，否则店坏了就永远修不回来），其余人拦下——牌还有主。
     if (!interaction->shop) {
+        if (canManageShop(interaction->actor)) {
+            return;
+        }
+        event.cancel();
+        player.sendMessage(shopBoxMissingMessage());
         return;
     }
 

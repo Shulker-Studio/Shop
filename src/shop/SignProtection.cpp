@@ -72,30 +72,50 @@ bool contains(std::array<std::string_view, N> const& table, std::string const& n
 /// 「只有店主（或 OP）能 ……」这个句式只写一次：前面接主体、后面接动作。
 constexpr std::string_view kOwnerOnly = "只有店主（或 OP）能";
 
-/// 拼一句「<主体><kOwnerOnly><动作>」的话。各处共用，避免八处各拼一遍。
-std::string ownerOnlySentence(std::string_view subject, std::string_view action) {
-    std::string sentence{subject};
-    sentence.append(kOwnerOnly);
-    sentence.append(action);
-    return sentence;
+/// 「谁能」这半句按身份换：有主的牌说店主，没记下店主的牌只能找 OP（§9.2 的表）。
+std::string_view allowedActorPhrase(ShopActor actor) {
+    return actor == ShopActor::NoRecordedOwner ? std::string_view{"只有 OP 能"} : kOwnerOnly;
 }
 
-/// 非店主对这几类操作的说法（GLOSSARY 里的「上蜡 / 除蜡」原样用）。
-std::string onlyOwnerMessage(SignTouch touch) {
+/// 被拦下的是牌子上的什么。
+std::string_view touchSubject(SignTouch touch) {
     switch (touch) {
     case SignTouch::Dye:
-        return ownerOnlySentence("这块商店牌的颜色", "改");
+        return "这块商店牌的颜色";
     case SignTouch::InkSac:
     case SignTouch::GlowInkSac:
-        return ownerOnlySentence("这块商店牌的文字样式", "改");
+        return "这块商店牌的文字样式";
     case SignTouch::HoneyComb:
-        return ownerOnlySentence("这块商店牌", "上蜡");
     case SignTouch::Axe:
-        return ownerOnlySentence("这块商店牌", "除蜡");
     case SignTouch::None:
         break;
     }
-    return ownerOnlySentence("这块商店牌", "动");
+    return "这块商店牌";
+}
+
+/// 要做什么（GLOSSARY 里的「上蜡 / 除蜡」原样用）。
+std::string_view touchAction(SignTouch touch) {
+    switch (touch) {
+    case SignTouch::Dye:
+    case SignTouch::InkSac:
+    case SignTouch::GlowInkSac:
+        return "改";
+    case SignTouch::HoneyComb:
+        return "上蜡";
+    case SignTouch::Axe:
+        return "除蜡";
+    case SignTouch::None:
+        break;
+    }
+    return "动"; // 不可达的兜底：`None` 不会走到 Block（见 `planSignTouch`）
+}
+
+/// 「<主体><谁能><动作>」——一句话只在这里拼。
+std::string onlyOwnerMessage(ShopActor actor, SignTouch touch) {
+    std::string sentence{touchSubject(touch)};
+    sentence.append(allowedActorPhrase(actor));
+    sentence.append(touchAction(touch));
+    return sentence;
 }
 
 } // namespace
@@ -146,6 +166,8 @@ std::string ownerOnlyEditMessage(std::string const& ownerName, bool adminShop) {
 
 std::string waxedSignEditMessage() { return "这块商店牌上了蜡，先拿斧头除蜡才能改"; }
 
+std::string shopBoxMissingMessage() { return "这家店暂时用不了（商店箱不在了），牌子还不能改"; }
+
 SignTouch classifySignTouch(std::string_view itemTypeName) {
     auto const name = normalizeItemName(itemTypeName);
     if (name.empty()) {
@@ -166,6 +188,20 @@ SignTouch classifySignTouch(std::string_view itemTypeName) {
     }
     if (name == "honeycomb") {
         return SignTouch::HoneyComb;
+    }
+
+    // 形状兜底：新版本加了颜色或材质时不至于静默放行。
+    auto const endsWith = [&name](std::string_view suffix) {
+        return name.size() > suffix.size() && name.ends_with(suffix);
+    };
+    if (endsWith("pickaxe")) {
+        return SignTouch::None; // 镐也是以 axe 结尾，但它不改牌子
+    }
+    if (endsWith("dye")) {
+        return SignTouch::Dye;
+    }
+    if (endsWith("axe")) {
+        return SignTouch::Axe;
     }
     return SignTouch::None;
 }
@@ -198,7 +234,7 @@ SignTouchDecision planSignTouch(SignTouchContext const& context) {
     // 物品类操作与看哪一面无关：上蜡/除蜡改的是整块牌子，染色与墨囊也不该由外人来按。
     // 到这里只可能是「真的有东西要改」：染料、墨囊、荧光墨囊、蜜蜡，以及上了蜡的斧头。
     if (!canManageShop(context.actor)) {
-        return {SignTouchAction::Block, onlyOwnerMessage(context.touch)};
+        return {SignTouchAction::Block, onlyOwnerMessage(context.actor, context.touch)};
     }
     // 店主与 OP：染色、墨囊、上蜡、除蜡都交给原版处理。
     return {SignTouchAction::PassThrough, {}};

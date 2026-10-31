@@ -1,8 +1,8 @@
 #pragma once
 
 #include "mod/Config.h"
-#include "mod/ShopService.h"
 #include "shop/ShopSign.h"
+#include "shop/SignProtection.h"
 
 #include <string>
 
@@ -48,16 +48,18 @@ ShopSignResult parseShopSignFront(SignBlockActor& sign, ShopSignConfig const& co
 /// 这块牌的正面是不是一块合法商店牌（只看文本，不看容器）。
 bool isShopSignFront(SignBlockActor& sign, ShopSignConfig const& config);
 
-/// 补写店主 XUID：包路径不保证写 `mLastEditXuid`（DESIGN §6.5 第 3 条），
-/// 所以在编辑落地后按 `handoff` 纠一次归属（DESIGN §5.4）。
+/// 按 `handoff` 落地归属（DESIGN §5.4）：牌子第一次成为商店时写给编辑者，
+/// 之后改牌面不改归属（管理员店 ⇄ 普通店互转除外，那算换了个店，见 `keepsPreviousOwner`）。
 ///
-/// 归属规则：**牌子第一次成为商店时写给编辑者，之后改牌面不改归属**。
-/// 这条同 06 之后变得重要——OP 允许代改别人的牌面（DESIGN §9.2），而引擎也可能
+/// 「该不该保住原店主」只由 `SignOwnerHandoff::keepsPreviousOwner` 判，
+/// 第 1 行写谁也是那个判据——两边不允许各写一套条件。
+///
+/// 这条同 06 之后变得重要：OP 允许代改别人的牌面（DESIGN §9.2），而引擎也可能
 /// 自己改掉 `mLastEditXuid`（§6.5 第 3 条）；两种情况下都不能让归属跟着编辑者走，
 /// 否则 OP 改一下就把原店主锁在自己的店外了。
 ///
-/// 三个条件同时成立才动手：正面已是像样的商店牌、附着容器可用、算出来的目标 XUID
-/// 与牌上记的不一致。普通牌、非法牌、失去容器的牌一个字都不碰。
+/// 三个条件同时成立才动手：正面仍是合法商店牌（`isShopSignFront`）、附着容器可用、
+/// 算出来的目标 XUID 与牌上记的不一致。普通牌、非法牌、失去容器的牌一个字都不碰。
 ///
 /// 写入的是**当前文本本身**，不 refresh——客户端已经通过包拿到同一份文本，
 /// 再刷一次只会抖一下。
