@@ -18,7 +18,7 @@
 - 开店流程：监听告示牌正面编辑，校验并规范化四行，失败只提示不删牌（`src/mod/ShopService.*`、`SignEditListener.*`）。
 - 绑定规则：牌子必须附着在容器上（墙牌看背面、站立看下方、吊牌看上方），双箱合并为 54 格，一个容器只被一块牌绑定（`src/shop/ContainerFinder.*`、`src/mod/ContainerFinderBds.*`）。
 - `config.json` 加载与校验：`adminShopName`、`shopContainers`、`maxShopAmount`、`blockSellPriceHigherThanBuy`、`shopInteractionCooldownMs`；配置非法时拒绝启用。
-- 点牌看店：`PlayerInteractBlockEvent` 只拦"正面是合法商店牌 + 附着容器可用"的牌子，弹 `SimpleForm` 展示店主、商品、每份件数、买入价、卖出价、可成交份数与余额（`src/mod/SignInteractListener.*`、`ShopForm.*`）。
+- 点牌看店：`PlayerInteractBlockEvent` 只拦"正面是合法商店牌 + 附着容器可用"的牌子（06 起判据改为「正面像商店牌 + 记录的店主」，见下文），弹 `SimpleForm` 展示店主、商品、每份件数、买入价、卖出价、可成交份数与余额（`src/mod/SignInteractListener.*`、`ShopForm.*`）。
 - 店主判定：读正面 `mLastEditXuid` 经 `PlayerInfo` 反查当前名（`src/mod/ShopOwner.*`）；编辑落地后在 `PlayerEditSignAfterEvent` 里按归属规则写一次 ownerID（具体规则见下面「变更」里的 `recordShopOwner`），补上包路径不写 `mLastEditXuid` 的空洞。
 - 可成交份数与商品统计：商品以第一个非空槽位为准，合并双箱统计严格同种（类型 + aux + 用户数据）的总件数（`src/mod/ContainerFinderBds.*`）。
 - 表单文案、连点冷却与可成交份数都是纯逻辑（`src/shop/ShopInfo.*`、`TradeGate.*`、`TradePricing::unitsFromItems`），有 doctest 覆盖。
@@ -35,8 +35,11 @@
 - 买卖共用一份份数算法（`src/shop/TradePlan.*` 的 `TradeRequest` / `planTrade`）：买入与卖出只差「货在哪、谁收货、谁付钱」，三个上限与部分成交开关、拒绝原因的优先级都只写一遍；拒绝原因按方向换说法（「商店的货不够」/「你手里没有这么多」、「你的钱不够」/「店主的钱不够」）。
 - 经济后端能区分「读不到余额」与「余额为 0」（`EconomyProvider::get` 返回 `optional`）：卖出时不会再对着一个有钱的店主报「资金不足」；动钱之前先确认两边账户都能记账（`EconomyService::accountsRecordable`），读不到就整笔拒绝、两边余额未动。
 - 牌面防护（`src/shop/SignProtection.*`、`SignInteractListener.*`、`ShopService::planSignEdit`）：染料、墨囊、荧光墨囊、蜜蜡、斧头这些会改牌子外观的物品，只有店主与 OP 放行（交回原版处理），其余人一律在交互阶段取消并提示；**看背面也一样**（上蜡改的是整块牌子）。店主/OP **潜行 + 右键**才进原版编辑界面，上蜡后连店主也被拦下并提示先除蜡；提交阶段还有一道兜底（非店主、以及上了蜡的牌，正面编辑包直接丢弃）。上蜡不改变商店语义，交易照常（DESIGN §9.2 / §10.1 / §11）。
-- 「谁是店主」收成一个纯函数 `shopActorOf`（`src/shop/SignProtection.*`），交互阶段的表单角色与提交阶段的编辑权限共用它，不再各写一份 XUID 比较；`ShopSnapshot` 新增 `waxed` 字段（上蜡状态只读一次）。
-- `tests/shop/SignProtectionTest.cpp`：物品分类、身份与权限、交互决策（含背面、潜行、上蜡、斧头没蜡）、提交闸与文案，共 22 个中文用例。
+- 「谁是店主」收成一个纯函数 `shopActorOf`（`src/shop/SignProtection.*`），交互阶段的表单角色与提交阶段的编辑权限共用它，不再各写一份 XUID 比较；`ShopInteraction` 新增 `actor` / `waxed` / `facingFront`（身份、上蜡与朝向各只读一次，都与「能不能交易」解耦）。
+- 归属交接（`SignOwnerHandoff`，纯逻辑在 `shop/SignProtection.h`）：`planSignEdit` 在 Before 阶段判出「改之前是不是商店 / 是不是管理员店 / 原 XUID」，「该不该保住原店主」只由 `keepsPreviousOwner` 判，第 1 行写谁与归属写谁共用它。
+- 物品分类按形状兜底：白名单（16 染料 + 7 斧头 + 墨囊/荧光墨囊/蜜蜡）之外，`*_dye` 与 `*_axe`（排除镐）也认，免得新版本加颜色/材质时静默放行。
+- 商店牌还在但附着格不是可用容器时：店主与 OP 的点击放行给原版编辑界面（店坏了还能修回来），其余人拦下并提示「这家店暂时用不了」。
+- `tests/shop/SignProtectionTest.cpp`：物品分类、身份与权限、交互决策（含背面、潜行、上蜡、斧头没蜡）、提交闸与文案，共 25 个中文用例。
 
 ### 变更
 

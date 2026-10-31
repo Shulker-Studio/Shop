@@ -17,11 +17,12 @@
 
 ## Answer
 
-**已实现（`xmake -y` 构建通过，`ShopTests` 148 cases / 2630 assertions 全绿）**
+**已实现（`xmake -y` 构建通过，`ShopTests` 151 cases / 2647 assertions 全绿）**
 
 先说结论性的那一件事：03 落地后，交互阶段对**所有**可交互的商店牌都 `cancel()`，所以「非店主的染色/墨囊/蜜蜡/斧头被拦住」在 06 之前就已经成立（前提是取消确实能挡住 `SignBlockActor` 的改动，这条在 12 里）。06 真正要做的是反过来——**给店主开一条通路**，并把「谁能改」从散落的条件收成一处：
 
 - `src/shop/SignProtection.h/.cpp`（新，纯逻辑，不含引擎类型）：
+  - `SignOwnerHandoff::keepsPreviousOwner(新的是不是管理员店)`：一次编辑该不该保住原店主（改前是同一家商店、有记录、管理员性质没变）。第 1 行写谁与归属写谁共用它。
   - `shopActorOf(记录 XUID, 玩家 XUID, 是否 OP)` → `Other / Owner / Operator / NoRecordedOwner`。ADR-0005 的店主判定只写在这里，交互阶段的表单角色与提交阶段的编辑权限都从它派生，不再各写一份 XUID 比较。
   - `canManageShop(actor)`（管理入口，无主牌 fail-closed）/ `mayEditShopSignText(actor)`（改牌面文本，无主牌 fail-open）。
   - `signTextEditRejection(actor, waxed, ownerName, adminShop)`：提交阶段的一道总闸，规矩与两句话都只在这里。
@@ -34,7 +35,7 @@
   - 已有商店的编辑里，第 1 行写**原店主的名字**（§11），不再写点击者——OP 代改不改归属，也不能把牌面显示名改成 OP。
 - `src/mod/ShopOwner.*`：`parseShopSignFront`（「`editorIsOp` 固定传 true」这个反直觉常量只留一处）；`ensureOwnerRecorded` → `recordShopOwner(..., SignOwnerHandoff)`，归属按「第一次成为商店写给编辑者，之后改牌面不改归属」落地。
 - `src/mod/SignEditListener.cpp`：`PlanSignEdit` 在 Before 阶段判出归属交接（改前是不是商店、原 XUID），暂存一条，`PlayerEditSignAfterEvent` 里比对牌位与编辑者后取用。
-- `tests/shop/SignProtectionTest.cpp`（新）：22 个中文用例，覆盖物品分类、身份判定、交互决策（含背面、潜行、上蜡、斧头没蜡、分类漏判）、提交闸与文案。
+- `tests/shop/SignProtectionTest.cpp`（新）：25 个中文用例，覆盖物品分类、身份判定、交互决策（含背面、潜行、上蜡、斧头没蜡、分类漏判）、提交闸与文案。
 
 **决策与偏离**
 
@@ -55,12 +56,12 @@
 - **提交阶段这道闸没有自动化测试**：`planSignEdit` 吃 `BlockSource&` / `ServerPlayer&`，纯逻辑部分（`shopActorOf` / `signTextEditRejection` / `mayEditShopSignText`）都测了，剩下的接线只能真机验（12 已列）。
 - **归属交接只存一条**：Before → After 之间用一个单槽暂存（牌位 + 编辑者 + 交接内容），取用时比对牌位与编辑者。同一块牌的两个事件是连着来的，没对上的情况（别的模组写牌）就当没存，不动归属。
 - **被拦下的提示不节流**：`Block` 路径故意不吃连点冷却（否则会吞掉紧接着的那次点击），代价是拿蜜蜡连点会被刷屏。
-- **物品名表要跟着游戏版本走**：新材质斧头 / 新染料不会自动认出来（会退化成 `None` → 店主多弹一次表单）。方向是安全的，但需要跟着版本补表。
+- **物品名表要跟着游戏版本走**：白名单 + 形状兜底（`*_dye` / `*_axe`）已经覆盖了「新颜色、新材质」这类变化，但改了命名习惯的物品（不是以 dye/axe 结尾、也不是墨囊/蜜蜡）仍会退化成 `None`：正面只会多弹一次表单，**背面等于放行**。真机验收里会逐一点过现有 16 种染料与 7 种斧头。
 
 **指标**
 
 - `xmake -y`：Shop.dll 构建通过（clang-cl，`/W4` 无新增告警）。
-- `xmake build ShopTests` + `build/windows/x64/release/ShopTests.exe`：148 cases / 2630 assertions 全绿（06 之前 126 / 2507，只增不减）。
+- `xmake build ShopTests` + `build/windows/x64/release/ShopTests.exe`：151 cases / 2647 assertions 全绿（06 之前 126 / 2507，只增不减）。
 - `xmake test`：1 个目标通过。
 - `git diff --check`：无空白问题。
 
@@ -86,6 +87,17 @@
 - **两阶段对「是不是商店牌」判据不同**（Spec 轴）：交互阶段也改成「文本 + 记录的店主」，容器只决定能不能交易。
 - **注释/文档与实现不符、`ShopInteraction` 的默认值方向错、聚合初始化漏字段、`<cstddef>` 缺失、物品表注释夸张、两个自证的文案用例**：逐条改掉；两个文案用例换成有区分度的断言（五句话互不相同、管理员商店那句必须提 OP）。
 
+第三轮（终审，Standards 2 条必须改 + Spec 4 条）：
+
+- **「保住原店主」判了两次、两个信号**（Standards 轴）：第 1 行看「显示名非空 + 不是管理员店」、归属看「XUID 非空」，异常牌上会分叉出「第 1 行是 A、店主是 B」。现在两边都调 `SignOwnerHandoff::keepsPreviousOwner`。
+- **管理员店 ⇄ 普通店互转的归属**（Spec 轴）：管理权只给 OP（§11），互转算换了家店，`keepsPreviousOwner` 要求管理员性质不变；否则 OP 把 A 的店改成管理员店后，A 仍被当成店主拿到管理入口。
+- **单槽交接会被任意正面 After 事件吃掉**（Spec 轴）：一次无关的编辑就会把待用的交接清掉，引擎没写 XUID 的牌子会静默退化成无主牌（然后谁都能接手）。改成「先比对牌位（含维度）与编辑者，匹配才消费」。
+- **未识别物品名在背面能绕过保护**（Spec 轴）：分类器漏判时正面只是多弹一次表单，背面却是放行。加了形状兜底（`*_dye`、`*_axe` 排除镐），并把「漏判的方向是安全的」这句话改准。
+- **牌还在但附着格不是容器时，非店主会看到原版编辑界面**（Spec 轴）：改成非店主拦下 + 提示「这家店暂时用不了」，店主与 OP 仍然放行（店坏了要能修）。
+- **`ShopOwner.h` 反向依赖 `ShopService.h`**（Standards 轴）：`SignOwnerHandoff` 挪进 `shop/SignProtection.h`（纯数据 + 一个判据，可单测），依赖方向恢复 `mod → shop`。
+- **测试 helper 又用了一串 bool**（Standards 轴）：改成 `touch(物品名, SignTouchContext)`；另补分类兜底、归属交接判据、提示互不相同三组用例（22 → 25）。
+- **文档事实错误**（Standards 轴）：CHANGELOG 里写成 `ShopSnapshot` 新增 `waxed`（实际在 `ShopInteraction`）；§5.1 第 1 行规则、§3 术语表的「店主」、§4.2 的「提交阶段兜底」、§18 D29 都还是 06 之前的说法，一并同步。
+
 **未采纳**
 
 - **给 `Block` 的提示加节流**：会重新引入「一次被拦的点击吞掉下一次点击」，而刷屏需要故意连点。
@@ -106,3 +118,4 @@
 8. A 写普通公告、B 改成商店 → 店主是 B；OP 代改一次别人的商店 → 店主与第 1 行都不变。
 9. 上蜡后的商店仍可正常买卖（表单照弹、交易链路不受 `waxed` 影响）。
 10. 非店主从**背面**刷蜜蜡 → 被拦（上蜡是整块牌子的事）。
+11. 提交阶段的兜底本身：非店主把正面文本改到一半（例如拆掉商店箱让表单弹不出来、再从原版编辑界面提交）→ 收到「这块商店牌是 X 的」且牌面一个字没变；店主同样的操作能保存。
