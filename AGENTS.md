@@ -6,7 +6,7 @@ Issue 与 spec 以 markdown 文件存在 `.scratch/<feature>/`，不走 GitHub I
 
 ### Triage labels
 
-沿用五个默认角色名，作为 issue 文件里 `Status:` 行的取值。见 `docs/agents/triage-labels.md`。
+沿用默认的五个 triage 角色名，外加终态 `resolved`，作为 issue 文件里 `Status:` 行的取值。见 `docs/agents/triage-labels.md`。
 
 ### Domain docs
 

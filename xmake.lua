@@ -7,9 +7,24 @@ add_requires("levilamina 26.51.8", {configs = {target_type = "server"}})
 -- 事件层依赖 iListenAttentively（告示牌编辑、开箱、爆炸/活塞/凋灵/火焰、双箱、货币事件）
 add_requires("ilistenattentively", {configs = {target_type = "server"}})
 add_requires("levibuildscript")
+-- 纯逻辑层的单元测试（header-only），只被 ShopTests 使用，不进入 Shop.dll
+add_requires("doctest 2.5.3")
 
 if not has_config("vs_runtime") then
     set_runtimes("MD")
+end
+
+-- 纯逻辑模块（解析器、计价）不允许依赖引擎：源码里出现 mc/ 头就让构建直接失败。
+-- 这是 DESIGN「纯逻辑不得依赖引擎」的构建期断言，Shop 与 ShopTests 都会调它。
+function check_pure_logic_headers()
+    -- 注意：os.files 的 `|` 交替写法只匹配到第一种，所以分开扫再拼起来
+    local files = table.join(os.files("src/shop/**.h"), os.files("src/shop/**.cpp"))
+    for _, file in ipairs(files) do
+        local content = io.readfile(file) or ""
+        if content:find('[#]%s*include%s*[<"]mc/') then
+            raise("纯逻辑模块不允许包含 mc/ 头：" .. file)
+        end
+    end
 end
 
 target("Shop")
@@ -42,3 +57,21 @@ target("Shop")
     add_headerfiles("src/**.h")
     add_files("src/**.cpp")
     add_includedirs("src")
+    before_build(check_pure_logic_headers)
+
+-- 纯逻辑层的测试：只编译 src/shop 与 tests，不链接 levilamina，因此没有 BDS 也能跑。
+-- 用法：xmake test
+target("ShopTests")
+    set_default(false)
+    set_kind("binary")
+    set_languages("c++20")
+    if is_plat("windows") then
+        -- 与 Shop 一致：LeviLamina 26.20 之后用 clang-cl，不用 msvc
+        set_toolchains("clang-cl")
+        add_cxflags("/EHa", "/utf-8")
+    end
+    add_packages("doctest")
+    add_includedirs("src")
+    add_files("src/shop/**.cpp", "tests/**.cpp")
+    add_tests("default")
+    before_build(check_pure_logic_headers)

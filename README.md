@@ -40,10 +40,13 @@ B 10 : S 5
 
 ```bash
 xmake f -a x64 -m release -p windows -y
-xmake -y
+xmake -y          # 构建 Shop.dll
+xmake test        # 构建并运行纯逻辑层单元测试（doctest）
 ```
 
 产物在 `bin/Shop/`。
+
+`xmake test` 只编译 `src/shop/` 与 `tests/`，不链接 LeviLamina，所以没有 BDS 也能跑；解析器与计价模块不允许 `#include` 任何 `mc/` 头，这条在 `xmake` 与 `xmake test` 两种构建里都会断言。
 
 需要：
 
