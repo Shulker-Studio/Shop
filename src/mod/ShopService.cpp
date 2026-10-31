@@ -159,6 +159,13 @@ inspectShop(BlockSource& region, BlockPos const& signPos, Player& viewer, ShopCo
         if (!shop->info.adminShop && !provider.supportsOffline() && onlinePlayer(shop->ownerXuid) == nullptr) {
             shop->info.unavailableReason = ownerOfflineReason();
         }
+        // 店主的账户读不到就没法记账：卖出时是店主付钱（要读余额），买入时是往这个账户里
+        // 加钱（记分板后端同样写不进去）。「读不到」与「余额为 0」必须分开（DESIGN §8.2），
+        // 否则一个有钱的店主会被报成「资金不足」。
+        if (!shop->info.adminShop && shop->info.unavailableReason.empty()
+            && !provider.get(shop->ownerXuid).has_value()) {
+            shop->info.unavailableReason = ownerFundsUnknownReason();
+        }
     }
 
     ShopInteraction interaction{*shop, ShopFormRole::Visitor};

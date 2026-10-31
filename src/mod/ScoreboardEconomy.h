@@ -28,10 +28,10 @@ public:
     std::string_view name() const override { return "scoreboard"; }
     bool             supportsOffline() const override { return false; }
 
-    std::int64_t get(economy::Account const& account) const override;
-    bool         set(economy::Account const& account, std::int64_t amount) override;
-    bool         add(economy::Account const& account, std::int64_t amount) override;
-    bool         reduce(economy::Account const& account, std::int64_t amount, bool allowNegative = false) override;
+    std::optional<std::int64_t> get(economy::Account const& account) const override;
+    bool                        set(economy::Account const& account, std::int64_t amount) override;
+    bool                        add(economy::Account const& account, std::int64_t amount) override;
+    bool reduce(economy::Account const& account, std::int64_t amount, bool allowNegative = false) override;
 
 private:
     explicit ScoreboardEconomy(std::string objectiveName);

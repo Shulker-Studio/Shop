@@ -154,18 +154,6 @@ ItemStack const* firstNonEmptyStack(Container& primary, Container* secondary, in
     return product;
 }
 
-/// 商店箱里（双箱合并）与 `product` 严格匹配的总件数。混装箱子里只有商品本身参与计价。
-std::int64_t countShopItems(Container& primary, Container* secondary, int slots, ItemStackBase const& product) {
-    std::int64_t total = 0;
-    forEachMergedSlot(primary, secondary, slots, [&](ItemStack const& stack) {
-        if (!stack.isNull() && sameShopItem(stack, product)) {
-            total += stack.mCount;
-        }
-        return true;
-    });
-    return total;
-}
-
 /// 这一格上的牌是不是「合法商店牌」。只有合法商店牌才算占用了容器。
 bool isShopSign(BlockSource& region, BlockPos const& pos, ShopSignConfig const& signConfig) {
     auto* sign = signBlockActorAt(region, pos);
@@ -197,6 +185,17 @@ collectNeighbourSigns(BlockSource& region, ContainerRef const& container, ShopSi
 }
 
 } // namespace
+
+std::int64_t countMatchingItems(Container& primary, Container* secondary, int slots, ItemStackBase const& product) {
+    std::int64_t total = 0;
+    forEachMergedSlot(primary, secondary, slots, [&](ItemStack const& stack) {
+        if (!stack.isNull() && sameShopItem(stack, product)) {
+            total += stack.mCount;
+        }
+        return true;
+    });
+    return total;
+}
 
 std::vector<MergedSlot> mergedSlots(Container& primary, Container* secondary, int size) {
     std::vector<MergedSlot> slots;
@@ -331,7 +330,7 @@ inspectAttachedContainer(BlockSource& region, BlockPos const& signPos, Container
         .ref       = box.ref,
         .error     = ContainerError::None,
         .itemName  = product->getName(),
-        .itemCount = countShopItems(*box.primary, box.secondary, box.ref.size, *product),
+        .itemCount = countMatchingItems(*box.primary, box.secondary, box.ref.size, *product),
     };
 }
 

@@ -18,7 +18,10 @@ struct ShopInfoData {
     std::optional<std::int64_t> buyPrice;          ///< 一份的买入价，玩家付给店主
     std::optional<std::int64_t> sellPrice;         ///< 一份的卖出价，店主付给玩家
     int                         stockUnits = 0;    ///< 可成交份数（商店箱里件数 / 每份件数）
-    std::optional<std::int64_t> balance;           ///< 空 = 经济后端还没接上
+    /// 玩家手里的同种商品够几份。卖出方向的限额来源（DESIGN §10.3），
+    /// 与 `balance` 一样是「谁在看」的属性，由调用方填；信息表单不显示它。
+    int                         heldUnits = 0;
+    std::optional<std::int64_t> balance; ///< 空 = 经济后端还没接上
     /// 这家店现在不能交易的原因（店主收不了钱、或服务器没有可用经济后端）。
     /// 非空时不给买卖按钮，正文直接写这条原因，免得玩家点进去才被拒（DESIGN §8.5）。
     std::string unavailableReason;
@@ -35,6 +38,13 @@ void appendLine(std::string& content, std::string const& line);
 
 /// 店主收不了钱的原因（DESIGN §8.5）。表单与交易提示共用这一句，别写成两种说法。
 std::string ownerOfflineReason();
+
+/// 读不到店主余额的原因。
+///
+/// 「店主余额是 0」与「读不到店主余额」是两件事（DESIGN §8.2）：前者是正常的
+/// 「钱不够」，后者是后端出问题或账户不可记账。混成一句会把后者误报成
+/// 「店主资金不足」，玩家申诉时无处可查。
+std::string ownerFundsUnknownReason();
 
 /// 没有可用经济后端的原因。
 std::string noEconomyReason();

@@ -1,4 +1,4 @@
-#include "shop/BuyForm.h"
+#include "shop/UnitsForm.h"
 
 #include "shop/TradePricing.h"
 
@@ -36,11 +36,59 @@ std::optional<int> parseUnits(std::string_view text) {
     return static_cast<int>(value);
 }
 
-std::string itemPriceText(ShopInfoData const& data, int units) {
-    if (!data.buyPrice) {
+/// 「单词」：价格是哪一边的。买卖两边的正文只有这些词与两行数字不一样。
+struct Wording {
+    char const* priceLabel;    ///< `买入价` / `卖出价`
+    char const* goodsLabel;    ///< `箱子里的货还够` / `你手里有`
+    char const* capLabel;      ///< `这次最多买` / `这次最多卖`
+    char const* capHint;       ///< 上限受什么限制
+    char const* perChoiceVerb; ///< 每档金额的动词：`/` 后面直接跟金额（买入）或 `得`（卖出）
+    char const* totalLabel;    ///< `总价` / `收入`
+    char const* moneyLine;     ///< `实际扣款` / `实际收款`
+};
+
+/// 买卖两份说法（DESIGN §10.1 / §10.3 的文案）。
+///
+/// 只放**方向性**的几个词：份数、件数、金额的算法完全一样，不在这里分叉。
+Wording wordingOf(TradeDirection direction) {
+    if (direction == TradeDirection::Sell) {
+        return {
+            "卖出价",
+            "你手里有",
+            "这次最多卖",
+            "（受店主资金、箱子空间与单次上限限制）",
+            "得 ",
+            "收入",
+            "实际收款",
+        };
+    }
+    return {
+        "买入价",
+        "箱子里的货还够",
+        "这次最多买",
+        "（受余额、背包与单次上限限制）",
+        "",
+        "总价",
+        "实际扣款",
+    };
+}
+
+/// 一份（`units == 1`）的金额文本；价格缺失或溢出时给占位。
+std::string unitPriceText(ShopInfoData const& data, TradeDirection direction) {
+    auto const price = direction == TradeDirection::Sell ? data.sellPrice : data.buyPrice;
+    if (!price) {
         return "—";
     }
-    auto const total = totalPrice(*data.buyPrice, units);
+    return moneyText(data.currencySymbol, *price);
+}
+
+/// 某一档的金额文本。
+std::string totalPriceText(ShopInfoData const& data, TradeDirection direction, int units) {
+    auto const price = direction == TradeDirection::Sell ? data.sellPrice : data.buyPrice;
+    if (!price) {
+        return "—";
+    }
+    auto const total = totalPrice(*price, units);
     if (!total) {
         return "—";
     }
@@ -49,8 +97,8 @@ std::string itemPriceText(ShopInfoData const& data, int units) {
 
 } // namespace
 
-BuyFormModel makeBuyFormModel(int maxUnits) {
-    BuyFormModel model;
+UnitsFormModel makeUnitsFormModel(int maxUnits) {
+    UnitsFormModel model;
     // 不把 0 夹成 1：那样会摆出一个必然失败的「1 份」档。上限为 0 时只留自定义，
     // 调用方本来就该在弹出表单之前就拒掉。
     model.maxUnits = std::max(0, maxUnits);
@@ -64,7 +112,7 @@ BuyFormModel makeBuyFormModel(int maxUnits) {
     return model;
 }
 
-std::vector<std::string> buyFormOptions(BuyFormModel const& model) {
+std::vector<std::string> unitsFormOptions(UnitsFormModel const& model) {
     std::vector<std::string> options;
     options.reserve(model.choices.size());
     for (auto const& choice : model.choices) {
@@ -73,40 +121,47 @@ std::vector<std::string> buyFormOptions(BuyFormModel const& model) {
     return options;
 }
 
-std::string buyFormContent(ShopInfoData const& data, BuyFormModel const& model) {
+std::string unitsFormContent(TradeDirection direction, ShopInfoData const& data, UnitsFormModel const& model) {
+    Wording const words = wordingOf(direction);
+
     std::string content;
     auto const  append = [&content](std::string const& line) { appendLine(content, line); };
 
     append("商品：" + (data.itemName.empty() ? std::string{"—"} : data.itemName));
     append("每份：" + std::to_string(data.amountPerUnit) + " 个");
-    if (data.buyPrice) {
-        append("买入价：" + moneyText(data.currencySymbol, *data.buyPrice) + " / 份");
-    }
-    append("箱子里的货还够：" + std::to_string(data.stockUnits) + " 份");
+    append(std::string{words.priceLabel} + "：" + unitPriceText(data, direction) + " / 份");
+    // 卖出的限制是玩家自己手里有几份，买入的限制是商店箱里还有几份（DESIGN §10.3）。
+    append(
+        std::string{words.goodsLabel} + "："
+        + std::to_string(direction == TradeDirection::Sell ? data.heldUnits : data.stockUnits) + " 份"
+    );
     if (data.balance) {
         append("余额：" + moneyText(data.currencySymbol, *data.balance));
     }
-    append("这次最多买：" + std::to_string(model.maxUnits) + " 份（受余额、背包与单次上限限制）");
+    append(std::string{words.capLabel} + "：" + std::to_string(model.maxUnits) + " 份" + words.capHint);
 
-    // 每一档都把总件数与总价写出来：选哪一档，看到的数就是实际扣的数。
+    // 每一档都把总件数与总金额写出来：选哪一档，看到的数就是实际成交的数。
     for (auto const& choice : model.choices) {
         if (choice.units == 0) {
-            // 自定义档没法实时算，至少把乘数与上限写全，玩家自己就能算出总价。
+            // 自定义档没法实时算，至少把乘数与上限写全，玩家自己就能算出来。
             append(
-                "自定义份数：总价 = " + itemPriceText(data, 1) + " × 份数（1 到 " + std::to_string(model.maxUnits)
-                + " 份，恒为整数）"
+                "自定义份数：" + std::string{words.totalLabel} + " = " + unitPriceText(data, direction)
+                + " × 份数（1 到 " + std::to_string(model.maxUnits) + " 份，恒为整数）"
             );
             continue;
         }
         append(
             "选 " + std::to_string(choice.units) + " 份 → 共 " + std::to_string(choice.units * data.amountPerUnit)
-            + " 个 / " + itemPriceText(data, choice.units)
+            + " 个 / " + words.perChoiceVerb + totalPriceText(data, direction, choice.units)
         );
     }
     return content;
 }
 
-std::string buyConfirmContent(ShopInfoData const& data, BuyPlan const& plan, ChangeReason reason) {
+std::string
+unitsConfirmContent(TradeDirection direction, ShopInfoData const& data, TradePlan const& plan, ChangeReason reason) {
+    Wording const words = wordingOf(direction);
+
     std::string content;
     auto const  append = [&content](std::string const& line) { appendLine(content, line); };
 
@@ -118,14 +173,14 @@ std::string buyConfirmContent(ShopInfoData const& data, BuyPlan const& plan, Cha
         append("这家店「一份的件数」变了，现在 " + std::to_string(data.amountPerUnit) + " 个算一份");
         break;
     case ChangeReason::Price:
-        append("这家店的买入价刚刚变了");
+        append(std::string{"这家店的"} + words.priceLabel + "刚刚变了");
         break;
     }
 
-    // 三样都写全：玩家要能一眼看出这次到底给多少、扣多少。
+    // 三样都写全：玩家要能一眼看出这次到底给多少、收（付）多少。
     append("成交份数：" + std::to_string(plan.units) + " 份");
     append("总件数：" + std::to_string(plan.items) + " 个");
-    append("实际扣款：" + moneyText(data.currencySymbol, plan.total));
+    append(std::string{words.moneyLine} + "：" + moneyText(data.currencySymbol, plan.total));
     if (data.balance) {
         append("当前余额：" + moneyText(data.currencySymbol, *data.balance));
     }
@@ -133,7 +188,7 @@ std::string buyConfirmContent(ShopInfoData const& data, BuyPlan const& plan, Cha
     return content;
 }
 
-RequestedUnits resolveRequestedUnits(BuyFormModel const& model, int choiceIndex, std::string_view customText) {
+RequestedUnits resolveRequestedUnits(UnitsFormModel const& model, int choiceIndex, std::string_view customText) {
     if (choiceIndex < 0 || choiceIndex >= static_cast<int>(model.choices.size())) {
         return {.error = "份数选择不对"};
     }

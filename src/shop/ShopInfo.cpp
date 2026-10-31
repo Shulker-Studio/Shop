@@ -31,6 +31,8 @@ void appendLine(std::string& content, std::string const& line) {
 
 std::string ownerOfflineReason() { return "店主不在线，现在不能交易（当前经济后端不支持离线记账）"; }
 
+std::string ownerFundsUnknownReason() { return "读不到店主的余额，现在不能交易（经济后端没给出这个账户的余额）"; }
+
 std::string noEconomyReason() { return "服务器没有可用的经济后端，暂时不能交易"; }
 
 std::string shopFormTitle(ShopInfoData const& data) {

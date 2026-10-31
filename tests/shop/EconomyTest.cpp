@@ -16,9 +16,13 @@ public:
     std::string_view name() const override { return "fake"; }
     bool             supportsOffline() const override { return true; }
 
-    std::int64_t get(Account const& account) const override {
+    std::optional<std::int64_t> get(Account const& account) const override {
         auto it = mBalances.find(account);
-        return it == mBalances.end() ? 0 : it->second;
+        if (it == mBalances.end()) {
+            // 没上过账的账户：与记分板后端一样，算「读不到」而不是 0 元。
+            return mUnreadable.count(account) != 0 ? std::nullopt : std::optional<std::int64_t>{0};
+        }
+        return it->second;
     }
     bool set(Account const& account, std::int64_t amount) override {
         if (mRefuseAccounts.count(account) != 0) {
@@ -31,17 +35,24 @@ public:
         if (amount <= 0) {
             return false;
         }
-        return set(account, get(account) + amount);
+        auto const current = get(account);
+        if (!current) {
+            return false;
+        }
+        return set(account, *current + amount);
     }
     bool reduce(Account const& account, std::int64_t amount, bool allowNegative) override {
         if (amount <= 0) {
             return false;
         }
         auto const current = get(account);
-        if (!allowNegative && current < amount) {
+        if (!current) {
             return false;
         }
-        bool const ok = set(account, current - amount);
+        if (!allowNegative && *current < amount) {
+            return false;
+        }
+        bool const ok = set(account, *current - amount);
         if (ok && refusePayerAfterReduce) {
             // 模拟「退款也失败」：扣款成功后付款方也收不了钱了。
             mRefuseAccounts.insert(account);
@@ -52,11 +63,15 @@ public:
     /// 一起拒掉的账户：模拟「收不了钱」的后端（例如离线玩家的记分板）。
     void refuse(Account const& account) { mRefuseAccounts.insert(account); }
 
+    /// 读不到余额的账户：模拟「账户不可记账」而不是「余额 0」。
+    void unreadable(Account const& account) { mUnreadable.insert(account); }
+
     bool refusePayerAfterReduce = false;
 
 private:
     std::map<Account, std::int64_t> mBalances;
     std::set<Account>               mRefuseAccounts;
+    std::set<Account>               mUnreadable;
 };
 
 } // namespace
@@ -73,13 +88,28 @@ TEST_CASE("记分板分值：int32 范围检查不截断") {
     CHECK_FALSE(toScoreValue(std::numeric_limits<std::int64_t>::min()).has_value());
 }
 
-TEST_CASE("空实现：读 0、写都成功、但不算可用后端") {
+TEST_CASE("空实现：谁的余额都读不到、写都成功、但不算可用后端") {
     NullEconomy backend;
-    CHECK(backend.get("any") == 0);
+    CHECK_FALSE(backend.get("any").has_value());
     CHECK(backend.add("any", 100));
-    CHECK(backend.get("any") == 0);
+    CHECK_FALSE(backend.get("any").has_value());
     CHECK_FALSE(backend.available());
     CHECK_FALSE(backend.supportsOffline());
+}
+
+TEST_CASE("余额：读不到与「余额为 0」是两件事") {
+    FakeEconomy backend;
+    backend.set("rich", 0);
+    backend.unreadable("offline");
+
+    // 上过账、余额就是 0：读得到，值是 0
+    REQUIRE(backend.get("rich").has_value());
+    CHECK(*backend.get("rich") == 0);
+    // 从未上账：这个后端把它当 0 元
+    REQUIRE(backend.get("new").has_value());
+    CHECK(*backend.get("new") == 0);
+    // 账户不可记账：读不到，调用方不能当 0 处理（DESIGN §8.2）
+    CHECK_FALSE(backend.get("offline").has_value());
 }
 
 TEST_CASE("转账：双方余额都按金额变动") {

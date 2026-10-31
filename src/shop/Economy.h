@@ -77,12 +77,16 @@ public:
     /// 能否为离线玩家记账（DESIGN §8.5）。记分板只能写在线玩家的分。
     virtual bool supportsOffline() const = 0;
 
-    /// 余额。账户不可读（不在线、后端没有这个账户）时返回 0——
-    /// 调用方在 `supportsOffline() == false` 时不该拿离线账户的钱做判断。
-    virtual std::int64_t get(Account const& account) const                                               = 0;
-    virtual bool         set(Account const& account, std::int64_t amount)                                = 0;
-    virtual bool         add(Account const& account, std::int64_t amount)                                = 0;
-    virtual bool         reduce(Account const& account, std::int64_t amount, bool allowNegative = false) = 0;
+    /// 余额。**读不到时返回空，返回 0 就真的是 0 元**。
+    ///
+    /// 这两件事必须分开（DESIGN §8.2）：卖出方向上「店主真的没钱」与「读不到店主的余额」
+    /// 是两种完全不同的结果，把后者当成 0 会对着一个余额充足的店主报「店主资金不足」，
+    /// 玩家申诉时无处可查。账户不可读的典型情况：玩家不在线（记分板）、后端没有这个账户、
+    /// 记分板目标不存在。
+    virtual std::optional<std::int64_t> get(Account const& account) const                        = 0;
+    virtual bool                        set(Account const& account, std::int64_t amount)         = 0;
+    virtual bool                        add(Account const& account, std::int64_t amount)         = 0;
+    virtual bool reduce(Account const& account, std::int64_t amount, bool allowNegative = false) = 0;
 
     /// 默认实现：`reduce` + `add`，`add` 失败就把钱加回去（DESIGN §8.1）。
     ///
@@ -100,10 +104,11 @@ public:
     std::string_view name() const override { return "null"; }
     bool             available() const override { return false; }
     bool             supportsOffline() const override { return false; }
-    std::int64_t     get(Account const&) const override { return 0; }
-    bool             set(Account const&, std::int64_t) override { return true; }
-    bool             add(Account const&, std::int64_t) override { return true; }
-    bool             reduce(Account const&, std::int64_t, bool) override { return true; }
+    /// 什么也不记，所以谁的余额都读不到（而不是「余额是 0」）。
+    std::optional<std::int64_t> get(Account const&) const override { return std::nullopt; }
+    bool                        set(Account const&, std::int64_t) override { return true; }
+    bool                        add(Account const&, std::int64_t) override { return true; }
+    bool                        reduce(Account const&, std::int64_t, bool) override { return true; }
 };
 
 /// 金额 → 记分板分值（`int32`）。超出范围返回空，**不截断**（DESIGN §8.2）。

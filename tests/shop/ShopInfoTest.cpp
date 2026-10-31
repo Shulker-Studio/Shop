@@ -155,6 +155,14 @@ TEST_CASE("店主按钮：只有一个管理入口，没有买卖按钮") {
     CHECK(buttons[0].label == "管理商店");
 }
 
+TEST_CASE("读不到店主余额的说法：讲的是余额，不是店主没钱") {
+    auto const reason = ownerFundsUnknownReason();
+    CHECK(reason.find("余额") != std::string::npos);
+    CHECK(reason.find("资金不足") == std::string::npos);
+    CHECK_FALSE(reason == ownerOfflineReason());
+    CHECK_FALSE(reason == noEconomyReason());
+}
+
 TEST_CASE("表单正文：不能交易时写明原因，且不给买卖按钮") {
     auto data              = sampleShop();
     data.unavailableReason = "店主不在线，现在不能交易";

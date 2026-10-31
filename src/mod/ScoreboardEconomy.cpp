@@ -66,12 +66,14 @@ std::shared_ptr<ScoreboardEconomy> ScoreboardEconomy::create(std::string objecti
     return std::shared_ptr<ScoreboardEconomy>{new ScoreboardEconomy(std::move(objectiveName))};
 }
 
-std::int64_t ScoreboardEconomy::get(economy::Account const& account) const {
+std::optional<std::int64_t> ScoreboardEconomy::get(economy::Account const& account) const {
     auto const target = resolveTarget(mObjectiveName, account);
     if (!target) {
-        return 0;
+        // 账户不可记账（不在线、目标没了、没有记分板身份）：返回空，不能报成 0 元。
+        return std::nullopt;
     }
     ScoreInfo const score = target->objective->getPlayerScore(*target->id);
+    // 目标在、人也在，只是还没有分值：这就是 0 元，不是读不到。
     return score.mValid ? score.mValue : 0;
 }
 
@@ -100,11 +102,14 @@ bool ScoreboardEconomy::add(economy::Account const& account, std::int64_t amount
         return false;
     }
     auto const current = get(account);
+    if (!current) {
+        return false; // 读不到当前分值就没法写目标值（`set` 要的是结果，不是增量）
+    }
     // 先在 `int64` 里把溢出堵住，再交给 `set` 判 `int32` 范围：两关都过才写。
-    if (current > std::numeric_limits<std::int64_t>::max() - amount) {
+    if (*current > std::numeric_limits<std::int64_t>::max() - amount) {
         return false;
     }
-    return set(account, current + amount);
+    return set(account, *current + amount);
 }
 
 bool ScoreboardEconomy::reduce(economy::Account const& account, std::int64_t amount, bool allowNegative) {
@@ -112,10 +117,13 @@ bool ScoreboardEconomy::reduce(economy::Account const& account, std::int64_t amo
         return false;
     }
     auto const current = get(account);
-    if (!allowNegative && current < amount) {
+    if (!current) {
+        return false;
+    }
+    if (!allowNegative && *current < amount) {
         return false; // 余额不足：一个字节都不写（DESIGN §8.2）
     }
-    return set(account, current - amount);
+    return set(account, *current - amount);
 }
 
 } // namespace ss::shop

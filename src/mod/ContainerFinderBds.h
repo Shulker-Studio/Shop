@@ -95,6 +95,12 @@ std::vector<MergedSlot> mergedSlots(Container& primary, Container* secondary, in
 /// 那会让一个商店用错价的物品结账（DESIGN §5.3）。
 bool sameShopItem(ItemStackBase const& lhs, ItemStackBase const& rhs);
 
+/// 一组容器里（`slots` 是合并后的总格数，单容器就是 `getContainerSize()`）
+/// 与 `product` **严格同种**的总件数。
+///
+/// 商店箱的商品统计与「玩家手里有几份」都用它：容器是参数，比较在那里只有一份。
+std::int64_t countMatchingItems(Container& primary, Container* secondary, int slots, ItemStackBase const& product);
+
 /// 商品模板 = 商店箱里（双箱合并）第一个非空槽位的物品（附着那一半优先，DESIGN §5.3）。
 /// 容器空了返回空指针。
 ///

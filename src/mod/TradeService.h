@@ -29,25 +29,25 @@ enum class TradeStatus : std::uint8_t {
 
 struct TradeResult {
     TradeStatus status = TradeStatus::Rejected;
-    /// 实际（`NeedsConfirm` 时是待确认的）成交方案：份数、件数、总价。
-    BuyPlan     plan;
+    /// 实际（`NeedsConfirm` 时是待确认的）成交方案：份数、件数、金额。
+    TradePlan   plan;
     std::string message; ///< 发给玩家的中文提示；`NeedsConfirm` 时是确认表单的正文
 
     [[nodiscard]] bool done() const { return status == TradeStatus::Done; }
     [[nodiscard]] bool needsConfirm() const { return status == TradeStatus::NeedsConfirm; }
 };
 
-/// 玩家在份数表单上提交的东西。
+/// 玩家在份数表单上提交的东西。买卖共用：表单机制是同一套（DESIGN §10.1 第 3 步）。
 ///
-/// `expectedTotal` 是表单给他看的那个总价：两屏之间店主改价或箱子变少时，
+/// `expectedTotal` 是表单给他看的那个金额：两屏之间店主改价或箱子变少时，
 /// 实际金额会对不上，这时必须先把真实金额摆出来确认（DESIGN §10.3），
-/// 不能拿一个他没见过的数字直接扣钱。
-struct BuySubmission {
+/// 不能拿一个他没见过的数字直接成交。
+struct TradeSubmission {
     int units = 1;
     /// 表单上写的「共 N 个」：店主改了第 2 行的份量时，份数与金额都可能不变，
     /// 只有件数会变（看到 64 个、只拿到 1 个），所以件数也要对。
     std::optional<int> expectedItems;
-    /// 表单上写的总价。空 = 没有可对照的金额。
+    /// 表单上写的金额（买入是扣款、卖出是收入）。空 = 没有可对照的金额。
     std::optional<std::int64_t> expectedTotal;
     /// 这次提交是否来自确认表单。只用来跳过一次提交冷却（确认按钮紧接着上一次提交），
     /// **不**用来跳过比对：确认之后状态又变的话还会再弹一次确认。
@@ -62,11 +62,24 @@ struct BuySubmission {
 ///
 /// 失败时不留半成品：钱扣了货没给就退款，货从箱子里拿出来却塞不进背包就放回去。
 TradeResult buyUnits(
-    BlockSource&         region,
-    Cell const&          sign,
-    Player&              buyer,
-    ShopConfig const&    config,
-    BuySubmission const& submission
+    BlockSource&           region,
+    Cell const&            sign,
+    Player&                buyer,
+    ShopConfig const&      config,
+    TradeSubmission const& submission
+);
+
+/// 真正执行一次卖出：货从玩家背包进商店箱、钱从店主进玩家余额。必须在服务端线程调用。
+///
+/// 与 `buyUnits` 对称：同一份 `tradeAllowance` 算份数，同一套快照与补偿收尾，
+/// 同一个冻结名单。方向反过来体现在三件事上：货取自带背包、收货方是商店箱、
+/// 付钱的是店主（见实现里的顺序说明）。
+TradeResult sellUnits(
+    BlockSource&           region,
+    Cell const&            sign,
+    Player&                seller,
+    ShopConfig const&      config,
+    TradeSubmission const& submission
 );
 
 /// 信息表单上「购买」按钮的入口：弹出选份数的表单（DESIGN §10.1 第 3 步）。
@@ -75,10 +88,16 @@ TradeResult buyUnits(
 /// 只捕获「谁的 XUID、哪个维度、哪块牌」，真正要读商店箱/余额/背包时先切回服务端线程。
 void requestBuyForm(Player& viewer, Cell const& sign);
 
+/// 信息表单上「出售」按钮的入口，与 `requestBuyForm` 同一套机制。
+void requestSellForm(Player& viewer, Cell const& sign);
+
 /// 份数表单的提交入口。`submission` 来自表单，到这儿已经不算数了：
 /// `buyUnits` 会按最新的可成交份数/余额/背包重新算一遍（DESIGN §10.4）。
 /// 实际值与玩家看到的不一致时会先弹确认表单。
-void submitBuy(Player& buyer, Cell const& sign, BuySubmission const& submission);
+void submitBuy(Player& buyer, Cell const& sign, TradeSubmission const& submission);
+
+/// 卖出份数表单的提交入口，与 `submitBuy` 同一套机制。
+void submitSell(Player& seller, Cell const& sign, TradeSubmission const& submission);
 
 /// 按配置准备提交冷却（`shopInteractionCooldownMs`）。重复调用无副作用。
 void initTradeService(ShopConfig const& config);
