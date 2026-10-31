@@ -22,6 +22,8 @@ struct ShopConfig {
     std::vector<std::string> shopContainers              = {"minecraft:chest", "minecraft:trapped_chest"};
     int                      maxShopAmount               = 3456;
     bool                     blockSellPriceHigherThanBuy = true;
+    /// 同一玩家对同一块商店牌的连点冷却（毫秒），对齐 DESIGN §10.4。
+    int                      shopInteractionCooldownMs   = 250;
 };
 
 /// 读取并校验 config.json；文件不存在时按默认值写出一份。

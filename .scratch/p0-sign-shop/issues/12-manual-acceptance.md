@@ -11,3 +11,11 @@
 - [ ] 三个"只能在真实服务器验证"的点（行宽上限、表单回调线程、交互取消是否阻止编辑界面）都有结论并写回文档
 - [ ] 重启服务器后商店仍可用
 - [ ] 升级或重装 iListenAttentively 版本后商店仍可用
+
+### 从 03 转来的待验项
+
+- [ ] **在 `PlayerInteractBlockEvent` 里 `cancel()` 是否冀能阻止原版告示牌编辑界面弹出**（DESIGN §14「编辑拦截的用户体验」）。
+      验证方式：非店主（或店主）点一块合法商店牌，看是否只弹模组表单、而不会先/同时弹出告示牌编辑 UI。
+      Plan B（若取消不够）：用 iListenAttentively 的 `ReceivePacketBeforeEvent` / `SendPacketEvent` 拦 `OpenSignPacket`，从服务端不把包发出去。
+- [ ] 看背面时模组不接管：玩家站在商店牌背面右击 → 原版编辑界面照常弹（`getSideFacingPlayer` 的实际返回值与扇区边界）。
+- [ ] “可成交份数”与实际库存一致（含双箱 54 格的合并统计、混装箱子只算商品本身）。

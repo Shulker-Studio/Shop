@@ -20,4 +20,9 @@ int affordableUnits(std::int64_t unitPrice, std::int64_t funds);
 /// 任一项 <= 0 时返回 0（视为无法成交）；上限传 `INT_MAX` 表示不限制。
 int tradeUnits(int requested, int stockUnits, int backpackUnits, int affordable);
 
+/// 库存能撑多少份（向下取整）。
+///
+/// 件数为负、或每份件数 <= 0 时返回 0，不抛错——牌面写了 0 件的商店只是不能成交。
+int stockUnits(int itemCount, int amountPerUnit);
+
 } // namespace ss::shop

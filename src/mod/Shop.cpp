@@ -1,6 +1,7 @@
 #include "mod/Shop.h"
 
 #include "mod/SignEditListener.h"
+#include "mod/SignInteractListener.h"
 
 #include "ll/api/mod/RegisterHelper.h"
 
@@ -26,11 +27,13 @@ bool Shop::load() {
 bool Shop::enable() {
     getSelf().getLogger().debug("Enabling...");
     registerSignEditListener();
+    registerSignInteractListener();
     return true;
 }
 
 bool Shop::disable() {
     getSelf().getLogger().debug("Disabling...");
+    unregisterSignInteractListener();
     unregisterSignEditListener();
     mConfig.reset();
     return true;

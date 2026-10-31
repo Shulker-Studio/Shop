@@ -1,6 +1,9 @@
 #include "mod/ContainerFinderBds.h"
 
+#include "mod/ShopOwner.h"
+
 #include "mc/deps/core/string/HashedString.h"
+#include "mc/deps/nbt/CompoundTag.h"
 #include "mc/world/Container.h"
 #include "mc/world/item/ItemStack.h"
 #include "mc/world/level/BlockPos.h"
@@ -13,12 +16,29 @@
 #include "mc/world/level/block/states/BlockStateInstance.h"
 #include "shop/ShopSign.h"
 
+#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <string_view>
 #include <vector>
 
 namespace ss::shop {
+
+SignBlockActor* signBlockActorAt(BlockSource& region, BlockPos const& pos) {
+    auto* actor = region.getBlockEntity(pos);
+    if (actor == nullptr) {
+        return nullptr;
+    }
+    if (!actor->isTypeOrDerived(BlockActorType::Sign) && !actor->isTypeOrDerived(BlockActorType::HangingSign)) {
+        return nullptr;
+    }
+    return static_cast<SignBlockActor*>(actor);
+}
+
+BlockPos toBlockPos(Cell const& cell) { return BlockPos{cell.x, cell.y, cell.z}; }
+
+Cell toCell(BlockPos const& pos) { return Cell{pos.x, pos.y, pos.z}; }
+
 namespace {
 
 bool endsWith(std::string_view text, std::string_view suffix) {
@@ -99,21 +119,6 @@ std::optional<HorizontalFacing> readHorizontalFacing(Block const& block) {
     return std::nullopt;
 }
 
-BlockPos toBlockPos(Cell const& cell) { return BlockPos{cell.x, cell.y, cell.z}; }
-
-Cell toCell(BlockPos const& pos) { return Cell{pos.x, pos.y, pos.z}; }
-
-SignBlockActor* signBlockActorAt(BlockSource& region, BlockPos const& pos) {
-    auto* actor = region.getBlockEntity(pos);
-    if (actor == nullptr) {
-        return nullptr;
-    }
-    if (!actor->isTypeOrDerived(BlockActorType::Sign) && !actor->isTypeOrDerived(BlockActorType::HangingSign)) {
-        return nullptr;
-    }
-    return static_cast<SignBlockActor*>(actor);
-}
-
 bool isAllowedType(std::string const& typeName, std::vector<std::string> const& allowed) {
     for (auto const& candidate : allowed) {
         if (candidate == typeName) {
@@ -123,14 +128,68 @@ bool isAllowedType(std::string const& typeName, std::vector<std::string> const& 
     return false;
 }
 
-std::optional<std::string> firstItemName(Container& container) {
-    for (int slot = 0; slot < container.getContainerSize(); ++slot) {
-        ItemStack const& stack = container.getItem(slot);
-        if (!stack.isNull()) {
-            return stack.getName();
+/// 按合并后的逻辑槽位遍历：先附着那一半，再另一半。
+///
+/// `slots` 是合并后的总槽位数（`ContainerRef::size`）——这是它最主要的读者，
+/// 保证「合并库存有多少格」只有一处定义，不会和双箱实际容量走神。
+/// 双箱没有全局索引：跨两半的「第 N 格」只能靠这个顺序推出来。
+/// `fn` 返回 false 就提前结束（找到商品模板后不用再扫剩下的格子）。
+template <class Fn>
+void forEachMergedSlot(Container& primary, Container* secondary, int slots, Fn&& fn) {
+    int remaining = slots;
+    for (int slot = 0; slot < primary.getContainerSize() && remaining > 0; ++slot, --remaining) {
+        if (!fn(primary.getItem(slot))) {
+            return;
         }
     }
-    return std::nullopt;
+    if (secondary == nullptr) {
+        return;
+    }
+    int const limit = std::min(secondary->getContainerSize(), remaining);
+    for (int slot = 0; slot < limit; ++slot) {
+        if (!fn(secondary->getItem(slot))) {
+            return;
+        }
+    }
+}
+
+/// 商品模板 = 合并库存里第一个非空槽位的物品（附着那一半优先，DESIGN §5.3）。
+ItemStack const* productStack(Container& primary, Container* secondary, int slots) {
+    ItemStack const* product = nullptr;
+    forEachMergedSlot(primary, secondary, slots, [&](ItemStack const& stack) {
+        if (stack.isNull()) {
+            return true;
+        }
+        product = &stack;
+        return false;
+    });
+    return product;
+}
+
+/// 严格比较：类型 + aux + 用户数据（附魔、自定义名等）。
+///
+/// 只看展示名或 ID 会把「钻石剑」和「附魔钻石剑」算成同一种商品，
+/// 那会让一个商店用错价的物品结账（DESIGN §5.3）。
+bool sameShopItem(ItemStackBase const& lhs, ItemStackBase const& rhs) {
+    if (lhs.getId() != rhs.getId() || lhs.getAuxValue() != rhs.getAuxValue()) {
+        return false;
+    }
+    if (lhs.mUserData == nullptr || rhs.mUserData == nullptr) {
+        return lhs.mUserData == rhs.mUserData;
+    }
+    return lhs.mUserData->equals(*rhs.mUserData);
+}
+
+/// 合并库存里与 `product` 严格匹配的总件数。混装箱子里只有商品本身参与计价。
+std::int64_t countShopItems(Container& primary, Container* secondary, int slots, ItemStackBase const& product) {
+    std::int64_t total = 0;
+    forEachMergedSlot(primary, secondary, slots, [&](ItemStack const& stack) {
+        if (!stack.isNull() && sameShopItem(stack, product)) {
+            total += stack.mCount;
+        }
+        return true;
+    });
+    return total;
 }
 
 /// 这一格上的牌是不是「合法商店牌」。只有合法商店牌才算占用了容器。
@@ -139,7 +198,7 @@ bool isShopSign(BlockSource& region, BlockPos const& pos, ShopSignConfig const& 
     if (sign == nullptr) {
         return false;
     }
-    return parseShopSignText(sign->getMessage(SignTextSide::Front), false, signConfig).ok();
+    return isShopSignFront(*sign, signConfig);
 }
 
 /// 收集容器（含双箱另一半）六个面周围的牌子，交给纯逻辑判定冲突。
@@ -207,8 +266,8 @@ inspectAttachedContainer(BlockSource& region, BlockPos const& signPos, Container
         return {.error = ContainerError::UnknownSignShape};
     }
 
-    Cell const   attached    = attachedCellOfSign(geometry->pos, geometry->form, geometry->facing);
-    BlockPos const attachedPos = toBlockPos(attached);
+    Cell const      attached   = attachedCellOfSign(geometry->pos, geometry->form, geometry->facing);
+    BlockPos const  attachedPos = toBlockPos(attached);
 
     auto* actor = region.getBlockEntity(attachedPos);
     if (actor == nullptr
@@ -219,13 +278,15 @@ inspectAttachedContainer(BlockSource& region, BlockPos const& signPos, Container
         return {.error = ContainerError::NotAllowedContainer};
     }
 
-    auto*       chest        = static_cast<ChestBlockActor*>(actor);
-    Container*  primary      = chest;
-    Container*  secondary    = nullptr;
+    // `BarrelBlockActor` 本身派生自 `ChestBlockActor`（mc/world/level/block/actor/BarrelBlockActor.h），
+    // 所以这个向下转型对木桶也合法；木桶永远不会配对，双箱分支自然走不到。
+    auto*       chest     = static_cast<ChestBlockActor*>(actor);
+    Container*  primary   = chest;
+    Container*  secondary = nullptr;
     ContainerRef ref{attached, primary->getContainerSize(), std::nullopt};
     if (auto* paired = chest->mLargeChestPaired) {
-        secondary      = paired;
-        ref.pairedPos  = toCell(chest->mLargeChestPairedPosition);
+        secondary     = paired;
+        ref.pairedPos = toCell(chest->mLargeChestPairedPosition);
         ref.size      += secondary->getContainerSize();
     }
 
@@ -234,16 +295,18 @@ inspectAttachedContainer(BlockSource& region, BlockPos const& signPos, Container
         return {.ref = ref, .error = ContainerError::AlreadyBound};
     }
 
-    // 双箱没有统一的全局槽位顺序：按「附着那一半在前、另一半在后」取商品。
-    auto itemName = firstItemName(*primary);
-    if (!itemName && secondary != nullptr) {
-        itemName = firstItemName(*secondary);
-    }
-    if (!itemName) {
+    // 商品 = 合并库存里第一个非空槽位的物品（附着那一半优先，DESIGN §5.3）。
+    ItemStack const* product = productStack(*primary, secondary, ref.size);
+    if (product == nullptr) {
         return {.ref = ref, .error = ContainerError::Empty};
     }
 
-    return {.ref = ref, .error = ContainerError::None, .itemName = std::move(*itemName)};
+    return {
+        .ref       = ref,
+        .error     = ContainerError::None,
+        .itemName  = product->getName(),
+        .itemCount = countShopItems(*primary, secondary, ref.size, *product),
+    };
 }
 
 } // namespace ss::shop

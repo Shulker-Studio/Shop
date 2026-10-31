@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -47,6 +48,14 @@ struct ShopSignResult {
 
     /// 这块牌子是否「像商店牌」。不是商店牌的牌子不能被本模组改写。
     [[nodiscard]] bool looksLikeShopSign() const { return ok() || error != ShopSignError::NotAShopSign; }
+};
+
+/// 四行牌面文本的下标（DESIGN §5.1）。用名字比用魔数安全。
+enum SignLine : std::size_t {
+    OwnerLine  = 0, ///< 店主显示名（管理员店是配置名）
+    AmountLine = 1, ///< 一份的件数（权威）
+    PriceLine  = 2, ///< 价格（权威）
+    ItemLine   = 3, ///< 商品显示名
 };
 
 /// 去掉 `§` 与其后的格式码（UTF-8 下的 0xC2 0xA7）。

@@ -3,6 +3,7 @@
 #include "mod/Config.h"
 #include "shop/ContainerFinder.h"
 
+#include <cstdint>
 #include <optional>
 #include <string>
 #include <vector>
@@ -32,8 +33,11 @@ struct ContainerLookup {
     /// `Empty`/`AlreadyBound`——这两种情况下容器本身是存在的。
     std::optional<ContainerRef> ref;
     ContainerError              error = ContainerError::None;
-    /// 第一个非空槽位的物品展示名；容器为空时是空串。
+    /// 商品（第一个非空槽位的物品）的展示名；容器为空时是空串。
     std::string itemName;
+    /// 商店箱里与商品**严格匹配**的总件数（双箱合并；类型 + aux + 用户数据），
+    /// 空容器时为 0。可成交份数 = `itemCount / 一份的件数`（见 `stockUnits`）。
+    std::int64_t itemCount = 0;
 
     [[nodiscard]] bool ok() const { return error == ContainerError::None && ref.has_value(); }
 };
@@ -47,6 +51,10 @@ struct ContainerLookupOptions {
 
 /// 读出牌子的形态与朝向。不是告示牌、或判不出形态时返回空。
 std::optional<SignRef> readSignGeometry(BlockSource& region, BlockPos const& signPos);
+
+/// 引擎坐标 ↔ 纯逻辑坐标。两边的转换只在这里定义。
+BlockPos toBlockPos(Cell const& cell);
+Cell     toCell(BlockPos const& pos);
 
 /// 找出这一格上的商店牌所附着的容器，并报告开店前需要知道的三件事：
 /// 容器身份（双箱已合并）、它是否已被别的商店牌占用、第一个非空槽位是什么。

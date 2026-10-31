@@ -20,6 +20,13 @@ bool validate(ShopConfig const& config, ll::io::Logger& logger) {
         logger.error("config.json 非法：adminShopName 不能为空");
         return false;
     }
+    if (config.shopInteractionCooldownMs < 0) {
+        logger.error(
+            "config.json 非法：shopInteractionCooldownMs 不能为负数（当前 {}）",
+            config.shopInteractionCooldownMs
+        );
+        return false;
+    }
     if (config.shopContainers.empty()) {
         logger.error("config.json 非法：shopContainers 至少要有一个方块类型");
         return false;

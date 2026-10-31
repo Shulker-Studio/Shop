@@ -190,6 +190,8 @@ PlayerEditSignBeforeEvent
 
 若最终仍需直接改已存在的方块实体（例如外部工具写入、或未走包路径的编辑），回退方案是 `SignBlockActor::setMessageForServerScripingOnly(SignTextSide::Front, text, ownerId)` + `BlockActor::refresh(blockSource)`；`ownerId` 传编辑者 XUID，未知时传空串（语义待实测）。
 
+**P0 的实际做法**：包路径不保证写入 `mLastEditXuid`（见 6.5 第 3 条），所以在 `PlayerEditSignAfterEvent` 里**只补写 ownerID、不改文本**——正面已是合法商店且记录的 XUID 与本次编辑者不一致时，用当前文本调一次 `setMessageForServerScripingOnly(Front, 现有文本, 编辑者 XUID)`，不 `refresh`（客户端已经通过包拿到同一份文本）。普通牌、非法牌、附着容器不可用的牌一律不写。
+
 ### 5.5 只看正面，背面是布告板
 
 `SignTextSide::Front` 参与逻辑，`Back` 完全不参与：服务器不读、不写、不校验。玩家在背面写公告、批发价、店规都可以；即使在背面写出一套合法的商店格式，也不会被识别成第二个商店（ADR-0006）。
@@ -522,9 +524,10 @@ public:
 ### 10.1 交互
 
 1. `PlayerInteractBlockEvent` 命中有效商店牌 → `event.setCancelled(true)`。
-2. 弹 `SimpleForm`（标题：`<店主> 的商店`）：
-   - 买家视角：`购买（1 份 N 个 / B 价）`、`出售（1 份 N 个 / S 价）`、`商店信息`
-   - 店主视角：`管理商店`（改价 / 开箱 / 关店），**没有**买卖按钮（店主不能跟自己交易）
+2. 弹 `SimpleForm`（标题：`<店主> 的商店`；管理员商店用 `管理员商店`）：
+   - 正文直接列出店主、商品、每份件数、买入价、卖出价、可成交份数、余额（经济后端未接入时显示占位，不编造数字）
+   - 买家视角：`购买（1 份 N 个 / B 价）`、`出售（1 份 N 个 / S 价）`；缺哪一边价格就没有哪个按钮
+   - 店主视角（店主与 OP）：`管理商店`（改价 / 开箱 / 关店），**没有**买卖按钮（店主不能跟自己交易）
 3. 选「购买」或「出售」→ 弹 `CustomForm`：
    - **份数**选择：`1 份 / 2 份 / 4 份 / 自定义份数`，上限 = `min(maxShopAmount, 库存可成交份数, 背包可容纳份数, 余额可承受份数)`
    - 实时显示每份数量、总件数、总价、余额、库存

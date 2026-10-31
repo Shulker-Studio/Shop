@@ -1,6 +1,7 @@
 #include "mod/SignEditListener.h"
 
 #include "mod/Shop.h"
+#include "mod/ShopOwner.h"
 #include "mod/ShopService.h"
 
 #include "ila/event/world/actor/player/PlayerEditSignEvent.h"
@@ -15,8 +16,10 @@ namespace ss::shop {
 namespace {
 
 ll::event::ListenerPtr gSignEditListener;
+ll::event::ListenerPtr gSignEditedListener;
 
 using SignEditBeforeEvent = ila::mc::world::actor::player::PlayerEditSignBeforeEvent;
+using SignEditAfterEvent  = ila::mc::world::actor::player::PlayerEditSignAfterEvent;
 
 void onSignEdit(SignEditBeforeEvent& event) {
     // 背面是布告板：不读、不写、不校验。
@@ -47,24 +50,48 @@ void onSignEdit(SignEditBeforeEvent& event) {
     }
 }
 
+/// 牌子已写入后的补写。DESIGN §5.4 的 fallback：包路径不保证写 `mLastEditXuid`，
+/// 而 ADR-0005 的店主判定依赖它。只在「正面已是合法商店 + 附着容器可用 + 记录的
+/// XUID 与本次编辑者不一致」时写一次，文本不变、不 refresh。
+void onSignEdited(SignEditAfterEvent const& event) {
+    // 背面是布告板：不读、不写、不校验（DESIGN §5.5）。
+    if (event.textSide() != SignTextSide::Front) {
+        return;
+    }
+
+    auto const& config = Shop::getInstance().config();
+    if (!config) {
+        return;
+    }
+
+    auto& player = event.self();
+    ensureOwnerRecorded(player.getDimensionBlockSource(), event.pos(), player, *config);
+}
+
 } // namespace
 
 void registerSignEditListener() {
     if (gSignEditListener) {
         return;
     }
-    gSignEditListener = ll::event::EventBus::getInstance().emplaceListener<SignEditBeforeEvent>(onSignEdit);
-    if (!gSignEditListener) {
+    auto& bus          = ll::event::EventBus::getInstance();
+    gSignEditListener  = bus.emplaceListener<SignEditBeforeEvent>(onSignEdit);
+    gSignEditedListener = bus.emplaceListener<SignEditAfterEvent>(onSignEdited);
+    if (!gSignEditListener || !gSignEditedListener) {
         Shop::getInstance().getSelf().getLogger().error("注册告示牌编辑监听失败");
     }
 }
 
 void unregisterSignEditListener() {
-    if (!gSignEditListener) {
-        return;
+    auto& bus = ll::event::EventBus::getInstance();
+    if (gSignEditListener) {
+        bus.removeListener<SignEditBeforeEvent>(gSignEditListener);
+        gSignEditListener.reset();
     }
-    ll::event::EventBus::getInstance().removeListener<SignEditBeforeEvent>(gSignEditListener);
-    gSignEditListener.reset();
+    if (gSignEditedListener) {
+        bus.removeListener<SignEditAfterEvent>(gSignEditedListener);
+        gSignEditedListener.reset();
+    }
 }
 
 } // namespace ss::shop

@@ -1,13 +1,16 @@
 #pragma once
 
 #include "mod/Config.h"
+#include "shop/ShopInfo.h"
 #include "shop/ShopSign.h"
 
+#include <optional>
 #include <string>
 #include <string_view>
 
 class BlockPos;
 class BlockSource;
+class Player;
 class ServerPlayer;
 
 namespace ss::shop {
@@ -35,6 +38,26 @@ SignEditResult planSignEdit(
     BlockPos const&   signPos,
     ServerPlayer&     editor,
     std::string_view  rawText,
+    ShopConfig const& config
+);
+
+/// 点牌时的一次性快照：解析结果 + 附着容器 + 店主 + 可成交份数。
+struct ShopSnapshot {
+    ShopInfoData info;
+    /// 这个人是不是以管理身份在看（店主或 OP）——决定表单给管理入口还是买卖按钮。
+    ShopFormRole role = ShopFormRole::Visitor;
+};
+
+/// 看待一块商店牌。
+///
+/// 返回空 = 现在不可交互的牌：看的是背面、正面不是合法商店牌、或附着格不是可用容器。
+/// 容器空了（卖光了）仍然返回快照——牌还是商店，只是 0 份。
+///
+/// 只读取：不写方块、不发消息。
+std::optional<ShopSnapshot> inspectShop(
+    BlockSource&      region,
+    BlockPos const&   signPos,
+    Player&           viewer,
     ShopConfig const& config
 );
 
