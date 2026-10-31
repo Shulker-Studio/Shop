@@ -18,6 +18,8 @@ ShopInfoData sampleShop() {
     data.sellPrice      = 5;
     data.stockUnits     = 5;
     data.heldUnits      = 3;
+    data.boxRoomUnits   = 7;
+    data.ownerBalance   = 50;
     data.balance        = 100;
     data.currencySymbol = "$";
     return data;
@@ -75,6 +77,27 @@ TEST_CASE("买表单正文：每一档的总件数与总价都写出来") {
     CHECK(hasLine(content, "选 1 份 → 共 64 个 / $ 10"));
     CHECK(hasLine(content, "选 2 份 → 共 128 个 / $ 20"));
     CHECK(hasLine(content, "选 4 份 → 共 256 个 / $ 40"));
+}
+
+TEST_CASE("卖表单正文：另外两个上限的数也摆出来，买入侧不显示它们") {
+    auto const model    = makeUnitsFormModel(2);
+    auto const sellForm = unitsFormContent(TradeDirection::Sell, sampleShop(), model);
+    auto const buyForm  = unitsFormContent(TradeDirection::Buy, sampleShop(), model);
+
+    CHECK(hasLine(sellForm, "商店箱还能装：7 份"));
+    CHECK(hasLine(sellForm, "店主余额：$ 50"));
+    CHECK(hasLine(sellForm, "你的余额：$ 100"));
+    CHECK_FALSE(hasLine(buyForm, "商店箱还能装："));
+    CHECK_FALSE(hasLine(buyForm, "店主余额："));
+}
+
+TEST_CASE("卖表单正文：店主余额读不到时不编造数字") {
+    auto data = sampleShop();
+    data.ownerBalance.reset();
+
+    auto const content = unitsFormContent(TradeDirection::Sell, data, makeUnitsFormModel(2));
+    CHECK_FALSE(hasLine(content, "店主余额："));
+    CHECK(hasLine(content, "商店箱还能装：7 份"));
 }
 
 TEST_CASE("卖表单正文：限额来源是玩家手里的货与店主的钱，动词换成收入") {

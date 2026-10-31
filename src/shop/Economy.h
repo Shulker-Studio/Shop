@@ -71,7 +71,7 @@ public:
     /// 后端名字，进日志（DESIGN §8.4 第 4 条）。
     virtual std::string_view name() const = 0;
 
-    /// 这个后端算不算「真的能记账」。空实现不算：它永远读 0，任何成交都会变成白送。
+    /// 这个后端算不算「真的能记账」。空实现不算：它谁的余额都读不到，任何成交都会变成白送。
     virtual bool available() const { return true; }
 
     /// 能否为离线玩家记账（DESIGN §8.5）。记分板只能写在线玩家的分。

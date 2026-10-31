@@ -180,18 +180,6 @@ int shopBoxUnits(AttachedContainer const& attached, ItemStack const& product, in
     return roomUnits(*attached.primary, attached.secondary, attached.ref.size, product, amountPerUnit);
 }
 
-/// 玩家背包里与商品严格匹配的件数 → 份数（卖出时「你手里有几份」）。
-///
-/// 严格同种（类型 + aux + 用户数据）是 `sameShopItem` 说了算（DESIGN §5.3），
-/// 与商店箱统计商品用的是同一套比较：附魔、耐久、自定义名不同的都不算。
-int heldUnits(Inventory& inventory, ItemStack const& product, int amountPerUnit) {
-    auto const counted = countMatchingItems(inventory, nullptr, inventory.getContainerSize(), product);
-    return unitsFromItems(
-        static_cast<int>(std::min<std::int64_t>(counted, std::numeric_limits<int>::max())),
-        amountPerUnit
-    );
-}
-
 /// 玩家背包里有没有「同一种物品、但不算严格同种」的堆叠。
 ///
 /// 只用来把「你手里根本没有」与「你手里这件的附魔 / 耐久 / 自定义名不对」分开说。
@@ -498,18 +486,26 @@ PreparedTrade prepareSell(BlockSource& region, Cell const& sign, Player& seller,
 
     context.request.unitPrice  = *context.shop.info.sellPrice;
     context.request.payerFunds = ownerFunds.value_or(0);
-    context.request.goodsUnits = heldUnits(seller.getInventory(), context.product, context.shop.info.amountPerUnit);
+    // 份数与件数都要：件数为 0 才是「根本没有」，份数为 0 但件数不为 0 只是「不够一份」。
+    auto const strictItems =
+        countMatchingItems(seller.getInventory(), nullptr, seller.getInventory().getContainerSize(), context.product);
+    auto const strictCount     = static_cast<int>(std::min<std::int64_t>(strictItems, std::numeric_limits<int>::max()));
+    context.request.goodsUnits = unitsFromItems(strictCount, context.shop.info.amountPerUnit);
     context.request.roomUnits  = shopBoxUnits(context.container, context.product, context.shop.info.amountPerUnit);
 
     // 「我手里根本没有」与「我手里有钻石剑但不是这一把」得分开说（DESIGN §5.3 的严格同种）。
-    if (context.request.goodsUnits == 0 && holdsSimilarItem(seller.getInventory(), context.product)) {
+    // 只有严格同种一件都没有时才怀疑「货不对」；有 63 个差一个满一份的，原因就是不够一份。
+    if (strictCount == 0 && holdsSimilarItem(seller.getInventory(), context.product)) {
         return {.error = "你手里的这种物品与商店收的不一样（附魔、耐久或自定义名对不上）"};
     }
 
-    // 卖出表单要显示「你手里有几份」与玩家自己的余额（DESIGN §10.1 第 3 步）。
-    // 这里读不到不算错误：钱那一步会在扣款之前再确认一次两边账户（见 `moveMoney`）。
-    context.shop.info.heldUnits = context.request.goodsUnits;
-    context.shop.info.balance   = context.provider->get(seller.getXuid());
+    // 卖出表单要把「你手里有几份」「商店箱还能装几份」「店主余额」都摆出来
+    // （DESIGN §10.1 第 3 步：表单要显示上限是怎么来的，不能只说“受它们限制”）。
+    // 玩家自己的余额读不到不算错误：钱那一步会在扣款前再确认一次两边账户（见 `moveMoney`）。
+    context.shop.info.heldUnits    = context.request.goodsUnits;
+    context.shop.info.boxRoomUnits = context.request.roomUnits;
+    context.shop.info.ownerBalance = ownerFunds;
+    context.shop.info.balance      = context.provider->get(seller.getXuid());
 
     // 上限 = maxShopAmount、手里有的份数、箱子还能装的份数、店主余额取最小（§10.3）。
     context.unitsAvailable = maxTradeUnits(

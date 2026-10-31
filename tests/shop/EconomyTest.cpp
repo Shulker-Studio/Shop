@@ -19,7 +19,7 @@ public:
     std::optional<std::int64_t> get(Account const& account) const override {
         auto it = mBalances.find(account);
         if (it == mBalances.end()) {
-            // 没上过账的账户：与记分板后端一样，算「读不到」而不是 0 元。
+            /// 从未上账的账户：后端把它当 0 元；只有登记为 unreadable 的才真的读不到。
             return mUnreadable.count(account) != 0 ? std::nullopt : std::optional<std::int64_t>{0};
         }
         return it->second;

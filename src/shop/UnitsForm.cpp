@@ -135,6 +135,14 @@ std::string unitsFormContent(TradeDirection direction, ShopInfoData const& data,
     append(std::string{words.priceLabel} + "：" + unitPriceText(data, direction) + " / 份");
     // 卖出的限额是玩家自己手里有几份，买入的限额是商店箱里还有几份（DESIGN §10.3）。
     append(std::string{words.goodsLabel} + "：" + std::to_string(goodsCount(data, direction)) + " 份");
+    if (direction == TradeDirection::Sell) {
+        // 卖出那三个上限中另两个（§10.3）：箱子还能装多少、店主付得起多少。
+        // 买入侧的对应两行是「商店箱里的货还够」与「余额」。
+        append("商店箱还能装：" + std::to_string(data.boxRoomUnits) + " 份");
+        if (data.ownerBalance) {
+            append("店主余额：" + moneyText(data.currencySymbol, *data.ownerBalance));
+        }
+    }
     if (data.balance) {
         // 这是玩家自己的余额（两个方向都是）：卖出时真正的限额来自店主余额，
         // 所以标签写清「你的」，与上限那行的「店主余额」分开。
