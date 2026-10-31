@@ -14,3 +14,7 @@
 - [ ] 店主离线且后端支持离线（LegacyMoney）→ 交易正常完成
 - [ ] 商店税开启时：店主实收 `总额 - 税`，税被销毁；启动时打出要求关闭 `pay_tax` 的警告
 - [ ] 余额写到 32 位后端时不会静默截断
+
+## Comments
+
+- **已随 04 落地的那一半**：记分板后端本身、`auto` 落到「目标存在就用记分板」、店主离线时买方向拒绝并提前藏按钮、`economy.backend`/`scoreboardObjective`/`currencySymbol` 三个配置键。本票剩下的活是 LegacyMoney 探测、`createObjectiveIfMissing`、`requireOwnerOnline`、商店税，以及把 `auto` 补成 §8.4 的完整顺序。

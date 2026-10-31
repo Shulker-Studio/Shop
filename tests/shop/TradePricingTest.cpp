@@ -49,16 +49,16 @@ TEST_CASE("部分成交后的实际总价按实际份数重算") {
     CHECK(totalPrice(10, units) == std::optional<std::int64_t>{20});
 }
 
-TEST_CASE("库存可成交份数 = 件数 / 每份件数（向下取整）") {
-    CHECK(stockUnits(64, 64) == 1);
-    CHECK(stockUnits(127, 64) == 1);
-    CHECK(stockUnits(128, 64) == 2);
-    CHECK(stockUnits(3456, 64) == 54);
-    CHECK(stockUnits(0, 64) == 0);
+TEST_CASE("件数 → 份数：向下取整") {
+    CHECK(unitsFromItems(64, 64) == 1);
+    CHECK(unitsFromItems(127, 64) == 1);
+    CHECK(unitsFromItems(128, 64) == 2);
+    CHECK(unitsFromItems(3456, 64) == 54);
+    CHECK(unitsFromItems(0, 64) == 0);
 }
 
-TEST_CASE("库存可成交份数：每份件数非法时视为 0 份") {
-    CHECK(stockUnits(64, 0) == 0);
-    CHECK(stockUnits(64, -1) == 0);
-    CHECK(stockUnits(-64, 64) == 0);
+TEST_CASE("件数 → 份数：每份件数非法时视为 0 份") {
+    CHECK(unitsFromItems(64, 0) == 0);
+    CHECK(unitsFromItems(64, -1) == 0);
+    CHECK(unitsFromItems(-64, 64) == 0);
 }

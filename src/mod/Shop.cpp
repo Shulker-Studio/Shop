@@ -1,7 +1,9 @@
 #include "mod/Shop.h"
 
+#include "mod/EconomyService.h"
 #include "mod/SignEditListener.h"
 #include "mod/SignInteractListener.h"
+#include "mod/TradeService.h"
 
 #include "ll/api/mod/RegisterHelper.h"
 
@@ -26,6 +28,9 @@ bool Shop::load() {
 
 bool Shop::enable() {
     getSelf().getLogger().debug("Enabling...");
+    if (mConfig) {
+        initTradeService(*mConfig);
+    }
     registerSignEditListener();
     registerSignInteractListener();
     return true;
@@ -35,6 +40,8 @@ bool Shop::disable() {
     getSelf().getLogger().debug("Disabling...");
     unregisterSignInteractListener();
     unregisterSignEditListener();
+    resetTradeService();
+    resetEconomy();
     mConfig.reset();
     return true;
 }

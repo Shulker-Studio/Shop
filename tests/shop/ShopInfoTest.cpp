@@ -7,7 +7,7 @@ namespace {
 
 using namespace ss::shop;
 
-/// 一个典型的普通商店：钻石，64 个一份，买入 10、卖出 5，库存够 3 份。
+/// 一个典型的普通商店：钻石，64 个一份，买入 10、卖出 5，可成交 3 份。
 ShopInfoData sampleShop() {
     ShopInfoData data;
     data.ownerName     = "Alex";
@@ -16,6 +16,8 @@ ShopInfoData sampleShop() {
     data.buyPrice      = 10;
     data.sellPrice     = 5;
     data.stockUnits    = 3;
+    // 货币符号只从 `economy.currencySymbol` 来，这里手填模拟调用方
+    data.currencySymbol = "$";
     return data;
 }
 
@@ -43,7 +45,7 @@ TEST_CASE("表单标题：店主名缺失时不冒出空洞标题") {
     CHECK(shopFormTitle(data) == "未知店主的商店");
 }
 
-TEST_CASE("表单正文：一行一项，覆盖店主/商品/份量/买卖价/库存/余额") {
+TEST_CASE("表单正文：一行一项，覆盖店主/商品/份量/买卖价/可成交份数/余额") {
     auto const lines = shopInfoLines(sampleShop());
 
     CHECK(hasLine(lines, "店主：Alex"));
@@ -74,7 +76,7 @@ TEST_CASE("表单正文：余额未接入后端时显示占位，不编造数字
     CHECK_FALSE(data.balance.has_value());
 
     auto const lines = shopInfoLines(data);
-    CHECK(hasLine(lines, "余额：暂不可用（经济后端待接入）"));
+    CHECK(hasLine(lines, "余额：暂不可用（没有可用的经济后端）"));
 
     data.balance = 100;
     CHECK(hasLine(shopInfoLines(data), "余额：$ 100"));
@@ -97,7 +99,7 @@ TEST_CASE("表单正文：售罄时明确写 0 份，而不是藏起来") {
     CHECK(hasLine(shopInfoLines(data), "可成交份数：0 份"));
 }
 
-TEST_CASE("表单正文：纯收购店不拿库存冒充可成交份数") {
+TEST_CASE("表单正文：纯收购店不把可成交份数当卖点") {
     auto data = sampleShop();
     data.buyPrice.reset(); // 只写 S：玩家只能卖给它
     data.stockUnits = 0;
@@ -151,4 +153,23 @@ TEST_CASE("店主按钮：只有一个管理入口，没有买卖按钮") {
     REQUIRE(buttons.size() == 1);
     CHECK(buttons[0].action == ShopFormAction::Manage);
     CHECK(buttons[0].label == "管理商店");
+}
+
+TEST_CASE("表单正文：不能交易时写明原因，且不给买卖按钮") {
+    auto data              = sampleShop();
+    data.unavailableReason = "店主不在线，现在不能交易";
+
+    CHECK(hasLine(shopInfoLines(data), "状态：店主不在线，现在不能交易"));
+    CHECK(shopFormButtons(data, ShopFormRole::Visitor).empty());
+
+    data.unavailableReason = "服务器没有可用的经济后端，暂时不能交易";
+    CHECK(shopFormButtons(data, ShopFormRole::Visitor).empty());
+}
+
+TEST_CASE("表单按钮：能交易时买家拿到购买与出售两个按钮") {
+    auto const buttons = shopFormButtons(sampleShop(), ShopFormRole::Visitor);
+
+    REQUIRE(buttons.size() == 2);
+    CHECK(buttons[0].action == ShopFormAction::Buy);
+    CHECK(buttons[1].action == ShopFormAction::Sell);
 }

@@ -38,7 +38,7 @@ int tradeUnits(int requested, int stockUnits, int backpackUnits, int affordable)
     return std::max(units, 0);
 }
 
-int stockUnits(int itemCount, int amountPerUnit) {
+int unitsFromItems(int itemCount, int amountPerUnit) {
     if (itemCount <= 0 || amountPerUnit <= 0) {
         return 0;
     }

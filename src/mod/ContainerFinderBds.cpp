@@ -130,31 +130,19 @@ bool isAllowedType(std::string const& typeName, std::vector<std::string> const& 
 
 /// 按合并后的逻辑槽位遍历：先附着那一半，再另一半。
 ///
-/// `slots` 是合并后的总槽位数（`ContainerRef::size`）——这是它最主要的读者，
-/// 保证「合并库存有多少格」只有一处定义，不会和双箱实际容量走神。
-/// 双箱没有全局索引：跨两半的「第 N 格」只能靠这个顺序推出来。
+/// 顺序与边界由 `mergedSlots` 说了算，这里不再自己算一遍。
 /// `fn` 返回 false 就提前结束（找到商品模板后不用再扫剩下的格子）。
 template <class Fn>
 void forEachMergedSlot(Container& primary, Container* secondary, int slots, Fn&& fn) {
-    int remaining = slots;
-    for (int slot = 0; slot < primary.getContainerSize() && remaining > 0; ++slot, --remaining) {
-        if (!fn(primary.getItem(slot))) {
-            return;
-        }
-    }
-    if (secondary == nullptr) {
-        return;
-    }
-    int const limit = std::min(secondary->getContainerSize(), remaining);
-    for (int slot = 0; slot < limit; ++slot) {
-        if (!fn(secondary->getItem(slot))) {
+    for (auto const& slot : mergedSlots(primary, secondary, slots)) {
+        if (!fn(slot.container->getItem(slot.slot))) {
             return;
         }
     }
 }
 
-/// 商品模板 = 合并库存里第一个非空槽位的物品（附着那一半优先，DESIGN §5.3）。
-ItemStack const* productStack(Container& primary, Container* secondary, int slots) {
+/// 商品模板 = 商店箱里（双箱合并）第一个非空槽位的物品（附着那一半优先，DESIGN §5.3）。
+ItemStack const* firstNonEmptyStack(Container& primary, Container* secondary, int slots) {
     ItemStack const* product = nullptr;
     forEachMergedSlot(primary, secondary, slots, [&](ItemStack const& stack) {
         if (stack.isNull()) {
@@ -166,21 +154,7 @@ ItemStack const* productStack(Container& primary, Container* secondary, int slot
     return product;
 }
 
-/// 严格比较：类型 + aux + 用户数据（附魔、自定义名等）。
-///
-/// 只看展示名或 ID 会把「钻石剑」和「附魔钻石剑」算成同一种商品，
-/// 那会让一个商店用错价的物品结账（DESIGN §5.3）。
-bool sameShopItem(ItemStackBase const& lhs, ItemStackBase const& rhs) {
-    if (lhs.getId() != rhs.getId() || lhs.getAuxValue() != rhs.getAuxValue()) {
-        return false;
-    }
-    if (lhs.mUserData == nullptr || rhs.mUserData == nullptr) {
-        return lhs.mUserData == rhs.mUserData;
-    }
-    return lhs.mUserData->equals(*rhs.mUserData);
-}
-
-/// 合并库存里与 `product` 严格匹配的总件数。混装箱子里只有商品本身参与计价。
+/// 商店箱里（双箱合并）与 `product` 严格匹配的总件数。混装箱子里只有商品本身参与计价。
 std::int64_t countShopItems(Container& primary, Container* secondary, int slots, ItemStackBase const& product) {
     std::int64_t total = 0;
     forEachMergedSlot(primary, secondary, slots, [&](ItemStack const& stack) {
@@ -224,6 +198,81 @@ collectNeighbourSigns(BlockSource& region, ContainerRef const& container, ShopSi
 
 } // namespace
 
+std::vector<MergedSlot> mergedSlots(Container& primary, Container* secondary, int size) {
+    std::vector<MergedSlot> slots;
+    if (size <= 0) {
+        return slots;
+    }
+    slots.reserve(static_cast<std::size_t>(size));
+
+    int remaining = size;
+    for (int slot = 0; slot < primary.getContainerSize() && remaining > 0; ++slot, --remaining) {
+        slots.push_back({&primary, slot});
+    }
+    if (secondary == nullptr) {
+        return slots;
+    }
+    int const limit = std::min(secondary->getContainerSize(), remaining);
+    for (int slot = 0; slot < limit; ++slot) {
+        slots.push_back({secondary, slot});
+    }
+    return slots;
+}
+
+bool sameShopItem(ItemStackBase const& lhs, ItemStackBase const& rhs) {
+    if (lhs.getId() != rhs.getId() || lhs.getAuxValue() != rhs.getAuxValue()) {
+        return false;
+    }
+    if (lhs.mUserData == nullptr || rhs.mUserData == nullptr) {
+        return lhs.mUserData == rhs.mUserData;
+    }
+    return lhs.mUserData->equals(*rhs.mUserData);
+}
+
+ItemStack const* firstProductStack(AttachedContainer const& attached) {
+    if (attached.primary == nullptr) {
+        return nullptr;
+    }
+    return firstNonEmptyStack(*attached.primary, attached.secondary, attached.ref.size);
+}
+
+AttachedContainerResult attachedContainerOf(
+    BlockSource&                    region,
+    BlockPos const&                 signPos,
+    std::vector<std::string> const& allowedBlockTypes
+) {
+    auto const geometry = readSignGeometry(region, signPos);
+    if (!geometry) {
+        return {.error = ContainerError::UnknownSignShape};
+    }
+
+    Cell const     attached    = attachedCellOfSign(geometry->pos, geometry->form, geometry->facing);
+    BlockPos const attachedPos = toBlockPos(attached);
+
+    auto* actor = region.getBlockEntity(attachedPos);
+    if (actor == nullptr
+        || (!actor->isTypeOrDerived(BlockActorType::Chest) && !actor->isTypeOrDerived(BlockActorType::BarrelBlock))) {
+        return {.error = ContainerError::NotAContainer};
+    }
+    if (!isAllowedType(region.getBlock(attachedPos).getTypeName(), allowedBlockTypes)) {
+        return {.error = ContainerError::NotAllowedContainer};
+    }
+
+    // `BarrelBlockActor` 本身派生自 `ChestBlockActor`（mc/world/level/block/actor/BarrelBlockActor.h），
+    // 所以这个向下转型对木桶也合法；木桶永远不会配对，双箱分支自然走不到。
+    auto*        chest     = static_cast<ChestBlockActor*>(actor);
+    Container*   primary   = chest;
+    Container*   secondary = nullptr;
+    ContainerRef ref{attached, primary->getContainerSize(), std::nullopt};
+    if (auto* paired = chest->mLargeChestPaired) {
+        secondary     = paired;
+        ref.pairedPos = toCell(chest->mLargeChestPairedPosition);
+        ref.size      += secondary->getContainerSize();
+    }
+
+    return {.container = AttachedContainer{*geometry, ref, primary, secondary}};
+}
+
 std::optional<SignRef> readSignGeometry(BlockSource& region, BlockPos const& signPos) {
     if (signBlockActorAt(region, signPos) == nullptr) {
         return std::nullopt;
@@ -261,51 +310,28 @@ std::optional<SignRef> readSignGeometry(BlockSource& region, BlockPos const& sig
 
 ContainerLookup
 inspectAttachedContainer(BlockSource& region, BlockPos const& signPos, ContainerLookupOptions const& options) {
-    auto const geometry = readSignGeometry(region, signPos);
-    if (!geometry) {
-        return {.error = ContainerError::UnknownSignShape};
+    auto const attached = attachedContainerOf(region, signPos, options.allowedBlockTypes);
+    if (!attached.ok()) {
+        return {.error = attached.error};
     }
 
-    Cell const      attached   = attachedCellOfSign(geometry->pos, geometry->form, geometry->facing);
-    BlockPos const  attachedPos = toBlockPos(attached);
-
-    auto* actor = region.getBlockEntity(attachedPos);
-    if (actor == nullptr
-        || (!actor->isTypeOrDerived(BlockActorType::Chest) && !actor->isTypeOrDerived(BlockActorType::BarrelBlock))) {
-        return {.error = ContainerError::NotAContainer};
-    }
-    if (!isAllowedType(region.getBlock(attachedPos).getTypeName(), options.allowedBlockTypes)) {
-        return {.error = ContainerError::NotAllowedContainer};
+    AttachedContainer const& box = *attached.container;
+    auto const               signs = collectNeighbourSigns(region, box.ref, options.signConfig);
+    if (isBoundByAnotherShopSign(signs, box.ref, box.sign.pos)) {
+        return {.ref = box.ref, .error = ContainerError::AlreadyBound};
     }
 
-    // `BarrelBlockActor` 本身派生自 `ChestBlockActor`（mc/world/level/block/actor/BarrelBlockActor.h），
-    // 所以这个向下转型对木桶也合法；木桶永远不会配对，双箱分支自然走不到。
-    auto*       chest     = static_cast<ChestBlockActor*>(actor);
-    Container*  primary   = chest;
-    Container*  secondary = nullptr;
-    ContainerRef ref{attached, primary->getContainerSize(), std::nullopt};
-    if (auto* paired = chest->mLargeChestPaired) {
-        secondary     = paired;
-        ref.pairedPos = toCell(chest->mLargeChestPairedPosition);
-        ref.size      += secondary->getContainerSize();
-    }
-
-    auto const signs = collectNeighbourSigns(region, ref, options.signConfig);
-    if (isBoundByAnotherShopSign(signs, ref, geometry->pos)) {
-        return {.ref = ref, .error = ContainerError::AlreadyBound};
-    }
-
-    // 商品 = 合并库存里第一个非空槽位的物品（附着那一半优先，DESIGN §5.3）。
-    ItemStack const* product = productStack(*primary, secondary, ref.size);
+    // 商品 = 商店箱里（双箱合并）第一个非空槽位的物品（附着那一半优先，DESIGN §5.3）。
+    ItemStack const* product = firstNonEmptyStack(*box.primary, box.secondary, box.ref.size);
     if (product == nullptr) {
-        return {.ref = ref, .error = ContainerError::Empty};
+        return {.ref = box.ref, .error = ContainerError::Empty};
     }
 
     return {
-        .ref       = ref,
+        .ref       = box.ref,
         .error     = ContainerError::None,
         .itemName  = product->getName(),
-        .itemCount = countShopItems(*primary, secondary, ref.size, *product),
+        .itemCount = countShopItems(*box.primary, box.secondary, box.ref.size, *product),
     };
 }
 

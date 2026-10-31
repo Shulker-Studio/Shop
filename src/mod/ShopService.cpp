@@ -1,6 +1,7 @@
 #include "mod/ShopService.h"
 
 #include "mod/ContainerFinderBds.h"
+#include "mod/EconomyService.h"
 #include "mod/ShopOwner.h"
 #include "shop/TradePricing.h"
 
@@ -74,7 +75,7 @@ SignEditResult planSignEdit(
     }
 
     ContainerLookupOptions const options{config.shopContainers, signConfig};
-    auto const                  lookup = inspectAttachedContainer(region, signPos, options);
+    auto const                   lookup = inspectAttachedContainer(region, signPos, options);
     if (!lookup.ok()) {
         return {.outcome = SignEditOutcome::Rejected, .message = messageFor(lookup.error)};
     }
@@ -89,12 +90,48 @@ SignEditResult planSignEdit(
     return {.outcome = SignEditOutcome::Normalized, .normalizedText = joinSignText(formatted)};
 }
 
-std::optional<ShopSnapshot> inspectShop(
-    BlockSource&      region,
-    BlockPos const&   signPos,
-    Player&           viewer,
-    ShopConfig const& config
-) {
+std::optional<ShopSnapshot> readShop(BlockSource& region, BlockPos const& signPos, ShopConfig const& config) {
+    auto* sign = signBlockActorAt(region, signPos);
+    if (sign == nullptr) {
+        return std::nullopt;
+    }
+
+    auto const signConfig = toSignConfig(config);
+    auto const parsed     = parseShopSignText(sign->getMessage(SignTextSide::Front), /*editorIsOp=*/true, signConfig);
+    if (!parsed.ok()) {
+        return std::nullopt; // 普通牌、非法牌
+    }
+
+    ContainerLookupOptions const options{config.shopContainers, signConfig};
+    auto const                   lookup = inspectAttachedContainer(region, signPos, options);
+    if (!lookup.ref) {
+        return std::nullopt; // 附着格不是可用容器：这块牌现在还不是商店
+    }
+
+    ShopOwner const owner = readShopOwner(*sign, parsed);
+
+    ShopInfoData info;
+    info.ownerName = owner.displayName;
+    info.adminShop = owner.adminShop;
+    // 卖光了就没有商品可读，退回牌面第 4 行（规范化时写的就是商品名）。
+    info.itemName = lookup.itemName.empty() ? splitSignText(sign->getMessage(SignTextSide::Front))[SignLine::ItemLine]
+                                            : lookup.itemName;
+    info.amountPerUnit = parsed.spec->amount;
+    info.buyPrice      = parsed.spec->buyPrice;
+    info.sellPrice     = parsed.spec->sellPrice;
+    // 件数 → 份数的除法只有 `unitsFromItems` 一处，商店箱的货与背包容量共用。
+    info.stockUnits = unitsFromItems(
+        static_cast<int>(std::min<std::int64_t>(lookup.itemCount, std::numeric_limits<int>::max())),
+        info.amountPerUnit
+    );
+    // 货币符号只从配置来：这里不留第二个默认值。
+    info.currencySymbol = config.economy.currencySymbol;
+
+    return ShopSnapshot{info, owner.xuid};
+}
+
+std::optional<ShopInteraction>
+inspectShop(BlockSource& region, BlockPos const& signPos, Player& viewer, ShopConfig const& config) {
     auto* sign = signBlockActorAt(region, signPos);
     if (sign == nullptr) {
         return std::nullopt;
@@ -104,43 +141,32 @@ std::optional<ShopSnapshot> inspectShop(
         return std::nullopt;
     }
 
-    auto const signConfig = toSignConfig(config);
-    auto const parsed     = parseShopSignText(sign->getMessage(SignTextSide::Front), /*editorIsOp=*/true, signConfig);
-    if (!parsed.ok()) {
-        return std::nullopt; // 普通牌、非法牌：一律交给原版
+    auto shop = readShop(region, signPos, config);
+    if (!shop) {
+        return std::nullopt;
     }
 
-    ContainerLookupOptions const options{config.shopContainers, signConfig};
-    auto const                  lookup = inspectAttachedContainer(region, signPos, options);
-    if (!lookup.ref) {
-        return std::nullopt; // 附着格不是可用容器：这块牌现在还不是商店
+    // 余额与「能不能交易」都要问后端，只问一次。
+    auto& provider = economyBackend();
+    if (!provider.available()) {
+        // 没有可用后端：余额不编造数字（DESIGN §10.1），买卖按钮也不给。
+        shop->info.unavailableReason = noEconomyReason();
+    } else {
+        shop->info.balance = provider.get(viewer.getXuid());
+        // 店主收不了钱时提前把买卖按钮藏起来（DESIGN §8.5）：只有不支持离线记账的
+        // 后端（记分板）才会碰到这个情况，支持离线的后端根本不用查店主在不在线。
+        // 管理员店不受这条约束：它的资金端是系统账户（§8.5 表格的「同左」）。
+        if (!shop->info.adminShop && !provider.supportsOffline() && onlinePlayer(shop->ownerXuid) == nullptr) {
+            shop->info.unavailableReason = ownerOfflineReason();
+        }
     }
 
-    ShopOwner const owner = readShopOwner(*sign, parsed);
-
-    ShopInfoData info;
-    info.ownerName     = owner.displayName;
-    info.adminShop     = owner.adminShop;
-    // 卖光了就没有商品可读，退回牌面第 4 行（规范化时写的就是商品名）。
-    info.itemName      = lookup.itemName.empty()
-                             ? splitSignText(sign->getMessage(SignTextSide::Front))[SignLine::ItemLine]
-                             : lookup.itemName;
-    info.amountPerUnit = parsed.spec->amount;
-    info.buyPrice      = parsed.spec->buyPrice;
-    info.sellPrice     = parsed.spec->sellPrice;
-    info.stockUnits    = stockUnits(
-        static_cast<int>(std::min<std::int64_t>(lookup.itemCount, std::numeric_limits<int>::max())),
-        info.amountPerUnit
-    );
-    // 余额要等经济后端（10）；货币符号要等 `economy.currencySymbol` 进配置后再填。
-    info.balance = std::nullopt;
-
-    ShopSnapshot snapshot{info, ShopFormRole::Visitor};
-    bool const   isOwner = !owner.xuid.empty() && owner.xuid == viewer.getXuid();
+    ShopInteraction interaction{*shop, ShopFormRole::Visitor};
+    bool const      isOwner = !shop->ownerXuid.empty() && shop->ownerXuid == viewer.getXuid();
     if (viewer.isOperator() || isOwner) {
-        snapshot.role = ShopFormRole::Manager;
+        interaction.role = ShopFormRole::Manager;
     }
-    return snapshot;
+    return interaction;
 }
 
 } // namespace ss::shop

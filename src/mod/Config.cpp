@@ -4,6 +4,7 @@
 #include "ll/api/io/Logger.h"
 
 #include <exception>
+#include <string_view>
 
 namespace ss::shop {
 namespace {
@@ -37,6 +38,28 @@ bool validate(ShopConfig const& config, ll::io::Logger& logger) {
             return false;
         }
     }
+    auto const backend = economy::parseBackend(config.economy.backend);
+    if (!backend) {
+        logger.error(
+            "config.json 非法：economy.backend 只能是 {}（当前 \"{}\"）",
+            economy::backendNamesText(" / "),
+            config.economy.backend
+        );
+        return false;
+    }
+    if (*backend == economy::Backend::LegacyMoney || *backend == economy::Backend::Builtin) {
+        // 明确拒绝，而不是悄悄当 auto 用：服主写了 legacy_money 就是要 LegacyMoney 记账，
+        // 用记分板顶替会让余额落到一个他没在看的地方。
+        logger.error(
+            "config.json 非法：economy.backend = \"{}\" 还没实现（10），请先写 auto 或 scoreboard",
+            economy::backendName(*backend)
+        );
+        return false;
+    }
+    if (isBlank(config.economy.scoreboardObjective)) {
+        logger.error("config.json 非法：economy.scoreboardObjective 不能为空");
+        return false;
+    }
     return true;
 }
 
@@ -59,10 +82,11 @@ std::optional<ShopConfig> loadShopConfig(std::filesystem::path const& path, ll::
     }
 
     logger.info(
-        "配置已加载：每份最多 {} 件，可作容器的方块 {} 种，管理员店名 \"{}\"",
+        "配置已加载：每份最多 {} 件，可作容器的方块 {} 种，管理员店名 \"{}\"，经济后端 {}",
         config.maxShopAmount,
         config.shopContainers.size(),
-        config.adminShopName
+        config.adminShopName,
+        config.economy.backend
     );
     return config;
 }

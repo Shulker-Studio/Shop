@@ -3,14 +3,6 @@
 namespace ss::shop {
 namespace {
 
-/// `$ 10` / `金币 10` / 符号为空时只留 `10`。
-std::string moneyText(std::string const& symbol, std::int64_t amount) {
-    if (symbol.empty()) {
-        return std::to_string(amount);
-    }
-    return symbol + " " + std::to_string(amount);
-}
-
 std::string ownerText(ShopInfoData const& data) {
     if (data.adminShop) {
         return "管理员商店";
@@ -22,6 +14,24 @@ std::string ownerText(ShopInfoData const& data) {
 }
 
 } // namespace
+
+std::string moneyText(std::string const& symbol, std::int64_t amount) {
+    if (symbol.empty()) {
+        return std::to_string(amount);
+    }
+    return symbol + " " + std::to_string(amount);
+}
+
+void appendLine(std::string& content, std::string const& line) {
+    if (!content.empty()) {
+        content.push_back('\n');
+    }
+    content.append(line);
+}
+
+std::string ownerOfflineReason() { return "店主不在线，现在不能交易（当前经济后端不支持离线记账）"; }
+
+std::string noEconomyReason() { return "服务器没有可用的经济后端，暂时不能交易"; }
 
 std::string shopFormTitle(ShopInfoData const& data) {
     if (data.adminShop) {
@@ -54,7 +64,7 @@ std::vector<std::string> shopInfoLines(ShopInfoData const& data) {
     }
 
     // 只有卖得出去的店（写了买入价）才有「可成交份数」这个说法；
-    // 纯收购店（只写 S）的限额是玩家手里的数量与店主资金，不是箱子里的库存（DESIGN §10.3）。
+    // 纯收购店（只写 S）的限额是玩家手里的数量与店主资金，不是商店箱里的货（DESIGN §10.3）。
     if (!data.buyPrice) {
         lines.push_back("可成交份数：—（本店只收购，以你手里的数量为准）");
     } else {
@@ -64,20 +74,21 @@ std::vector<std::string> shopInfoLines(ShopInfoData const& data) {
     if (data.balance) {
         lines.push_back("余额：" + moneyText(data.currencySymbol, *data.balance));
     } else {
-        lines.push_back("余额：暂不可用（经济后端待接入）");
+        lines.push_back("余额：暂不可用（没有可用的经济后端）");
+    }
+
+    // 不能交易就直说，别让玩家点进去才被拒（DESIGN §8.5）。
+    if (!data.unavailableReason.empty()) {
+        lines.push_back("状态：" + data.unavailableReason);
     }
 
     return lines;
 }
 
 std::string shopFormContent(ShopInfoData const& data) {
-    auto const  lines = shopInfoLines(data);
     std::string content;
-    for (std::size_t i = 0; i < lines.size(); ++i) {
-        if (i != 0) {
-            content.push_back('\n');
-        }
-        content.append(lines[i]);
+    for (auto const& line : shopInfoLines(data)) {
+        appendLine(content, line);
     }
     return content;
 }
@@ -88,6 +99,11 @@ std::vector<ShopFormButton> shopFormButtons(ShopInfoData const& data, ShopFormRo
         return {
             ShopFormButton{"管理商店", ShopFormAction::Manage}
         };
+    }
+
+    if (!data.unavailableReason.empty()) {
+        // 必然失败的路径不摆在按钮上（DESIGN §8.5）；正文已经写了原因。
+        return {};
     }
 
     std::vector<ShopFormButton> buttons;

@@ -17,10 +17,27 @@ struct ShopInfoData {
     int                         amountPerUnit = 0; ///< 一份的件数（牌面第 2 行）
     std::optional<std::int64_t> buyPrice;          ///< 一份的买入价，玩家付给店主
     std::optional<std::int64_t> sellPrice;         ///< 一份的卖出价，店主付给玩家
-    int                         stockUnits = 0;    ///< 可成交份数（库存件数 / 每份件数）
+    int                         stockUnits = 0;    ///< 可成交份数（商店箱里件数 / 每份件数）
     std::optional<std::int64_t> balance;           ///< 空 = 经济后端还没接上
-    std::string                 currencySymbol = "$";
+    /// 这家店现在不能交易的原因（店主收不了钱、或服务器没有可用经济后端）。
+    /// 非空时不给买卖按钮，正文直接写这条原因，免得玩家点进去才被拒（DESIGN §8.5）。
+    std::string unavailableReason;
+    /// 货币符号。只由调用方从 `economy.currencySymbol` 填进来，这里不留默认值：
+    /// 默认值只能有一处定义，否则配置改了表单不跟着变。
+    std::string currencySymbol;
 };
+
+/// `$ 10` / `金币 10` / 符号为空时只留 `10`。
+std::string moneyText(std::string const& symbol, std::int64_t amount);
+
+/// 往正文里追加一行：不是首行就先补一个换行。各处正文共用，别各自拼一遍。
+void appendLine(std::string& content, std::string const& line);
+
+/// 店主收不了钱的原因（DESIGN §8.5）。表单与交易提示共用这一句，别写成两种说法。
+std::string ownerOfflineReason();
+
+/// 没有可用经济后端的原因。
+std::string noEconomyReason();
 
 /// 表单标题：普通店 `<店主> 的商店`，管理员店 `管理员商店`（DESIGN §10.1）。
 std::string shopFormTitle(ShopInfoData const& data);
@@ -34,7 +51,7 @@ std::string shopFormContent(ShopInfoData const& data);
 /// 这个表单给谁看：游客/买家，还是店主/OP。
 enum class ShopFormRole : std::uint8_t { Visitor, Manager };
 
-/// 按钮要做的事。本期只有文案，04/05 才给买卖动作接上真实逻辑。
+/// 按钮要做的事。`Buy` 已接真实交易，`Sell` 等 05，`Manage` 等 06。
 enum class ShopFormAction : std::uint8_t { Buy, Sell, Manage };
 
 struct ShopFormButton {
@@ -43,6 +60,9 @@ struct ShopFormButton {
 };
 
 /// 按钮列表：买家拿到购买/出售（缺哪边价格就没有哪个按钮），店主只有一个管理入口。
+///
+/// 店主收不了钱时一个买卖按钮都不给：这不是「不行就不行」，而是提前把必然失败的
+/// 路径藏起来（DESIGN §8.5）。
 ///
 /// 文案取自 DESIGN §10.1：`购买（1 份 N 个 / B 价）`、`出售（1 份 N 个 / S 价）`、`管理商店`。
 std::vector<ShopFormButton> shopFormButtons(ShopInfoData const& data, ShopFormRole role);
