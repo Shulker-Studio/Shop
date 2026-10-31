@@ -21,9 +21,9 @@ ll::event::ListenerPtr gSignEditedListener;
 
 /// 一次编辑的归属交接：Before 阶段判出，紧接着的 After 阶段用（DESIGN §5.4）。
 ///
-/// 只存一条：同一块牌的两个事件是连着来的（服务端线程上一个接一个），
-/// 而「上一次被 Rejected（没有 After）」的残留会在下一次 Before 时被覆写。
-/// 取用前比对牌位（含维度）与编辑者：任何一边对不上就不消费，也不吃别的牌子的 After。
+/// 只存一条：同一块牌的两个事件是连着来的（服务端线程上一个接一个）。
+/// 生命周期很简：每个正面 Before 先把旧的那条丢掉（见 `onSignEdit`），只有 Normalized
+/// 才重新写入；取用前比对牌位（含维度）与编辑者，任何一边对不上就不消费、也不清。
 struct PendingOwnerHandoff {
     Cell             sign;
     int              dimension = 0; ///< `DimensionType` 的整数值：`Cell` 只描述维度内的一格
@@ -41,6 +41,10 @@ void onSignEdit(SignEditBeforeEvent& event) {
     if (event.textSide() != SignTextSide::Front) {
         return;
     }
+
+    // 每一次正面编辑都先把上一次的交接丢掉：不是 Normalized 的那次（普通牌、被拒、
+    // 容器不可用）不会留下任何东西，也就不可能被后续同坐标/同玩家的 After 误消费。
+    gPendingOwnerHandoff.reset();
 
     auto const& config = Shop::getInstance().config();
     if (!config) {
