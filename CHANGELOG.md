@@ -19,7 +19,7 @@
 - 绑定规则：牌子必须附着在容器上（墙牌看背面、站立看下方、吊牌看上方），双箱合并为 54 格，一个容器只被一块牌绑定（`src/shop/ContainerFinder.*`、`src/mod/ContainerFinderBds.*`）。
 - `config.json` 加载与校验：`adminShopName`、`shopContainers`、`maxShopAmount`、`blockSellPriceHigherThanBuy`、`shopInteractionCooldownMs`；配置非法时拒绝启用。
 - 点牌看店：`PlayerInteractBlockEvent` 只拦"正面是合法商店牌 + 附着容器可用"的牌子，弹 `SimpleForm` 展示店主、商品、每份件数、买入价、卖出价、可成交份数与余额（`src/mod/SignInteractListener.*`、`ShopForm.*`）。
-- 店主判定：读正面 `mLastEditXuid` 经 `PlayerInfo` 反查当前名（`src/mod/ShopOwner.*`）；编辑落地后在 `PlayerEditSignAfterEvent` 里补写一次 ownerID（记录的 XUID 与本次编辑者不一致时），补上包路径不写 `mLastEditXuid` 的空洞。
+- 店主判定：读正面 `mLastEditXuid` 经 `PlayerInfo` 反查当前名（`src/mod/ShopOwner.*`）；编辑落地后在 `PlayerEditSignAfterEvent` 里按归属规则写一次 ownerID（具体规则见下面「变更」里的 `recordShopOwner`），补上包路径不写 `mLastEditXuid` 的空洞。
 - 可成交份数与商品统计：商品以第一个非空槽位为准，合并双箱统计严格同种（类型 + aux + 用户数据）的总件数（`src/mod/ContainerFinderBds.*`）。
 - 表单文案、连点冷却与可成交份数都是纯逻辑（`src/shop/ShopInfo.*`、`TradeGate.*`、`TradePricing::unitsFromItems`），有 doctest 覆盖。
 - 经济后端契约与空实现（`src/shop/Economy.*`）：金额一律 `int64`，`transfer` 失败保证双方余额不变，补偿失败返回 `Broken`；`NullEconomy` 任一账户的余额都读不到（不是「读 0」）、不算可用后端。
@@ -34,9 +34,13 @@
 - 卖出交易（`src/mod/TradeService.*`）：`sellUnits` 把货从玩家背包搬进商店箱、店主付钱给玩家；预校验、快照、确认表单、补偿与冻结全部复用买入那一套，只有「谁付钱、谁收货、钱进钱出哪个方向」反过来。卖出容量算的是商店箱还能装几份（双箱按合并顺序，实际放货以 `Container::addItem` 剩余的件数为真值），放不下就按快照回写并退款。
 - 买卖共用一份份数算法（`src/shop/TradePlan.*` 的 `TradeRequest` / `planTrade`）：买入与卖出只差「货在哪、谁收货、谁付钱」，三个上限与部分成交开关、拒绝原因的优先级都只写一遍；拒绝原因按方向换说法（「商店的货不够」/「你手里没有这么多」、「你的钱不够」/「店主的钱不够」）。
 - 经济后端能区分「读不到余额」与「余额为 0」（`EconomyProvider::get` 返回 `optional`）：卖出时不会再对着一个有钱的店主报「资金不足」；动钱之前先确认两边账户都能记账（`EconomyService::accountsRecordable`），读不到就整笔拒绝、两边余额未动。
+- 牌面防护（`src/shop/SignProtection.*`、`SignInteractListener.*`、`ShopService::planSignEdit`）：染料、墨囊、荧光墨囊、蜜蜡、斧头这些会改牌子外观的物品，只有店主与 OP 放行（交回原版处理），其余人一律在交互阶段取消并提示；**看背面也一样**（上蜡改的是整块牌子）。店主/OP **潜行 + 右键**才进原版编辑界面，上蜡后连店主也被拦下并提示先除蜡；提交阶段还有一道兜底（非店主、以及上了蜡的牌，正面编辑包直接丢弃）。上蜡不改变商店语义，交易照常（DESIGN §9.2 / §10.1 / §11）。
+- 「谁是店主」收成一个纯函数 `shopActorOf`（`src/shop/SignProtection.*`），交互阶段的表单角色与提交阶段的编辑权限共用它，不再各写一份 XUID 比较；`ShopSnapshot` 新增 `waxed` 字段（上蜡状态只读一次）。
+- `tests/shop/SignProtectionTest.cpp`：物品分类、身份与权限、交互决策（含背面、潜行、上蜡、斧头没蜡）、提交闸与文案，共 22 个中文用例。
 
 ### 变更
 
+- `ShopOwner::ensureOwnerRecorded` 改名为 `recordShopOwner`：归属在牌子第一次成为商店时写给编辑者，之后改牌面不改归属（After 阶段按 Before 记下的归属写回）。否则 06 的「OP 可以代改别人的牌面」会顺带把店主换成 OP，把原店主锁在自己的店外。
 - `TradePricing::stockUnits` 改名为 `unitsFromItems`：商店箱的货与背包容量共用同一个「件数 → 份数」算式。
 - `src/shop/BuyForm.*` 改名为 `src/shop/UnitsForm.*`：份数表单与确认表单只有一份实现，正文与措辞按 `TradeDirection` 参数化。
 - `TradePlan::planBuy` 并入 `TradePlan::planTrade`（`BuyRequest` / `SellRequest` 合并为 `TradeRequest`，角色由调用方装）：买卖不再各写一份份数算法。
