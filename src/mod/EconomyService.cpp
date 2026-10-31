@@ -101,10 +101,9 @@ Player* onlinePlayer(std::string_view xuid) {
     return level->getPlayerByXuid(std::string{xuid});
 }
 
-bool accountsRecordable(std::string_view payer, std::string_view receiver) {
-    auto& backend = economyBackend();
+bool accountsRecordable(economy::EconomyProvider& provider, std::string_view payer, std::string_view receiver) {
     // `get` 返回空 = 这个账户现在不可记账（不在线、没有这个账户），不是余额 0。
-    return backend.get(economy::Account{payer}).has_value() && backend.get(economy::Account{receiver}).has_value();
+    return provider.get(economy::Account{payer}).has_value() && provider.get(economy::Account{receiver}).has_value();
 }
 
 void resetEconomy() {

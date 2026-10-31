@@ -127,6 +127,12 @@ std::optional<ShopSnapshot> readShop(BlockSource& region, BlockPos const& signPo
     // 货币符号只从配置来：这里不留第二个默认值。
     info.currencySymbol = config.economy.currencySymbol;
 
+    // 箱子全空：既没东西可卖，也看不出这家店收什么（商品权威是第一个非空槽位，DESIGN §5.3）。
+    // 牌子还是商店（不会被当成普通牌），只是现在什么都交易不了，原因写在正文里。
+    if (lookup.error == ContainerError::Empty) {
+        info.unavailableReason = emptyBoxReason();
+    }
+
     return ShopSnapshot{info, owner.xuid};
 }
 
@@ -147,17 +153,21 @@ inspectShop(BlockSource& region, BlockPos const& signPos, Player& viewer, ShopCo
     }
 
     // 余额与「能不能交易」都要问后端，只问一次。
+    // `unavailableReason` 可能已经被 `readShop` 填过（箱子空），那个原因更具体，不覆盖它。
     auto& provider = economyBackend();
     if (!provider.available()) {
         // 没有可用后端：余额不编造数字（DESIGN §10.1），买卖按钮也不给。
-        shop->info.unavailableReason = noEconomyReason();
+        if (shop->info.unavailableReason.empty()) {
+            shop->info.unavailableReason = noEconomyReason();
+        }
     } else {
         // 读不到就留空：正文写「暂时读不到」，不猜一个数字（DESIGN §10.1）。
         shop->info.balance = provider.get(viewer.getXuid());
         // 店主收不了钱时提前把买卖按钮藏起来（DESIGN §8.5）：只有不支持离线记账的
         // 后端（记分板）才会碰到这个情况，支持离线的后端根本不用查店主在不在线。
         // 管理员店不受这条约束：它的资金端是系统账户（§8.5 表格的「同左」）。
-        if (!shop->info.adminShop && !provider.supportsOffline() && onlinePlayer(shop->ownerXuid) == nullptr) {
+        if (!shop->info.adminShop && shop->info.unavailableReason.empty() && !provider.supportsOffline()
+            && onlinePlayer(shop->ownerXuid) == nullptr) {
             shop->info.unavailableReason = ownerOfflineReason();
         }
     }

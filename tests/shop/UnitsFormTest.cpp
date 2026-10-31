@@ -84,9 +84,9 @@ TEST_CASE("卖表单正文：限额来源是玩家手里的货与店主的钱，
     CHECK(hasLine(content, "卖出价：$ 5 / 份"));
     CHECK(hasLine(content, "你手里有：3 份"));
     CHECK_FALSE(hasLine(content, "箱子里的货还够"));
-    CHECK(hasLine(content, "这次最多卖：2 份（受店主资金、商店箱空间与单次上限限制）"));
-    CHECK(hasLine(content, "选 1 份 → 共 64 个 / 得 $ 5"));
-    CHECK(hasLine(content, "选 2 份 → 共 128 个 / 得 $ 10"));
+    CHECK(hasLine(content, "这次最多卖：2 份（受店主余额、商店箱空间与单次上限限制）"));
+    CHECK(hasLine(content, "选 1 份 → 共 64 个 / $ 5"));
+    CHECK(hasLine(content, "选 2 份 → 共 128 个 / $ 10"));
     CHECK(hasLine(content, "自定义份数：收入 = $ 5 × 份数（1 到 2 份，恒为整数）"));
 }
 
@@ -145,7 +145,7 @@ TEST_CASE("部分成交的确认正文写的是重算后的真实份数、件数
     CHECK(hasLine(content, "成交份数：2 份"));
     CHECK(hasLine(content, "总件数：128 个"));
     CHECK(hasLine(content, "实际扣款：$ 20"));
-    CHECK(hasLine(content, "当前余额：$ 100"));
+    CHECK(hasLine(content, "你的余额：$ 100"));
     CHECK(hasLine(content, "确认后按上面的份数与金额成交。"));
 }
 

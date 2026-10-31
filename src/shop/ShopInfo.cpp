@@ -41,6 +41,8 @@ std::string playerFundsUnknownReason() { return "读不到你的余额，这一�
 
 std::string noEconomyReason() { return "服务器没有可用的经济后端，暂时不能交易"; }
 
+std::string emptyBoxReason() { return "商店箱里没有货，既没东西可卖，也看不出这家店收什么"; }
+
 std::string shopFormTitle(ShopInfoData const& data) {
     if (data.adminShop) {
         return "管理员商店";

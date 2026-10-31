@@ -31,7 +31,8 @@ Player* onlinePlayer(std::string_view xuid);
 ///
 /// 交易在扣款之前用一次：后端的 `transfer` 是「先扣款再入账，入账失败就把钱加回去」，
 /// 而「加回去」本身也可能失败（那就是 `Broken`）。所以两边都读得到账号才开始动钱。
-bool accountsRecordable(std::string_view payer, std::string_view receiver);
+/// `provider` 由调用方传入——检查的必须是即将真的转账的那个后端，不能另取一份。
+bool accountsRecordable(economy::EconomyProvider& provider, std::string_view payer, std::string_view receiver);
 
 /// 丢掉已选定的后端，下次用到时按（可能已经改过的）配置重选。模组关闭时调用。
 void resetEconomy();

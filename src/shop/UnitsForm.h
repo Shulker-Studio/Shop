@@ -15,7 +15,7 @@ namespace ss::shop {
 ///
 /// 买卖共用：档位与上限是「份数」的事，与钱和货往哪个方向走无关。
 /// 纯逻辑：读不到世界，也不知道表单长什么样。
-/// 提交时**不信任**这里的值：`planBuy` / `planSell` 会按最新状态再算一遍（DESIGN §10.4）。
+/// 提交时**不信任**这里的值：`planTrade` 会按最新状态再算一遍（DESIGN §10.4）。
 struct UnitsFormModel {
     /// 下拉框的一档。`units == 0` 表示「自定义份数」，读输入框。
     struct Choice {

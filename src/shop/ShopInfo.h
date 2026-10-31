@@ -22,8 +22,10 @@ struct ShopInfoData {
     int                         stockUnits = 0;    ///< 可成交份数（商店箱里件数 / 每份件数）
     /// 玩家手里的同种商品够几份。卖出方向的限额来源（DESIGN §10.3），
     /// 与 `balance` 一样是「谁在看」的属性，由调用方填；信息表单不显示它。
-    int                         heldUnits = 0;
-    std::optional<std::int64_t> balance; ///< 空 = 经济后端还没接上
+    int heldUnits = 0;
+    /// 余额。空 = **读不到**（没有可用后端，或后端没给出这个账户的余额），
+    /// 不是「余额为 0」——两者必须分开（DESIGN §8.2）。
+    std::optional<std::int64_t> balance;
     /// 这家店现在不能交易的原因（店主收不了钱、或服务器没有可用经济后端）。
     /// 非空时不给买卖按钮，正文直接写这条原因，免得玩家点进去才被拒（DESIGN §8.5）。
     std::string unavailableReason;
@@ -59,6 +61,9 @@ std::string playerFundsUnknownReason();
 
 /// 没有可用经济后端的原因。
 std::string noEconomyReason();
+
+/// 商店箱空了的原因：既没东西可卖，也看不出这家店收什么（商品权威是第一个非空槽位，DESIGN §5.3）。
+std::string emptyBoxReason();
 
 /// 表单标题：普通店 `<店主> 的商店`，管理员店 `管理员商店`（DESIGN §10.1）。
 std::string shopFormTitle(ShopInfoData const& data);

@@ -157,6 +157,17 @@ TEST_CASE("店主按钮：只有一个管理入口，没有买卖按钮") {
     CHECK(buttons[0].label == "管理商店");
 }
 
+TEST_CASE("商店箱空了：正文写清原因，不给买卖按钮") {
+    auto data = sampleShop();
+    data.buyPrice.reset();
+    data.sellPrice.reset();
+    data.unavailableReason = emptyBoxReason();
+
+    CHECK(emptyBoxReason().find("没有货") != std::string::npos);
+    CHECK(hasLine(shopInfoLines(data), "状态：" + emptyBoxReason()));
+    CHECK(shopFormButtons(data, ShopFormRole::Visitor).empty());
+}
+
 TEST_CASE("读不到店主余额的说法：讲的是余额，不是店主没钱") {
     auto const reason = ownerFundsUnknownReason();
     CHECK(reason.find("余额") != std::string::npos);
