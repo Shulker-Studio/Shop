@@ -5,12 +5,14 @@
 #include "mod/Shop.h"
 #include "mod/ShopForm.h"
 #include "mod/ShopService.h"
+#include "shop/SignProtection.h"
 #include "shop/TradeGate.h"
 
 #include "ll/api/event/EventBus.h"
 #include "ll/api/event/ListenerBase.h"
 #include "ll/api/event/player/PlayerInteractBlockEvent.h"
 
+#include "mc/world/item/ItemStack.h"
 #include "mc/world/level/BlockPos.h"
 #include "mc/world/level/BlockSource.h"
 
@@ -32,10 +34,41 @@ void onInteractBlock(ll::event::player::PlayerInteractBlockEvent& event) {
     BlockPos const& pos    = event.blockPos();
     auto&           region = player.getDimensionBlockSource();
 
-    // 先判「这是不是一块可交互的商店牌」。不是就一个字都不动：
-    // 普通告示牌、非法商店牌、玩家看着背面时，原版编辑界面照常弹。
+    // 先判「这一格是不是商店牌」。不是就一个字都不动：普通告示牌的原版编辑界面照常弹。
+    // 判据只看正面文本与记录的店主，不看箱子——箱子被拆了牌面仍然受保护（DESIGN §9.2）。
     auto const interaction = inspectShop(region, pos, player, *config);
     if (!interaction) {
+        return;
+    }
+
+    // 手里那件物品会改牌子吗？商店牌上的染色/墨囊/上蜡/除蜡都归「牌面防护」管（DESIGN §9.2），
+    // 要不要拦、拦下给谁，只由 `planSignTouch` 一处决定。
+    // 空手时不去问物品名：`ItemStack::getTypeName()` 靠手里的 `Item` 指针。
+    auto const decision = planSignTouch({
+        .touch       = event.item().isNull() ? SignTouch::None : classifySignTouch(event.item().getTypeName()),
+        .actor       = interaction->actor,
+        .sneaking    = player.isSneaking(),
+        .waxed       = interaction->waxed,
+        .facingFront = interaction->facingFront,
+    });
+
+    // 放行 = 不取消这次交互：原版怎么处理就怎么处理（染色、墨囊、上蜡、除蜡，
+    // 以及潜行右键进原版编辑界面）。
+    if (decision.action == SignTouchAction::PassThrough) {
+        return;
+    }
+
+    // 拦下并告诉玩家为什么（非店主拿染料/墨囊/蜜蜡/斧头、店主想改上了蜡的牌）。
+    // 这条路不弹表单，所以不吃连点冷却：否则一次被拦的染色会把下一次点击吞掉。
+    if (decision.action == SignTouchAction::Block) {
+        event.cancel();
+        player.sendMessage(decision.message);
+        return;
+    }
+
+    // 弹表单：只有「现在能交易」的商店牌才有表单可弹。牌子还在、但附着格不是可用容器时
+    // （店暂时停摆），放行给原版编辑界面——改牌的权限仍然由提交阶段把关（DESIGN §9.2）。
+    if (!interaction->shop) {
         return;
     }
 
@@ -48,7 +81,7 @@ void onInteractBlock(ll::event::player::PlayerInteractBlockEvent& event) {
         return;
     }
 
-    openShopForm(player, sign, interaction->shop.info, interaction->role);
+    openShopForm(player, sign, interaction->shop->info, interaction->role);
 }
 
 } // namespace

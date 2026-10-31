@@ -3,6 +3,7 @@
 #include "mod/Config.h"
 #include "shop/ShopInfo.h"
 #include "shop/ShopSign.h"
+#include "shop/SignProtection.h"
 
 #include <optional>
 #include <string>
@@ -21,10 +22,24 @@ enum class SignEditOutcome {
     Normalized,   ///< 合法：把规范化后的四行写回包
 };
 
+/// 一次编辑的「归属交接」：Before 阶段判出，After 阶段用（DESIGN §5.4）。
+///
+/// 归属规则：「牌子第一次成为商店时，归属写给编辑者；之后改牌面不改归属」。
+/// 后者包括两种人：OP 代改别人的牌（§9.2 允许），以及引擎可能自己改掉 `mLastEditXuid`
+/// 的情况（§6.5 第 3 条）。所以 After 阶段要拿得到「改之前是谁的」。
+struct SignOwnerHandoff {
+    /// 改之前正面是不是一块像样的商店牌。不是 → 这次编辑让它成了商店，归属写编辑者。
+    bool wasShop = false;
+    /// 改之前记的店主 XUID。可能为空（牌子没记下）。
+    std::string previousOwnerXuid;
+};
+
 struct SignEditResult {
     SignEditOutcome outcome = SignEditOutcome::NotAShopSign;
     std::string     message;        ///< Rejected 时发给玩家的原因
     std::string     normalizedText; ///< Normalized 时写回 `event.text()`
+    /// Normalized 时的归属交接；由事件层在 After 事件里交给 `recordShopOwner`。
+    SignOwnerHandoff ownerHandoff;
 };
 
 /// 解析错误 → 玩家提示文案（中文，面向服主与玩家）。
@@ -33,6 +48,12 @@ std::string messageFor(ShopSignError error, int maxShopAmount);
 /// 判断一次告示牌正面编辑会把商店带到什么状态。
 ///
 /// 只做决策：不写方块、不发消息、不取消事件——这些交给事件层。
+///
+/// 两道闸，都只对「正面看起来已经是商店牌」的牌子生效（普通告示牌一个字都不能碰，
+/// DESIGN §5.1.1）。判据是 `looksLikeShopSign`——「像商店」而不是「现在严格合法」：
+/// 改了 `maxShopAmount`、换了 `adminShopName`、或者牌子是外部工具写的脏数据，
+/// 都不应该让保护失效（那也是一个便宜动作就能绕开保护）。规矩与文案都在
+/// `signTextEditRejection` 一处。
 SignEditResult planSignEdit(
     BlockSource&      region,
     BlockPos const&   signPos,
@@ -57,17 +78,31 @@ struct ShopSnapshot {
 /// 只读取：不写方块、不发消息。
 std::optional<ShopSnapshot> readShop(BlockSource& region, BlockPos const& signPos, ShopConfig const& config);
 
-/// 一次交互该给谁看什么：快照 + 角色。
+/// 一次交互该给谁看什么：商店快照（能交易时）+ 身份。
 struct ShopInteraction {
-    ShopSnapshot shop;
-    /// 这个人是不是以管理身份在看（店主或 OP）——决定表单给管理入口还是买卖按钮。
+    /// 现在能交易吗。空 = 正面是商店牌，但附着格不是可用容器（店暂时停摆）。
+    /// 牌面保护不看这个字段：箱子被拆了也不该让牌面变成人人可改（DESIGN §9.2）。
+    std::optional<ShopSnapshot> shop;
+    /// 这个人是谁（ADR-0005 的判定，只算一次）。
+    ShopActor actor = ShopActor::Other;
+    /// 表单角色，由 `canManageShop(actor)` 派生：店主与 OP 拿管理入口，其余拿买卖按钮。
     ShopFormRole role = ShopFormRole::Visitor;
+    /// 这块牌已经上蜡：连店主也要先除蜡才能改文本（DESIGN §9.2）。
+    /// 上蜡只是编辑开关，不影响商店语义，交易照常。
+    /// 这里是「整块牌子」的属性，与 `shop` 有没有值（能不能交易）无关。
+    bool waxed;
+    /// 玩家看的是正面还是背面。背面不弹表单（决定在 `planSignTouch` 里），
+    /// 但物品类操作还是受保护：上蜡改的是整块牌子（DESIGN §5.5 / §9.2）。
+    bool facingFront;
 };
 
 /// 看待一块商店牌（点牌路径）。
 ///
-/// 返回空 = 现在不该接管这次交互：看的是背面，或者这块牌不是商店。
-/// 与 `readShop` 的区别只有两件：看视角、读 viewer 的余额、定角色。
+/// 返回空 = 这一格不是商店牌：不是告示牌，或者正面文本根本不像商店牌
+/// （`looksLikeShopSign`，DESIGN §5.1.1）。
+///
+/// 「是不是商店牌」**只看正面文本与记录的店主**，不看附着容器：容器只决定
+/// 「现在能不能交易」，它不影响归属，也不影响牌面防护。
 ///
 /// 只读取：不写方块、不发消息。
 std::optional<ShopInteraction>

@@ -13,10 +13,12 @@
 
 namespace ss::shop {
 
+ShopSignResult parseShopSignFront(SignBlockActor& sign, ShopSignConfig const& config) {
+    return parseShopSignText(sign.getMessage(SignTextSide::Front), /*editorIsOp=*/true, config);
+}
+
 bool isShopSignFront(SignBlockActor& sign, ShopSignConfig const& config) {
-    // 这里传 `editorIsOp = true` 只影响 `adminShop` 字段，不影响 `ok()`：
-    // 判定「是不是商店牌」和第 1 行是不是管理员名无关。
-    return parseShopSignText(sign.getMessage(SignTextSide::Front), true, config).ok();
+    return parseShopSignFront(sign, config).ok();
 }
 
 ShopOwner readShopOwner(SignBlockActor& sign, ShopSignResult const& parsedFront) {
@@ -47,7 +49,13 @@ ShopOwner readShopOwner(SignBlockActor& sign, ShopSignResult const& parsedFront)
     return owner;
 }
 
-void ensureOwnerRecorded(BlockSource& region, BlockPos const& signPos, ServerPlayer& editor, ShopConfig const& config) {
+void recordShopOwner(
+    BlockSource&            region,
+    BlockPos const&         signPos,
+    ServerPlayer&           editor,
+    ShopConfig const&       config,
+    SignOwnerHandoff const& handoff
+) {
     auto* sign = signBlockActorAt(region, signPos);
     if (sign == nullptr) {
         return;
@@ -67,13 +75,18 @@ void ensureOwnerRecorded(BlockSource& region, BlockPos const& signPos, ServerPla
     if (!sign->mTextFront) {
         return;
     }
+
+    // 目标归属：改之前已经是商店就保住原店主；第一次成为商店就写给编辑者。
+    bool const  keepPrevious = handoff.wasShop && !handoff.previousOwnerXuid.empty();
+    std::string desired      = keepPrevious ? handoff.previousOwnerXuid : editor.getXuid();
+
     std::string const& recorded = sign->mTextFront->mLastEditXuid;
-    if (recorded == editor.getXuid()) {
-        return; // 引擎已经写好了，什么也不用做
+    if (recorded == desired) {
+        return; // 牌上已经是对的（引擎自己写对了，或上次就写过了）
     }
 
-    // 文本原样写回，只把 ownerID 换成这次的编辑者。
-    sign->setMessageForServerScripingOnly(SignTextSide::Front, sign->getMessage(SignTextSide::Front), editor.getXuid());
+    // 文本原样写回，只把 ownerID 纠成目标值（不 refresh，见头文件）。
+    sign->setMessageForServerScripingOnly(SignTextSide::Front, sign->getMessage(SignTextSide::Front), desired);
 }
 
 } // namespace ss::shop
