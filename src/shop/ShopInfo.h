@@ -1,5 +1,7 @@
 #pragma once
 
+#include "shop/TradePlan.h"
+
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -33,6 +35,11 @@ struct ShopInfoData {
 /// `$ 10` / `金币 10` / 符号为空时只留 `10`。
 std::string moneyText(std::string const& symbol, std::int64_t amount);
 
+/// 这个方向上「一份」的价格：买入看 `buyPrice`，卖出看 `sellPrice`（DESIGN §10.1）。
+///
+/// 表单正文、每档金额、确认正文、期望金额都要按方向选价，选择只写在这里。
+std::optional<std::int64_t> unitPriceOf(ShopInfoData const& data, TradeDirection direction);
+
 /// 往正文里追加一行：不是首行就先补一个换行。各处正文共用，别各自拼一遍。
 void appendLine(std::string& content, std::string const& line);
 
@@ -45,6 +52,10 @@ std::string ownerOfflineReason();
 /// 「钱不够」，后者是后端出问题或账户不可记账。混成一句会把后者误报成
 /// 「店主资金不足」，玩家申诉时无处可查。
 std::string ownerFundsUnknownReason();
+
+/// 读不到**玩家自己**的余额的原因。买入要扣钱、卖出要收钱，两边的说法一样：
+/// 这不是「你没钱」，而是后端没给出这个账户的余额（DESIGN §8.2）。
+std::string playerFundsUnknownReason();
 
 /// 没有可用经济后端的原因。
 std::string noEconomyReason();
@@ -61,7 +72,7 @@ std::string shopFormContent(ShopInfoData const& data);
 /// 这个表单给谁看：游客/买家，还是店主/OP。
 enum class ShopFormRole : std::uint8_t { Visitor, Manager };
 
-/// 按钮要做的事。`Buy` 已接真实交易，`Sell` 等 05，`Manage` 等 06。
+/// 按钮要做的事。`Buy` / `Sell` 都已接真实交易，`Manage` 等 06。
 enum class ShopFormAction : std::uint8_t { Buy, Sell, Manage };
 
 struct ShopFormButton {

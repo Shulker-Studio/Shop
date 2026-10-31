@@ -27,6 +27,12 @@ bool economyBackendAvailable();
 /// 交易服务要拿它判断「店主不在线时这笔生意还能不能做」（DESIGN §8.5）。
 Player* onlinePlayer(std::string_view xuid);
 
+/// 这两个账户现在都能记账吗（DESIGN §8.2）。
+///
+/// 交易在扣款之前用一次：后端的 `transfer` 是「先扣款再入账，入账失败就把钱加回去」，
+/// 而「加回去」本身也可能失败（那就是 `Broken`）。所以两边都读得到账号才开始动钱。
+bool accountsRecordable(std::string_view payer, std::string_view receiver);
+
 /// 丢掉已选定的后端，下次用到时按（可能已经改过的）配置重选。模组关闭时调用。
 void resetEconomy();
 

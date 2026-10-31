@@ -22,19 +22,24 @@
 - 店主判定：读正面 `mLastEditXuid` 经 `PlayerInfo` 反查当前名（`src/mod/ShopOwner.*`）；编辑落地后在 `PlayerEditSignAfterEvent` 里补写一次 ownerID（记录的 XUID 与本次编辑者不一致时），补上包路径不写 `mLastEditXuid` 的空洞。
 - 可成交份数与商品统计：商品以第一个非空槽位为准，合并双箱统计严格同种（类型 + aux + 用户数据）的总件数（`src/mod/ContainerFinderBds.*`）。
 - 表单文案、连点冷却与可成交份数都是纯逻辑（`src/shop/ShopInfo.*`、`TradeGate.*`、`TradePricing::unitsFromItems`），有 doctest 覆盖。
-- 经济后端契约与空实现（`src/shop/Economy.*`）：金额一律 `int64`，`transfer` 失败保证双方余额不变，补偿失败返回 `Broken`；`NullEconomy` 读 0、不算可用后端。
+- 经济后端契约与空实现（`src/shop/Economy.*`）：金额一律 `int64`，`transfer` 失败保证双方余额不变，补偿失败返回 `Broken`；`NullEconomy` 任一账户的余额都读不到（不是「读 0」）、不算可用后端。
 - 记分板经济后端（`src/mod/ScoreboardEconomy.*`）：余额 = 玩家在 `economy.scoreboardObjective` 上的分值，写入前过 `toScoreValue` 检查 `int32` 范围，超范围拒绝而不是截断；只支持在线玩家。
 - 后端选择与账户查询（`src/mod/EconomyService.*`）：按 `economy.backend` 惰性选定（04 只有记分板与空实现，目标必须已存在），选不出可用后端时打错误日志并降级为「交易全部失败」。
 - 买入交易（`src/shop/TradePlan.*`、`src/mod/TradeService.*`）：`planBuy` 纯逻辑算出成交份数、件数与总价（含部分成交与原因判定）；`buyUnits` 按「预校验 → 快照 → 先扣钱 → 先取货再给货」执行，任一步失败按快照回写物品并退回钱款；补偿失败打 `fatal` 并通知在线 OP。
-- 买几份的份数表单（`src/shop/BuyForm.*`、`src/mod/ShopForm.*`）：下拉框 `1 / 2 / 4 / 自定义份数`，正文逐档列出总件数与总价；上限 = `maxShopAmount`、可成交份数、余额、背包取最小（DESIGN §10.1 第 3 步 / §10.3）。只能部分成交时先弹确认表单，把重算后的真实份数与金额摆出来，确认后才扣款。
+- 份数表单（`src/shop/UnitsForm.*`、`src/mod/ShopForm.*`）：下拉框 `1 / 2 / 4 / 自定义份数`，正文逐档列出总件数与金额；上限 = `maxShopAmount`、货的份数、收货方容量、付款方余额取最小（DESIGN §10.1 第 3 步 / §10.3）。只能部分成交时先弹确认表单，把重算后的真实份数与金额摆出来，确认后才成交。
 - 容器刷新与冻结：成交后对商店箱两半各 `BlockActor::refresh` 一次（DESIGN §7.3 / §10.2 第 9 步）；补偿失败时把「玩家 + 商店」钉进内存冻结名单，后续提交拒绝并通知在线 OP。
 - 部分成交/改价的确认：实际份数或金额与份数表单上看到的不一致时，`buyUnits` 不动任何钱货，先弹确认表单，玩家点头才成交（DESIGN §10.3）。
 - 表单「购买」按钮接上真交易：回调不碰世界，捕获 XUID 与牌子坐标后切到服务端线程重新解析玩家与商店（`ShopForm.*`、`TradeService::requestBuyForm`/`submitBuy`），并加 250ms 提交冷却。
 - `config.json` 新增 `allowPartialTransactions` 与 `economy`（`backend` / `scoreboardObjective` / `currencySymbol`），以及 `ignoreCreativeMode`（创造模式禁止交易）；表单余额与货币符号改为读真实后端与配置。
+- 卖出交易（`src/mod/TradeService.*`）：`sellUnits` 把货从玩家背包搬进商店箱、店主付钱给玩家；预校验、快照、确认表单、补偿与冻结全部复用买入那一套，只有「谁付钱、谁收货、钱进钱出哪个方向」反过来。卖出容量算的是商店箱还能装几份（双箱按合并顺序，实际放货以 `Container::addItem` 剩余的件数为真值），放不下就按快照回写并退款。
+- 买卖共用一份份数算法（`src/shop/TradePlan.*` 的 `TradeRequest` / `planTrade`）：买入与卖出只差「货在哪、谁收货、谁付钱」，三个上限与部分成交开关、拒绝原因的优先级都只写一遍；拒绝原因按方向换说法（「商店的货不够」/「你手里没有这么多」、「你的钱不够」/「店主的钱不够」）。
+- 经济后端能区分「读不到余额」与「余额为 0」（`EconomyProvider::get` 返回 `optional`）：卖出时不会再对着一个有钱的店主报「资金不足」；动钱之前先确认两边账户都能记账（`EconomyService::accountsRecordable`），读不到就整笔拒绝、两边余额未动。
 
 ### 变更
 
 - `TradePricing::stockUnits` 改名为 `unitsFromItems`：商店箱的货与背包容量共用同一个「件数 → 份数」算式。
+- `src/shop/BuyForm.*` 改名为 `src/shop/UnitsForm.*`：份数表单与确认表单只有一份实现，正文与措辞按 `TradeDirection` 参数化。
+- `TradePlan::planBuy` 并入 `TradePlan::planTrade`（`BuyRequest` / `SellRequest` 合并为 `TradeRequest`，角色由调用方装）：买卖不再各写一份份数算法。
 - `ShopSnapshot` 拆成「只看世界」的 `readShop` 与「看视角 + 读余额 + 定角色」的 `inspectShop`，交易路径复用前者。
 - `ContainerFinderBds` 导出 `AttachedContainer` / `mergedSlots` / `sameShopItem` / `firstProductStack`，「合并槽位的顺序与边界」与「严格同种比较」各只有一处定义。
 - `xmake.lua`：移除 server/client 双目标，固定为服务端模组；版本号由 `modpacker` 显式指定为 `0.1.0`。

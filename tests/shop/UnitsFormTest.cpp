@@ -70,7 +70,7 @@ TEST_CASE("买表单正文：每一档的总件数与总价都写出来") {
 
     CHECK(hasLine(content, "每份：64 个"));
     CHECK(hasLine(content, "买入价：$ 10 / 份"));
-    CHECK(hasLine(content, "箱子里的货还够：5 份"));
+    CHECK(hasLine(content, "商店箱里的货还够：5 份"));
     CHECK(hasLine(content, "这次最多买：4 份（受余额、背包与单次上限限制）"));
     CHECK(hasLine(content, "选 1 份 → 共 64 个 / $ 10"));
     CHECK(hasLine(content, "选 2 份 → 共 128 个 / $ 20"));
@@ -84,7 +84,7 @@ TEST_CASE("卖表单正文：限额来源是玩家手里的货与店主的钱，
     CHECK(hasLine(content, "卖出价：$ 5 / 份"));
     CHECK(hasLine(content, "你手里有：3 份"));
     CHECK_FALSE(hasLine(content, "箱子里的货还够"));
-    CHECK(hasLine(content, "这次最多卖：2 份（受店主资金、箱子空间与单次上限限制）"));
+    CHECK(hasLine(content, "这次最多卖：2 份（受店主资金、商店箱空间与单次上限限制）"));
     CHECK(hasLine(content, "选 1 份 → 共 64 个 / 得 $ 5"));
     CHECK(hasLine(content, "选 2 份 → 共 128 个 / 得 $ 10"));
     CHECK(hasLine(content, "自定义份数：收入 = $ 5 × 份数（1 到 2 份，恒为整数）"));
@@ -176,4 +176,13 @@ TEST_CASE("卖出的确认正文：金额是玩家收到的钱，改价说的是
     CHECK(hasLine(content, "总件数：128 个"));
     CHECK(hasLine(content, "实际收款：$ 10"));
     CHECK_FALSE(hasLine(content, "实际扣款"));
+}
+
+TEST_CASE("份数变少的确认正文：卖出的成因不是「这家店只够成交」") {
+    auto const content =
+        unitsConfirmContent(TradeDirection::Sell, sampleShop(), TradePlan{1, 64, 5}, ChangeReason::Units);
+
+    CHECK(hasLine(content, "这一笔现在只成交得了 1 份"));
+    CHECK_FALSE(hasLine(content, "这家店现在只够成交"));
+    CHECK(hasLine(content, "实际收款：$ 5"));
 }

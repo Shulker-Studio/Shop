@@ -71,12 +71,14 @@ TEST_CASE("表单正文：缺一边价格时写明不出售 / 不收购") {
     CHECK(hasLine(lines, "卖出价：不收购"));
 }
 
-TEST_CASE("表单正文：余额未接入后端时显示占位，不编造数字") {
+TEST_CASE("表单正文：余额读不到时写占位，不编造数字") {
     auto data = sampleShop();
     CHECK_FALSE(data.balance.has_value());
 
+    // 空有两个原因（没有可用后端、读不到这名玩家的账户），正文不猜是哪一个：
+    // 具体原因在不能交易时由「状态：」那一行说清楚（DESIGN §8.2）。
     auto const lines = shopInfoLines(data);
-    CHECK(hasLine(lines, "余额：暂不可用（没有可用的经济后端）"));
+    CHECK(hasLine(lines, "余额：暂时读不到（经济后端没给出这个账户的余额）"));
 
     data.balance = 100;
     CHECK(hasLine(shopInfoLines(data), "余额：$ 100"));

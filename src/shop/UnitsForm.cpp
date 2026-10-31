@@ -36,46 +36,50 @@ std::optional<int> parseUnits(std::string_view text) {
     return static_cast<int>(value);
 }
 
-/// 「单词」：价格是哪一边的。买卖两边的正文只有这些词与两行数字不一样。
+/// 「方向性」的几个词与取数：买卖两边的正文只在这里分叉，份数、件数、金额的算法完全一样。
 struct Wording {
-    char const* priceLabel;    ///< `买入价` / `卖出价`
-    char const* goodsLabel;    ///< `箱子里的货还够` / `你手里有`
-    char const* capLabel;      ///< `这次最多买` / `这次最多卖`
-    char const* capHint;       ///< 上限受什么限制
-    char const* perChoiceVerb; ///< 每档金额的动词：`/` 后面直接跟金额（买入）或 `得`（卖出）
-    char const* totalLabel;    ///< `总价` / `收入`
-    char const* moneyLine;     ///< `实际扣款` / `实际收款`
+    char const* priceLabel;                    ///< `买入价` / `卖出价`
+    int ShopInfoData::*goodsUnits;             ///< 剩余的货：`stockUnits` / `heldUnits`
+    char const* goodsLabel;                    ///< `商店箱里的货还够` / `你手里有`
+    char const* capLabel;                      ///< `这次最多买` / `这次最多卖`
+    char const* capHint;                       ///< 上限受什么限制
+    char const* perChoiceVerb;                 ///< 每档金额前的动词：买入无、卖出 `得 `
+    char const* totalLabel;                    ///< `总价` / `收入`
+    char const* moneyLine;                     ///< `实际扣款` / `实际收款`
+    char const* unitsShortMessage;             ///< 份数变少时的第一句
 };
 
-/// 买卖两份说法（DESIGN §10.1 / §10.3 的文案）。
-///
-/// 只放**方向性**的几个词：份数、件数、金额的算法完全一样，不在这里分叉。
-Wording wordingOf(TradeDirection direction) {
-    if (direction == TradeDirection::Sell) {
-        return {
-            "卖出价",
-            "你手里有",
-            "这次最多卖",
-            "（受店主资金、箱子空间与单次上限限制）",
-            "得 ",
-            "收入",
-            "实际收款",
-        };
-    }
-    return {
-        "买入价",
-        "箱子里的货还够",
-        "这次最多买",
-        "（受余额、背包与单次上限限制）",
-        "",
-        "总价",
-        "实际扣款",
-    };
+Wording const kBuyWording{
+    "买入价",
+    &ShopInfoData::stockUnits,
+    "商店箱里的货还够",
+    "这次最多买",
+    "（受余额、背包与单次上限限制）",
+    "",
+    "总价",
+    "实际扣款",
+    "这家店现在只够成交 ",
+};
+
+Wording const kSellWording{
+    "卖出价",
+    &ShopInfoData::heldUnits,
+    "你手里有",
+    "这次最多卖",
+    "（受店主资金、商店箱空间与单次上限限制）",
+    "得 ",
+    "收入",
+    "实际收款",
+    "这一笔现在只成交得了 ",
+};
+
+Wording const& wordingOf(TradeDirection direction) {
+    return direction == TradeDirection::Sell ? kSellWording : kBuyWording;
 }
 
-/// 一份（`units == 1`）的金额文本；价格缺失或溢出时给占位。
+/// 「一份」的金额文本；价格缺失时给占位。
 std::string unitPriceText(ShopInfoData const& data, TradeDirection direction) {
-    auto const price = direction == TradeDirection::Sell ? data.sellPrice : data.buyPrice;
+    auto const price = unitPriceOf(data, direction);
     if (!price) {
         return "—";
     }
@@ -84,7 +88,7 @@ std::string unitPriceText(ShopInfoData const& data, TradeDirection direction) {
 
 /// 某一档的金额文本。
 std::string totalPriceText(ShopInfoData const& data, TradeDirection direction, int units) {
-    auto const price = direction == TradeDirection::Sell ? data.sellPrice : data.buyPrice;
+    auto const price = unitPriceOf(data, direction);
     if (!price) {
         return "—";
     }
@@ -122,7 +126,7 @@ std::vector<std::string> unitsFormOptions(UnitsFormModel const& model) {
 }
 
 std::string unitsFormContent(TradeDirection direction, ShopInfoData const& data, UnitsFormModel const& model) {
-    Wording const words = wordingOf(direction);
+    Wording const& words = wordingOf(direction);
 
     std::string content;
     auto const  append = [&content](std::string const& line) { appendLine(content, line); };
@@ -130,11 +134,8 @@ std::string unitsFormContent(TradeDirection direction, ShopInfoData const& data,
     append("商品：" + (data.itemName.empty() ? std::string{"—"} : data.itemName));
     append("每份：" + std::to_string(data.amountPerUnit) + " 个");
     append(std::string{words.priceLabel} + "：" + unitPriceText(data, direction) + " / 份");
-    // 卖出的限制是玩家自己手里有几份，买入的限制是商店箱里还有几份（DESIGN §10.3）。
-    append(
-        std::string{words.goodsLabel} + "："
-        + std::to_string(direction == TradeDirection::Sell ? data.heldUnits : data.stockUnits) + " 份"
-    );
+    // 卖出的限额是玩家自己手里有几份，买入的限额是商店箱里还有几份（DESIGN §10.3）。
+    append(std::string{words.goodsLabel} + "：" + std::to_string(data.*words.goodsUnits) + " 份");
     if (data.balance) {
         append("余额：" + moneyText(data.currencySymbol, *data.balance));
     }
@@ -160,14 +161,16 @@ std::string unitsFormContent(TradeDirection direction, ShopInfoData const& data,
 
 std::string
 unitsConfirmContent(TradeDirection direction, ShopInfoData const& data, TradePlan const& plan, ChangeReason reason) {
-    Wording const words = wordingOf(direction);
+    Wording const& words = wordingOf(direction);
 
     std::string content;
     auto const  append = [&content](std::string const& line) { appendLine(content, line); };
 
     switch (reason) {
     case ChangeReason::Units:
-        append("这家店现在只够成交 " + std::to_string(plan.units) + " 份");
+        // 份数变少的成因在两个方向上不一样：买入多半是商店箱不够，卖出多半是
+        // 自己手里的货、店主的钱或商店箱空间不够，所以第一句要分开说。
+        append(std::string{words.unitsShortMessage} + std::to_string(plan.units) + " 份");
         break;
     case ChangeReason::Items:
         append("这家店「一份的件数」变了，现在 " + std::to_string(data.amountPerUnit) + " 个算一份");

@@ -13,44 +13,30 @@ namespace {
 ///
 /// 顺序即优先级：缺货优先（箱子空了跟买家有多少钱无关），最后才轮到单次上限——
 /// 那一条是服务器配置，不是玩家或这家店的问题。
-TradeLimit blockingLimit(TradeLimits const& limits, int units) {
-    if (limits.goodsUnits < units) {
-        return TradeLimit::Goods;
-    }
-    if (affordableUnits(limits.unitPrice, limits.payerFunds) < units) {
-        return TradeLimit::Funds;
-    }
-    if (limits.roomUnits < units) {
-        return TradeLimit::Room;
-    }
-    return TradeLimit::Cap;
-}
-
-/// 交易被拒 → 拒绝原因。买卖两边只有这一步的映射不同（说法见
-/// `tradeRejectionMessage`），所以映射表只写一遍。
-TradeRejection rejectionOf(TradeLimit limit) {
-    switch (limit) {
-    case TradeLimit::Invalid:
-        return TradeRejection::InvalidRequest;
-    case TradeLimit::Goods:
+TradeRejection blockingReason(TradeRequest const& request, int units) {
+    if (request.goodsUnits < units) {
         return TradeRejection::NotEnoughGoods;
-    case TradeLimit::Funds:
-        return TradeRejection::NotEnoughFunds;
-    case TradeLimit::Room:
-        return TradeRejection::NoRoomToReceive;
-    case TradeLimit::Cap:
-        return TradeRejection::OverUnitLimit;
-    case TradeLimit::None:
-        break;
     }
-    return TradeRejection::InvalidRequest;
+    if (affordableUnits(request.unitPrice, request.payerFunds) < units) {
+        return TradeRejection::NotEnoughFunds;
+    }
+    if (request.roomUnits < units) {
+        return TradeRejection::NoRoomToReceive;
+    }
+    return TradeRejection::OverUnitLimit;
 }
 
 /// 后端不能给离线账户记账时，店主不在线整笔拒绝：钱没地方进（买入）、
 /// 也没地方出（卖出）（DESIGN §8.5）。支持离线的后端（P1 的 LegacyMoney / builtin）不看这个标记。
-bool ownerUnreachable(bool ownerOnline, bool backendSupportsOffline) { return !backendSupportsOffline && !ownerOnline; }
+bool ownerUnreachable(TradeRequest const& request) {
+    return !request.backendSupportsOffline && !request.ownerOnline;
+}
 
 } // namespace
+
+std::string_view directionVerb(TradeDirection direction) {
+    return direction == TradeDirection::Sell ? "卖" : "买";
+}
 
 int maxTradeUnits(int maxUnits, int goodsUnits, int roomUnits, std::int64_t unitPrice, std::int64_t payerFunds) {
     if (maxUnits <= 0) {
@@ -60,101 +46,53 @@ int maxTradeUnits(int maxUnits, int goodsUnits, int roomUnits, std::int64_t unit
     return std::min(maxUnits, tradeUnits(std::numeric_limits<int>::max(), goodsUnits, roomUnits, affordable));
 }
 
-TradeAllowance tradeAllowance(TradeLimits const& limits) {
-    if (limits.requested <= 0 || limits.unitPrice < 0 || limits.amountPerUnit <= 0) {
-        return {.blockedBy = TradeLimit::Invalid};
+TradeDecision planTrade(TradeRequest const& request) {
+    if (request.requested <= 0 || request.unitPrice < 0 || request.amountPerUnit <= 0) {
+        return {.rejection = TradeRejection::InvalidRequest};
+    }
+
+    // 先报输入非法，再报「这家店现在能不能交易」：离线是整家店的属性，压过份数不足。
+    if (ownerUnreachable(request)) {
+        return {.rejection = TradeRejection::OwnerOffline};
     }
 
     int const allowed =
-        maxTradeUnits(limits.maxUnits, limits.goodsUnits, limits.roomUnits, limits.unitPrice, limits.payerFunds);
+        maxTradeUnits(request.maxUnits, request.goodsUnits, request.roomUnits, request.unitPrice, request.payerFunds);
 
     if (allowed <= 0) {
         // 谁挡住了就报谁：缺货优先，因为箱子/背包空了跟钱多钱少无关。
-        if (limits.goodsUnits <= 0) {
-            return {.blockedBy = TradeLimit::Goods};
+        if (request.goodsUnits <= 0) {
+            return {.rejection = TradeRejection::NotEnoughGoods};
         }
-        if (affordableUnits(limits.unitPrice, limits.payerFunds) <= 0) {
-            return {.blockedBy = TradeLimit::Funds};
+        if (affordableUnits(request.unitPrice, request.payerFunds) <= 0) {
+            return {.rejection = TradeRejection::NotEnoughFunds};
         }
-        if (limits.roomUnits <= 0) {
-            return {.blockedBy = TradeLimit::Room};
+        if (request.roomUnits <= 0) {
+            return {.rejection = TradeRejection::NoRoomToReceive};
         }
         // 只剩「份数天花板 <= 0」这一种：配置非法，不是玩家的问题。
-        return {.blockedBy = TradeLimit::Invalid};
+        return {.rejection = TradeRejection::InvalidRequest};
     }
 
-    int const units = std::min(limits.requested, allowed);
+    int const units = std::min(request.requested, allowed);
 
     // 关掉部分成交时，能成交的份数少于请求量就整笔拒绝（DESIGN §10.3）。
-    // 拒绝原因要说清是哪一条不够：「箱子装不下」「余额不够」「货不够」是三件事。
-    if (!limits.allowPartial && units < limits.requested) {
-        return {.blockedBy = blockingLimit(limits, limits.requested)};
+    // 拒绝原因要说清是哪一条不够：「货不够」「余额不够」「装不下」是三件事。
+    if (!request.allowPartial && units < request.requested) {
+        return {.rejection = blockingReason(request, request.requested)};
     }
 
-    // 件数与总价都按实际成交份数重算，中间不出现小数（DESIGN §10.1 第 3 条）。
-    std::int64_t const items = std::int64_t{units} * limits.amountPerUnit;
+    // 件数与金额都按实际成交份数重算，中间不出现小数（DESIGN §10.1 第 3 条）。
+    std::int64_t const items = std::int64_t{units} * request.amountPerUnit;
     if (items > std::numeric_limits<int>::max()) {
-        return {.blockedBy = TradeLimit::Invalid};
+        return {.rejection = TradeRejection::InvalidRequest};
     }
-    auto const total = totalPrice(limits.unitPrice, units);
+    auto const total = totalPrice(request.unitPrice, units);
     if (!total) {
-        return {.blockedBy = TradeLimit::Invalid};
-    }
-
-    return {
-        .plan = TradePlan{units, static_cast<int>(items), *total}
-    };
-}
-
-TradeDecision planBuy(BuyRequest const& request) {
-    auto const allowance = tradeAllowance(
-        TradeLimits{
-            .requested     = request.requested,
-            .amountPerUnit = request.amountPerUnit,
-            .unitPrice     = request.unitPrice,
-            .goodsUnits    = request.stockUnits,
-            .roomUnits     = request.backpackUnits,
-            .payerFunds    = request.funds,
-            .maxUnits      = request.maxUnits,
-            .allowPartial  = request.allowPartial,
-        }
-    );
-    // 输入本身就不成立时先报输入，再轮到「这家店现在能不能交易」。
-    if (allowance.blockedBy == TradeLimit::Invalid) {
         return {.rejection = TradeRejection::InvalidRequest};
     }
-    if (ownerUnreachable(request.ownerOnline, request.backendSupportsOffline)) {
-        return {.rejection = TradeRejection::OwnerOffline};
-    }
-    if (!allowance.ok()) {
-        return {.rejection = rejectionOf(allowance.blockedBy)};
-    }
-    return {.plan = allowance.plan};
-}
 
-TradeDecision planSell(SellRequest const& request) {
-    auto const allowance = tradeAllowance(
-        TradeLimits{
-            .requested     = request.requested,
-            .amountPerUnit = request.amountPerUnit,
-            .unitPrice     = request.unitPrice,
-            .goodsUnits    = request.playerUnits,
-            .roomUnits     = request.boxUnits,
-            .payerFunds    = request.ownerFunds,
-            .maxUnits      = request.maxUnits,
-            .allowPartial  = request.allowPartial,
-        }
-    );
-    if (allowance.blockedBy == TradeLimit::Invalid) {
-        return {.rejection = TradeRejection::InvalidRequest};
-    }
-    if (ownerUnreachable(request.ownerOnline, request.backendSupportsOffline)) {
-        return {.rejection = TradeRejection::OwnerOffline};
-    }
-    if (!allowance.ok()) {
-        return {.rejection = rejectionOf(allowance.blockedBy)};
-    }
-    return {.plan = allowance.plan};
+    return {.plan = TradePlan{units, static_cast<int>(items), *total}};
 }
 
 std::string tradeRejectionMessage(TradeDirection direction, TradeRejection rejection) {
@@ -169,7 +107,7 @@ std::string tradeRejectionMessage(TradeDirection direction, TradeRejection rejec
     case TradeRejection::NoRoomToReceive:
         return selling ? "商店箱装不下这些物品" : "背包放不下这些物品";
     case TradeRejection::OverUnitLimit:
-        return selling ? "一次卖的份数超过了服务器允许的单次上限" : "一次买的份数超过了服务器允许的单次上限";
+        return "一次" + std::string{directionVerb(direction)} + "的份数超过了服务器允许的单次上限";
     case TradeRejection::InvalidRequest:
         return "这笔交易不成立（份数或价格不合法）";
     case TradeRejection::None:

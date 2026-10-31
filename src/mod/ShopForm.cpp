@@ -78,7 +78,7 @@ void submit(Player& player, Cell const& sign, TradeDirection direction, TradeSub
 
 /// 表单上显示的那个金额（买入是扣款、卖出是收入）。价格缺失时没有可对照的数。
 std::optional<std::int64_t> visibleTotal(ShopInfoData const& data, TradeDirection direction, int units) {
-    auto const price = direction == TradeDirection::Sell ? data.sellPrice : data.buyPrice;
+    auto const price = unitPriceOf(data, direction);
     if (!price) {
         return std::nullopt;
     }
@@ -103,14 +103,13 @@ void openShopForm(Player& viewer, Cell const& sign, ShopInfoData const& data, Sh
 }
 
 void openTradeForm(Player& viewer, Cell const& sign, TradeDirection direction, ShopInfoData const& data, int maxUnits) {
-    auto const model   = makeUnitsFormModel(maxUnits);
-    bool const selling = direction == TradeDirection::Sell;
+    auto const model = makeUnitsFormModel(maxUnits);
 
     ll::form::CustomForm form{shopFormTitle(data)};
     form.appendLabel(unitsFormContent(direction, data, model));
     form.appendDropdown(
         std::string{kUnitChoiceField},
-        selling ? "卖几份" : "买几份",
+        std::string{directionVerb(direction)} + "几份",
         unitsFormOptions(model),
         /*defaultVal=*/0
     );
@@ -153,7 +152,7 @@ void openTradeConfirmForm(
 ) {
     ll::form::SimpleForm form{"确认交易", content};
 
-    auto const verb = direction == TradeDirection::Sell ? "确认卖出（" : "确认购买（";
+    auto const verb = "确认" + std::string{directionVerb(direction)} + "（";
     form.appendButton(verb + std::to_string(plan.units) + " 份）", [sign, plan, direction](Player& player) {
         // 已经看过真实份数与金额了：带着它们再确认一次，后续若又变就按实际成交并报告。
         submit(

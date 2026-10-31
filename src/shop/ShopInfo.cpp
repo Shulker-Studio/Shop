@@ -22,6 +22,10 @@ std::string moneyText(std::string const& symbol, std::int64_t amount) {
     return symbol + " " + std::to_string(amount);
 }
 
+std::optional<std::int64_t> unitPriceOf(ShopInfoData const& data, TradeDirection direction) {
+    return direction == TradeDirection::Sell ? data.sellPrice : data.buyPrice;
+}
+
 void appendLine(std::string& content, std::string const& line) {
     if (!content.empty()) {
         content.push_back('\n');
@@ -32,6 +36,8 @@ void appendLine(std::string& content, std::string const& line) {
 std::string ownerOfflineReason() { return "店主不在线，现在不能交易（当前经济后端不支持离线记账）"; }
 
 std::string ownerFundsUnknownReason() { return "读不到店主的余额，现在不能交易（经济后端没给出这个账户的余额）"; }
+
+std::string playerFundsUnknownReason() { return "读不到你的余额，这一笔没法完成（经济后端没给出这个账户的余额）"; }
 
 std::string noEconomyReason() { return "服务器没有可用的经济后端，暂时不能交易"; }
 
@@ -76,7 +82,9 @@ std::vector<std::string> shopInfoLines(ShopInfoData const& data) {
     if (data.balance) {
         lines.push_back("余额：" + moneyText(data.currencySymbol, *data.balance));
     } else {
-        lines.push_back("余额：暂不可用（没有可用的经济后端）");
+        // 空有两个原因（没有可用后端、读不到这名玩家的账户），不猜是哪一个：
+        // 不能交易时正文下面还会多一行「状态：<具体原因>」（DESIGN §8.2）。
+        lines.push_back("余额：暂时读不到（经济后端没给出这个账户的余额）");
     }
 
     // 不能交易就直说，别让玩家点进去才被拒（DESIGN §8.5）。

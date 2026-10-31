@@ -152,19 +152,13 @@ inspectShop(BlockSource& region, BlockPos const& signPos, Player& viewer, ShopCo
         // 没有可用后端：余额不编造数字（DESIGN §10.1），买卖按钮也不给。
         shop->info.unavailableReason = noEconomyReason();
     } else {
+        // 读不到就留空：正文写「暂时读不到」，不猜一个数字（DESIGN §10.1）。
         shop->info.balance = provider.get(viewer.getXuid());
         // 店主收不了钱时提前把买卖按钮藏起来（DESIGN §8.5）：只有不支持离线记账的
         // 后端（记分板）才会碰到这个情况，支持离线的后端根本不用查店主在不在线。
         // 管理员店不受这条约束：它的资金端是系统账户（§8.5 表格的「同左」）。
         if (!shop->info.adminShop && !provider.supportsOffline() && onlinePlayer(shop->ownerXuid) == nullptr) {
             shop->info.unavailableReason = ownerOfflineReason();
-        }
-        // 店主的账户读不到就没法记账：卖出时是店主付钱（要读余额），买入时是往这个账户里
-        // 加钱（记分板后端同样写不进去）。「读不到」与「余额为 0」必须分开（DESIGN §8.2），
-        // 否则一个有钱的店主会被报成「资金不足」。
-        if (!shop->info.adminShop && shop->info.unavailableReason.empty()
-            && !provider.get(shop->ownerXuid).has_value()) {
-            shop->info.unavailableReason = ownerFundsUnknownReason();
         }
     }
 

@@ -330,29 +330,29 @@ TradeResult undoAndRefund(TradeFrame& frame, bool restoreBackpack, std::string m
     return reject(std::move(message) + "，这笔交易没有成交，钱已退回");
 }
 
-/// 一次买入的全部前置条件（DESIGN §10.2 第 2、3 步的输入）。
-///
-/// 表单要显示「最多能买几份」，交易要判断「这批能不能成交」，两处必须是同一套数：
-/// 所以把「读店 → 读容器 → 读余额 → 算上限」收在这里，两边都调它。
-struct BuyContext {
+/// 一次交易的全部前置条件（DESIGN §10.2 第 2、3 步的输入）。买卖共用这一个结构：
+/// 表单要显示「最多能成交几份」，交易要判断「这批能不能成交」，两处必须是同一套数。
+struct TradeContext {
     AttachedContainer         container;
     ItemStack                 product; ///< 商品模板的副本（箱子一被改动，槽位里的那份就失效了）
     ShopSnapshot              shop;
     economy::EconomyProvider* provider = nullptr;
-    BuyRequest                request;
-    /// 这一次真的最多能成交几份（`maxTradeUnits` 的结果：上限、可成交份数、背包、余额取最小）。
+    TradeRequest              request;
+    /// 这一次真的最多能成交几份（`maxTradeUnits` 的结果）。
     /// 与 `request.maxUnits` 不是一回事：那个是配置里的天花板（输入），这个是算完的结论。
     int unitsAvailable = 0;
 };
 
 /// 预校验的结果：`context` 为空时 `error` 已经写好给玩家看的原因。
-struct PreparedBuy {
-    std::optional<BuyContext> context;
-    std::string               error;
+struct PreparedTrade {
+    std::optional<TradeContext> context;
+    std::string                 error;
 };
 
-/// 预校验。失败时只填 `error`，**一分钱一件货都不动**。
-PreparedBuy prepareBuy(BlockSource& region, Cell const& sign, Player& buyer, ShopConfig const& config) {
+/// 买入方向的预校验。失败时只填 `error`，**一分钱一件货都不动**。
+///
+/// 角色：货在商店箱里，收货方是玩家背包，付款方是买家（DESIGN §10.3）。
+PreparedTrade prepareBuy(BlockSource& region, Cell const& sign, Player& buyer, ShopConfig const& config) {
     // 重新解析商店：不信任表单里那一份快照（DESIGN §10.4）。
     auto shop = readShop(region, toBlockPos(sign), config);
     if (!shop) {
@@ -393,7 +393,7 @@ PreparedBuy prepareBuy(BlockSource& region, Cell const& sign, Player& buyer, Sho
         return {.error = tradeRejectionMessage(TradeDirection::Buy, TradeRejection::NotEnoughGoods)};
     }
 
-    BuyContext context;
+    TradeContext context;
     context.container = *attached.container;
     // 商品模板当场拷一份：`found` 指向箱子里的槽位，扣货之后那个引用就失效了。
     context.product  = *found;
@@ -403,65 +403,36 @@ PreparedBuy prepareBuy(BlockSource& region, Cell const& sign, Player& buyer, Sho
     // 买家必在线，读不到他的余额说明后端坏了——这时候不能当成「余额 0」继续算份数。
     auto const funds = context.provider->get(buyer.getXuid());
     if (!funds) {
-        return {.error = "读不到你的余额，没法付款"};
-    }
-
-    // 收钱的一方也要能记账：买入是往店主账户里加钱。
-    // 店主账户读不到时 transfer 会先扣买家再退回，那是「前置条件不全就动钱」，
-    // 而退回本身也可能失败——所以前置条件里就把这一条查掉（DESIGN §10.2 第 2 步）。
-    bool const ownerOnline     = onlinePlayer(context.shop.ownerXuid) != nullptr;
-    bool const supportsOffline = context.provider->supportsOffline();
-    if (!context.provider->get(context.shop.ownerXuid)) {
-        // 不支持离线记账的后端（记分板）在店主离线时本来就读不到：
-        // 真正的原因是「店主不在线」，报那一句才对得上号（DESIGN §8.5）。
-        if (!supportsOffline && !ownerOnline) {
-            return {.error = ownerOfflineReason()};
-        }
-        return {.error = ownerFundsUnknownReason()};
+        return {.error = playerFundsUnknownReason()};
     }
 
     context.request.amountPerUnit = context.shop.info.amountPerUnit;
     context.request.unitPrice     = *context.shop.info.buyPrice;
-    context.request.funds         = *funds;
+    context.request.payerFunds    = *funds;
     // 份数表单要显示余额（DESIGN §10.1 第 3 步），就用刚读到的这个数，别再读一次。
-    context.shop.info.balance  = context.request.funds;
-    context.request.stockUnits = context.shop.info.stockUnits;
+    context.shop.info.balance  = context.request.payerFunds;
+    context.request.goodsUnits = context.shop.info.stockUnits;
     context.request.maxUnits   = config.maxShopAmount;
-    context.request.backpackUnits =
-        backpackUnits(buyer.getInventory(), context.product, context.shop.info.amountPerUnit);
+    context.request.roomUnits = backpackUnits(buyer.getInventory(), context.product, context.shop.info.amountPerUnit);
     context.request.allowPartial           = config.allowPartialTransactions;
-    context.request.ownerOnline            = ownerOnline;
-    context.request.backendSupportsOffline = supportsOffline;
+    context.request.ownerOnline            = onlinePlayer(context.shop.ownerXuid) != nullptr;
+    context.request.backendSupportsOffline = context.provider->supportsOffline();
 
     // 上限 = maxShopAmount、可成交份数、余额、背包取最小（DESIGN §10.1 第 3 步）。
     context.unitsAvailable = maxTradeUnits(
         context.request.maxUnits,
-        context.request.stockUnits,
-        context.request.backpackUnits,
+        context.request.goodsUnits,
+        context.request.roomUnits,
         context.request.unitPrice,
-        context.request.funds
+        context.request.payerFunds
     );
     return {.context = std::move(context), .error = {}};
 }
 
-/// 一次卖出的全部前置条件，与 `BuyContext` 一一对应，角色反过来：
-/// 货在玩家背包里、收货方是商店箱、付钱的是店主。
-struct SellContext {
-    AttachedContainer         container;
-    ItemStack                 product; ///< 商品模板的副本（箱子一被改动，槽位里的那份就失效了）
-    ShopSnapshot              shop;
-    economy::EconomyProvider* provider = nullptr;
-    SellRequest               request;
-    int                       unitsAvailable = 0;
-};
-
-struct PreparedSell {
-    std::optional<SellContext> context;
-    std::string                error;
-};
-
 /// 卖出方向的预校验。失败时只填 `error`，**一分钱一件货都不动**。
-PreparedSell prepareSell(BlockSource& region, Cell const& sign, Player& seller, ShopConfig const& config) {
+///
+/// 角色：货在玩家背包里，收货方是商店箱，付款方是店主（DESIGN §10.3）。
+PreparedTrade prepareSell(BlockSource& region, Cell const& sign, Player& seller, ShopConfig const& config) {
     auto shop = readShop(region, toBlockPos(sign), config);
     if (!shop) {
         return {.error = "这家商店已经不在了"};
@@ -500,19 +471,19 @@ PreparedSell prepareSell(BlockSource& region, Cell const& sign, Player& seller, 
         return {.error = "商店箱里没有货，看不出这家店收什么"};
     }
 
-    SellContext context;
+    TradeContext context;
     context.container = *attached.container;
     context.product   = *found;
     context.shop      = std::move(*shop);
     context.provider  = &economyBackend();
 
-    // 卖出是店主付钱给玩家：店主的余额必须**读得到**。
+    // 卖出是店主付钱给玩家：店主的余额必须**读得到**（它是份数上限之一）。
     // 读不到（账户不可记账）与「余额是 0」是两件事——当成 0 会对着一个有钱的店主
     // 报「店主资金不足」，事故无从查起（DESIGN §8.2）。
     bool const ownerOnline     = onlinePlayer(context.shop.ownerXuid) != nullptr;
     bool const supportsOffline = context.provider->supportsOffline();
-    auto const funds           = context.provider->get(context.shop.ownerXuid);
-    if (!funds) {
+    auto const ownerFunds      = context.provider->get(context.shop.ownerXuid);
+    if (!ownerFunds) {
         // 不支持离线记账的后端（记分板）在店主离线时本来就读不到余额：
         // 真正的原因是「店主不在线」，报那一句才对得上号（DESIGN §8.5）。
         if (!supportsOffline && !ownerOnline) {
@@ -523,32 +494,204 @@ PreparedSell prepareSell(BlockSource& region, Cell const& sign, Player& seller, 
 
     context.request.amountPerUnit = context.shop.info.amountPerUnit;
     context.request.unitPrice     = *context.shop.info.sellPrice;
-    context.request.ownerFunds    = *funds;
-    context.request.playerUnits   = heldUnits(seller.getInventory(), context.product, context.shop.info.amountPerUnit);
-    context.request.boxUnits      = shopBoxUnits(context.container, context.product, context.shop.info.amountPerUnit);
+    context.request.payerFunds    = *ownerFunds;
+    context.request.goodsUnits    = heldUnits(seller.getInventory(), context.product, context.shop.info.amountPerUnit);
+    context.request.roomUnits     = shopBoxUnits(context.container, context.product, context.shop.info.amountPerUnit);
     context.request.maxUnits      = config.maxShopAmount;
     context.request.allowPartial  = config.allowPartialTransactions;
     context.request.ownerOnline   = ownerOnline;
     context.request.backendSupportsOffline = supportsOffline;
 
     // 卖出表单要显示「你手里有几份」与玩家自己的余额（DESIGN §10.1 第 3 步）。
-    // 玩家是收钱方：读不到他的账户就没法给他入账，同样在动钱之前就拒掉。
-    auto const sellerFunds = context.provider->get(seller.getXuid());
-    if (!sellerFunds) {
-        return {.error = "读不到你的余额，没法收款"};
-    }
-    context.shop.info.heldUnits = context.request.playerUnits;
-    context.shop.info.balance   = sellerFunds;
+    // 这里读不到不算错误：钱那一步会在扣款之前再确认一次两边账户（见 `moveMoney`）。
+    context.shop.info.heldUnits = context.request.goodsUnits;
+    context.shop.info.balance   = context.provider->get(seller.getXuid());
 
     // 上限 = maxShopAmount、手里有的份数、箱子还能装的份数、店主余额取最小（§10.3）。
     context.unitsAvailable = maxTradeUnits(
         context.request.maxUnits,
-        context.request.playerUnits,
-        context.request.boxUnits,
+        context.request.goodsUnits,
+        context.request.roomUnits,
         context.request.unitPrice,
-        context.request.ownerFunds
+        context.request.payerFunds
     );
     return {.context = std::move(context), .error = {}};
+}
+
+/// 把「重新解析玩家 → 干正事」投到服务端线程。
+///
+/// 表单回调在哪个线程跑是不确定的（DESIGN §14 待验），所以回调里一个世界状态都不碰：
+/// 只捕获「谁的 XUID、在哪个维度、哪块牌」，执行时再重新解析玩家与商店。
+/// 玩家可能在排队期间下线或换维度，两种情况都直接放弃这一次。
+template <class Fn>
+void onServerThread(Player& player, Cell const& sign, bool useCooldown, Fn&& fn) {
+    std::string const xuid      = player.getXuid();
+    int const         dimension = player.getDimensionId();
+
+    ll::thread::ServerThreadExecutor::getDefault().execute([xuid, dimension, sign, useCooldown, fn] {
+        auto const& config = Shop::getInstance().config();
+        if (!config) {
+            return;
+        }
+        Player* resolved = onlinePlayer(xuid);
+        if (resolved == nullptr || resolved->getDimensionId() != dimension) {
+            return;
+        }
+        if (useCooldown && gSubmitGate && !gSubmitGate->allow(xuid, sign, monotonicNowMs())) {
+            return; // 250ms 内重复提交：忽略（DESIGN §10.4）
+        }
+        fn(*resolved, sign, *config);
+    });
+}
+
+/// 表单值与重算值对不上就先弹确认（DESIGN §10.3），什么都不动。
+///
+/// 三个都要比：店主改了「一份的件数」时份数与金额可能都没变，只有件数变了。
+/// 确认过也照比——确认后状态又变就得再点一次，绝不静默按新值成交。买卖共用。
+std::optional<TradeResult> confirmIfChanged(
+    TradeDirection         direction,
+    ShopInfoData const&   info,
+    TradePlan const&      plan,
+    TradeSubmission const& submission
+) {
+    bool const changedUnits = plan.units != submission.units;
+    bool const changedItems = submission.expectedItems && plan.items != *submission.expectedItems;
+    bool const changedTotal = submission.expectedTotal && plan.total != *submission.expectedTotal;
+    if (!changedUnits && !changedItems && !changedTotal) {
+        return std::nullopt;
+    }
+    ChangeReason const reason = changedUnits ? ChangeReason::Units
+                               : changedItems ? ChangeReason::Items
+                                              : ChangeReason::Price;
+    return TradeResult{
+        .status  = TradeStatus::NeedsConfirm,
+        .plan    = plan,
+        .message = unitsConfirmContent(direction, info, plan, reason),
+    };
+}
+
+/// 钱的那一步（买卖共用）。成功返回空；否则是已经成形、直接发给玩家的结果。
+///
+/// 扣款之前先确认两边账户都能记账：后端的 `transfer` 是「先扣款再入账，入账失败就把钱
+/// 加回去」，而加回去本身也可能失败（那就成了 `Broken`）。这一步失败时两边余额一分未动
+/// （DESIGN §10.2 第 2 步）。
+std::optional<TradeResult> moveMoney(
+    TradeDirection            direction,
+    economy::EconomyProvider& provider,
+    Payment const&            payment,
+    std::string const&        freeze
+) {
+    // 免费店（`total == 0`）不产生任何账户操作，账户读不到也不该拦住成交。
+    if (payment.total <= 0) {
+        return std::nullopt;
+    }
+    if (!accountsRecordable(payment.payer, payment.receiver)) {
+        // 两个方向各有一个账户在预校验里已经查过（买入查买家、卖出查店主），
+        // 所以走到这里的读不到，是另一头出了问题。
+        return reject(
+            direction == TradeDirection::Buy ? ownerFundsUnknownReason() : playerFundsUnknownReason()
+        );
+    }
+    auto const paid = provider.transfer(payment.payer, payment.receiver, payment.total);
+    if (paid.ok()) {
+        return std::nullopt;
+    }
+    if (paid.broken()) {
+        return broken(freeze, "付款没能完成，而且退款也失败了（" + paid.detail + "），请联系管理员");
+    }
+    // 买入是玩家付钱，卖出是店主付钱——失败原因得归到对的人头上。
+    return reject(
+        std::string{direction == TradeDirection::Buy ? "付款失败：" : "店主付款失败："} + paid.detail
+    );
+}
+
+/// 「点买/卖 → 预校验 → 弹份数表单」的同一套外壳：两个方向只差 `prepare`。
+///
+/// 请求份数取默认的 1，正是为了让「店主离线」这类与份数无关的拒绝也能在弹表单之前命中。
+template <class Prepare>
+void requestUnitsForm(
+    Player&           player,
+    Cell const&       sign,
+    TradeDirection    direction,
+    ShopConfig const& config,
+    Prepare&&         prepare
+) {
+    auto prepared = prepare(player.getDimensionBlockSource(), sign, player, config);
+    if (!prepared.context) {
+        player.sendMessage(prepared.error);
+        return;
+    }
+    auto const& context = *prepared.context;
+    auto const  oneUnit = planTrade(context.request);
+
+    if (!oneUnit.ok()) {
+        if (oneUnit.rejection == TradeRejection::InvalidRequest) {
+            // 份数/份价/每份件数在开店时就校验过，活到这里就是商店或配置坏了，
+            // 别当成玩家的输入错误报出去。
+            Shop::getInstance().getSelf().getLogger().error(
+                "商店 ({}, {}, {}) 的解析结果不合法，无法交易",
+                sign.x,
+                sign.y,
+                sign.z
+            );
+            player.sendMessage("这家商店的状态不对，请联系管理员");
+            return;
+        }
+        player.sendMessage(tradeRejectionMessage(direction, oneUnit.rejection));
+        return;
+    }
+
+    Shop::getInstance().getSelf().getLogger().debug(
+        "为 {} 打开份数表单（{}），上限 {} 份",
+        player.getXuid(),
+        directionVerb(direction),
+        context.unitsAvailable
+    );
+    openTradeForm(player, sign, direction, context.shop.info, context.unitsAvailable);
+}
+
+/// 提交之后的三件事：要确认就弹确认表单、成交就记一条日志、其余情况把消息发给玩家。
+/// 买卖共用一份，免得两边各写一遍「忘了记日志」。
+void finishTrade(Player& player, Cell const& sign, TradeDirection direction, TradeResult const& result) {
+    if (result.needsConfirm()) {
+        // 实际值与玩家看到的不一样：先把真实份数与金额摆出来，确认后才执行。
+        openTradeConfirmForm(player, sign, direction, result.plan, result.message);
+        return;
+    }
+    player.sendMessage(result.message);
+    if (result.done()) {
+        Shop::getInstance().getSelf().getLogger().debug(
+            "{} 在 ({}, {}, {}) {}了 {} 份，金额 {}",
+            player.getXuid(),
+            sign.x,
+            sign.y,
+            sign.z,
+            directionVerb(direction),
+            result.plan.units,
+            result.plan.total
+        );
+    }
+}
+
+/// 「提交 → 执行 → 收尾」的同一套外壳：两个方向只差 `trade`（`buyUnits` / `sellUnits`）。
+template <class Trade>
+void submitTrade(
+    Player&                player,
+    Cell const&            sign,
+    TradeDirection         direction,
+    TradeSubmission const& submission,
+    Trade&&                trade
+) {
+    onServerThread(
+        player,
+        sign,
+        // 确认表单的「确认」紧接着第一次提交，再走一遍冷却会被静默吃掉。
+        /*useCooldown=*/!submission.confirmed,
+        [submission, direction, trade](Player& trader, Cell const& shopSign, ShopConfig const& config) {
+            auto const result = trade(trader.getDimensionBlockSource(), shopSign, trader, config, submission);
+            finishTrade(trader, shopSign, direction, result);
+        }
+    );
 }
 
 } // namespace
@@ -567,31 +710,18 @@ TradeResult buyUnits(
     auto context = std::move(prepared.context);
 
     // 第 3 步：算可成交份数（部分成交开关在这里生效，DESIGN §10.3）。
-    BuyRequest request = context->request;
-    request.requested  = submission.units;
+    TradeRequest request = context->request;
+    request.requested    = submission.units;
 
-    auto const decision = planBuy(request);
+    auto const decision = planTrade(request);
     if (!decision.ok()) {
         return reject(tradeRejectionMessage(TradeDirection::Buy, decision.rejection));
     }
     TradePlan const plan = *decision.plan;
 
-    // 实际成交与玩家在表单上看到的对不上（份数缩水，或两屏之间店主改了价）时先别动钱：
-    // 把重算后的真实份数与金额摆出来确认（DESIGN §10.3）。
-    // 三个都要比：店主改了「一份的件数」时份数与金额可能都没变，只有件数变了。
-    // 确认过也照比——确认后状态又变就得再点一次，绝不静默按新值扣款。
-    bool const changedUnits = plan.units != submission.units;
-    bool const changedItems = submission.expectedItems && plan.items != *submission.expectedItems;
-    bool const changedTotal = submission.expectedTotal && plan.total != *submission.expectedTotal;
-    if (changedUnits || changedItems || changedTotal) {
-        ChangeReason const reason = changedUnits ? ChangeReason::Units
-                                  : changedItems ? ChangeReason::Items
-                                                 : ChangeReason::Price;
-        return {
-            .status  = TradeStatus::NeedsConfirm,
-            .plan    = plan,
-            .message = unitsConfirmContent(TradeDirection::Buy, context->shop.info, plan, reason),
-        };
+    // 第 4 步之前先确认玩家看到的就是要执行的：对不上就什么都不做，先弹确认表单。
+    if (auto confirm = confirmIfChanged(TradeDirection::Buy, context->shop.info, plan, submission)) {
+        return std::move(*confirm);
     }
 
     auto&               provider = *context->provider;
@@ -612,14 +742,8 @@ TradeResult buyUnits(
 
     // 第 5 步：先扣钱。金额接口的失败语义最干净（返回 false 且余额一分不动），
     // 而物品搬运可能部分成功，所以钱一定要走在货前面（DESIGN §10.2 第 5 步）。
-    if (payment.total > 0) {
-        auto const paid = provider.transfer(payment.payer, payment.receiver, payment.total);
-        if (!paid.ok()) {
-            if (paid.broken()) {
-                return broken(freeze, "付款没能完成，而且退款也失败了（" + paid.detail + "），请联系管理员");
-            }
-            return reject("付款失败：" + paid.detail);
-        }
+    if (auto money = moveMoney(TradeDirection::Buy, provider, payment, freeze)) {
+        return std::move(*money);
     }
 
     // 第 6 步：先从箱子取货、再塞进背包。
@@ -663,7 +787,7 @@ TradeResult buyUnits(
     }
     if (plan.units < submission.units) {
         // 部分成交：如实说清楚为什么只给了这么多（DESIGN §10.3）。
-        message += "（箱子里的货、余额或背包空间不够，只成交了 " + std::to_string(plan.units) + " 份）";
+        message += "（商店箱里的货、余额或背包空间不够，只成交了 " + std::to_string(plan.units) + " 份）";
     }
     return {.status = TradeStatus::Done, .plan = plan, .message = std::move(message)};
 }
@@ -681,28 +805,17 @@ TradeResult sellUnits(
     }
     auto context = std::move(prepared.context);
 
-    SellRequest request = context->request;
-    request.requested   = submission.units;
+    TradeRequest request = context->request;
+    request.requested    = submission.units;
 
-    auto const decision = planSell(request);
+    auto const decision = planTrade(request);
     if (!decision.ok()) {
         return reject(tradeRejectionMessage(TradeDirection::Sell, decision.rejection));
     }
     TradePlan const plan = *decision.plan;
 
-    // 与买入同一个判定：份数、件数、金额任何一样与玩家看到的不一致，就先弹确认表单。
-    bool const changedUnits = plan.units != submission.units;
-    bool const changedItems = submission.expectedItems && plan.items != *submission.expectedItems;
-    bool const changedTotal = submission.expectedTotal && plan.total != *submission.expectedTotal;
-    if (changedUnits || changedItems || changedTotal) {
-        ChangeReason const reason = changedUnits ? ChangeReason::Units
-                                  : changedItems ? ChangeReason::Items
-                                                 : ChangeReason::Price;
-        return {
-            .status  = TradeStatus::NeedsConfirm,
-            .plan    = plan,
-            .message = unitsConfirmContent(TradeDirection::Sell, context->shop.info, plan, reason),
-        };
+    if (auto confirm = confirmIfChanged(TradeDirection::Sell, context->shop.info, plan, submission)) {
+        return std::move(*confirm);
     }
 
     auto&               provider = *context->provider;
@@ -723,16 +836,10 @@ TradeResult sellUnits(
     // 第 5 步：先动钱——店主付给玩家。理由与买入相同：金额接口失败时两边余额
     // 一分不动，而物品搬运可能部分成功（DESIGN §10.2 第 5 步）。
     //
-    // 先给钱后拿货不构成复制窗口：钱与货是两种东西，玩家拿到钱并不会让货变多；
+    // 先给钱后取货不构成复制窗口：钱与货是两种东西，玩家拿到钱不会让货变多；
     // 真正要防的是「同一件货同时在两处」，那由下一步的顺序保证。
-    if (payment.total > 0) {
-        auto const paid = provider.transfer(payment.payer, payment.receiver, payment.total);
-        if (!paid.ok()) {
-            if (paid.broken()) {
-                return broken(freeze, "店主付款没能完成，而且退款也失败了（" + paid.detail + "），请联系管理员");
-            }
-            return reject("店主付款失败：" + paid.detail);
-        }
+    if (auto money = moveMoney(TradeDirection::Sell, provider, payment, freeze)) {
+        return std::move(*money);
     }
 
     // 第 6 步：先从背包取货、再放进商店箱。
@@ -770,99 +877,10 @@ TradeResult sellUnits(
         message += "，收入 " + moneyText(info.currencySymbol, plan.total);
     }
     if (plan.units < submission.units) {
-        message += "（你手里的货、店主的钱或箱子空间不够，只成交了 " + std::to_string(plan.units) + " 份）";
+        message += "（你手里的货、店主的钱或商店箱空间不够，只成交了 " + std::to_string(plan.units) + " 份）";
     }
     return {.status = TradeStatus::Done, .plan = plan, .message = std::move(message)};
 }
-
-namespace {
-
-/// 把「重新解析玩家 → 干正事」投到服务端线程。
-///
-/// 表单回调在哪个线程跑是不确定的（DESIGN §14 待验），所以回调里一个世界状态都不碰：
-/// 只捕获「谁的 XUID、在哪个维度、哪块牌」，执行时再重新解析玩家与商店。
-/// 玩家可能在排队期间下线或换维度，两种情况都直接放弃这一次。
-template <class Fn>
-void onServerThread(Player& player, Cell const& sign, bool useCooldown, Fn&& fn) {
-    std::string const xuid      = player.getXuid();
-    int const         dimension = player.getDimensionId();
-
-    ll::thread::ServerThreadExecutor::getDefault().execute([xuid, dimension, sign, useCooldown, fn] {
-        auto const& config = Shop::getInstance().config();
-        if (!config) {
-            return;
-        }
-        Player* resolved = onlinePlayer(xuid);
-        if (resolved == nullptr || resolved->getDimensionId() != dimension) {
-            return;
-        }
-        if (useCooldown && gSubmitGate && !gSubmitGate->allow(xuid, sign, monotonicNowMs())) {
-            return; // 250ms 内重复提交：忽略（DESIGN §10.4）
-        }
-        fn(*resolved, sign, *config);
-    });
-}
-
-/// 预校验过后弹份数表单：先拿「1 份」试算一次，成交不了就把原因说出来（买卖共用）。
-///
-/// 请求份数取默认的 1，正是为了让「店主离线」这类与份数无关的拒绝也能在弹表单之前命中。
-void openUnitsFormOrExplain(
-    Player&              player,
-    Cell const&          sign,
-    TradeDirection       direction,
-    ShopInfoData const&  info,
-    int                  maxUnits,
-    TradeDecision const& oneUnit
-) {
-    if (!oneUnit.ok()) {
-        if (oneUnit.rejection == TradeRejection::InvalidRequest) {
-            // 份数/份价/每份件数在开店时就校验过，活到这里就是商店或配置坏了，
-            // 别当成玩家的输入错误报出去。
-            Shop::getInstance().getSelf().getLogger().error(
-                "商店 ({}, {}, {}) 的解析结果不合法，无法交易",
-                sign.x,
-                sign.y,
-                sign.z
-            );
-            player.sendMessage("这家商店的状态不对，请联系管理员");
-            return;
-        }
-        player.sendMessage(tradeRejectionMessage(direction, oneUnit.rejection));
-        return;
-    }
-    Shop::getInstance().getSelf().getLogger().debug(
-        "为 {} 打开{}表单，上限 {} 份",
-        player.getXuid(),
-        direction == TradeDirection::Buy ? "买入份数" : "卖出份数",
-        maxUnits
-    );
-    openTradeForm(player, sign, direction, info, maxUnits);
-}
-
-/// 提交之后的三件事：要确认就弹确认表单、成交就记一条日志、其余情况把消息发给玩家。
-/// 买卖共用一份，免得两边各写一遍「忘了记日志」。
-void finishTrade(Player& player, Cell const& sign, TradeDirection direction, TradeResult const& result) {
-    if (result.needsConfirm()) {
-        // 实际值与玩家看到的不一样：先把真实份数与金额摆出来，确认后才执行。
-        openTradeConfirmForm(player, sign, direction, result.plan, result.message);
-        return;
-    }
-    player.sendMessage(result.message);
-    if (result.done()) {
-        Shop::getInstance().getSelf().getLogger().debug(
-            "{} 在 ({}, {}, {}) {}了 {} 份，金额 {}",
-            player.getXuid(),
-            sign.x,
-            sign.y,
-            sign.z,
-            direction == TradeDirection::Buy ? "买" : "卖",
-            result.plan.units,
-            result.plan.total
-        );
-    }
-}
-
-} // namespace
 
 void requestBuyForm(Player& viewer, Cell const& sign) {
     // 弹份数表单也要读世界（商店箱、余额、背包），所以同样先切回服务端线程。
@@ -872,20 +890,7 @@ void requestBuyForm(Player& viewer, Cell const& sign) {
         sign,
         /*useCooldown=*/false,
         [](Player& player, Cell const& shopSign, ShopConfig const& config) {
-            auto prepared = prepareBuy(player.getDimensionBlockSource(), shopSign, player, config);
-            if (!prepared.context) {
-                player.sendMessage(prepared.error);
-                return;
-            }
-            auto const& context = *prepared.context;
-            openUnitsFormOrExplain(
-                player,
-                shopSign,
-                TradeDirection::Buy,
-                context.shop.info,
-                context.unitsAvailable,
-                planBuy(context.request)
-            );
+            requestUnitsForm(player, shopSign, TradeDirection::Buy, config, prepareBuy);
         }
     );
 }
@@ -896,47 +901,17 @@ void requestSellForm(Player& viewer, Cell const& sign) {
         sign,
         /*useCooldown=*/false,
         [](Player& player, Cell const& shopSign, ShopConfig const& config) {
-            auto prepared = prepareSell(player.getDimensionBlockSource(), shopSign, player, config);
-            if (!prepared.context) {
-                player.sendMessage(prepared.error);
-                return;
-            }
-            auto const& context = *prepared.context;
-            openUnitsFormOrExplain(
-                player,
-                shopSign,
-                TradeDirection::Sell,
-                context.shop.info,
-                context.unitsAvailable,
-                planSell(context.request)
-            );
+            requestUnitsForm(player, shopSign, TradeDirection::Sell, config, prepareSell);
         }
     );
 }
 
 void submitBuy(Player& buyer, Cell const& sign, TradeSubmission const& submission) {
-    onServerThread(
-        buyer,
-        sign,
-        // 确认表单的「确认」紧接着第一次提交，再走一遍冷却会被静默吃掉。
-        /*useCooldown=*/!submission.confirmed,
-        [submission](Player& player, Cell const& shopSign, ShopConfig const& config) {
-            auto const result = buyUnits(player.getDimensionBlockSource(), shopSign, player, config, submission);
-            finishTrade(player, shopSign, TradeDirection::Buy, result);
-        }
-    );
+    submitTrade(buyer, sign, TradeDirection::Buy, submission, buyUnits);
 }
 
 void submitSell(Player& seller, Cell const& sign, TradeSubmission const& submission) {
-    onServerThread(
-        seller,
-        sign,
-        /*useCooldown=*/!submission.confirmed,
-        [submission](Player& player, Cell const& shopSign, ShopConfig const& config) {
-            auto const result = sellUnits(player.getDimensionBlockSource(), shopSign, player, config, submission);
-            finishTrade(player, shopSign, TradeDirection::Sell, result);
-        }
-    );
+    submitTrade(seller, sign, TradeDirection::Sell, submission, sellUnits);
 }
 
 void initTradeService(ShopConfig const& config) {

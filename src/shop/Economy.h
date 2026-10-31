@@ -95,10 +95,10 @@ public:
     transfer(Account const& from, Account const& to, std::int64_t amount, bool allowNegative = false);
 };
 
-/// 空实现：读余额永远是 0，写操作一律「成功」但什么也不记（DESIGN §8.6 第 3 条）。
+/// 空实现：谁的余额都读不到，写操作一律「成功」但什么也不记（DESIGN §8.6 第 3 条）。
 ///
-/// 只用于开发与「一个经济后端都没有」的降级。余额 0 意味着买入必然失败，
-/// 这是对的：没有经济后端就不该成交，而不是白送。
+/// 只用于开发与「一个经济后端都没有」的降级。「读不到」意味着表单不编造数字、
+/// 交易必然失败，这是对的：没有经济后端就不该成交，而不是白送。
 class NullEconomy final : public EconomyProvider {
 public:
     std::string_view name() const override { return "null"; }
