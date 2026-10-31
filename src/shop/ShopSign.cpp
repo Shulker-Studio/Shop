@@ -363,6 +363,12 @@ formatShopSign(const ShopSpec& spec, std::string_view ownerDisplayName, std::str
     return lines;
 }
 
+ShopSignResult parseShopSignText(std::string_view text, bool editorIsOp, const ShopSignConfig& config) {
+    auto const                      split = splitSignText(text);
+    std::array<std::string_view, 4> const lines{split[0], split[1], split[2], split[3]};
+    return parseShopSign(lines, editorIsOp, config);
+}
+
 std::string joinSignText(const std::array<std::string, 4>& lines, std::string_view separator) {
     std::string text;
     for (std::size_t i = 0; i < lines.size(); ++i) {
@@ -372,6 +378,28 @@ std::string joinSignText(const std::array<std::string, 4>& lines, std::string_vi
         text += lines[i];
     }
     return text;
+}
+
+std::array<std::string, 4> splitSignText(std::string_view text, std::string_view separator) {
+    std::array<std::string, 4> lines{};
+    if (separator.empty()) {
+        lines[0] = std::string{text};
+        return lines;
+    }
+
+    std::size_t line = 0;
+    std::size_t from = 0;
+    while (line < lines.size()) {
+        std::size_t const hit = text.find(separator, from);
+        if (hit == std::string_view::npos) {
+            lines[line] = std::string{text.substr(from)};
+            break;
+        }
+        lines[line] = std::string{text.substr(from, hit - from)};
+        ++line;
+        from = hit + separator.size();
+    }
+    return lines;
 }
 
 } // namespace ss::shop

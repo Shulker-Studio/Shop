@@ -77,8 +77,16 @@ parseShopSign(const std::array<std::string_view, 4>& lines, bool editorIsOp, con
 std::array<std::string, 4>
 formatShopSign(const ShopSpec& spec, std::string_view ownerDisplayName, std::string_view itemDisplayName);
 
-/// 把四行拼成一个字符串。分隔符默认是真正的换行符；告示牌编辑包（H1）里
-/// `PlayerEditSignBeforeEvent::text()` 用的是字面两字符 `\n`，调用方传 `"\\n"`。
+/// 整段牌面文本 → 解析结果。等于 `splitSignText` + `parseShopSign`，
+/// 省得每个调用点都自己拼 `std::array<std::string_view, 4>`。
+ShopSignResult parseShopSignText(std::string_view text, bool editorIsOp, const ShopSignConfig& config);
+
+/// 把四行拼成一个字符串，默认用真正的换行符。基岩版的告示牌文本
+/// （`FrontText["Text"]` 与 `PlayerEditSignBeforeEvent::text()`）就是用
+/// `\n` 分隔四行的，所以默认值与引擎一致。
 std::string joinSignText(const std::array<std::string, 4>& lines, std::string_view separator = "\n");
+
+/// 把整段牌面文本切成恰好四行：不足补空行，第四行之后的内容丢弃。
+std::array<std::string, 4> splitSignText(std::string_view text, std::string_view separator = "\n");
 
 } // namespace ss::shop

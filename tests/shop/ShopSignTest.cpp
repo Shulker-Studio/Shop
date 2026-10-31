@@ -274,8 +274,8 @@ TEST_CASE("规范化：四行拼回") {
     CHECK(formatted[2] == "B 10 : S 5");
     CHECK(formatted[3] == "Stone");
     CHECK(joinSignText(formatted) == "Steve\n64\nB 10 : S 5\nStone");
-    // 告示牌编辑包用字面两字符 \n 分隔
-    CHECK(joinSignText(formatted, "\\n") == "Steve\\n64\\nB 10 : S 5\\nStone");
+    // 基岩版的告示牌文本就是真换行符分隔四行，没有第二种写法
+    CHECK(joinSignText(formatted, "|") == "Steve|64|B 10 : S 5|Stone");
 }
 
 TEST_CASE("规范化：缺省的方向省略") {
@@ -309,4 +309,47 @@ TEST_CASE("规范化后的四行能被重新解析") {
     CHECK(result.spec->amount == 64);
     CHECK(result.spec->buyPrice == std::optional<std::int64_t>{250});
     CHECK(result.spec->sellPrice == std::optional<std::int64_t>{100});
+}
+
+TEST_CASE("牌面文本：按真实换行符切分") {
+    auto lines = splitSignText("Steve\n64\nB 10 : S 5\nStone");
+    CHECK(lines[0] == "Steve");
+    CHECK(lines[1] == "64");
+    CHECK(lines[2] == "B 10 : S 5");
+    CHECK(lines[3] == "Stone");
+}
+
+TEST_CASE("牌面文本：不足四行补空，多余行丢弃") {
+    auto blank = splitSignText("");
+    CHECK(blank[0].empty());
+    CHECK(blank[1].empty());
+    CHECK(blank[2].empty());
+    CHECK(blank[3].empty());
+
+    auto twoLines = splitSignText("Steve\n64");
+    CHECK(twoLines[0] == "Steve");
+    CHECK(twoLines[1] == "64");
+    CHECK(twoLines[2].empty());
+    CHECK(twoLines[3].empty());
+
+    auto fiveLines = splitSignText("a\nb\nc\nd\ne");
+    CHECK(fiveLines[3] == "d");
+}
+
+TEST_CASE("牌面文本：切分与拼接互逆") {
+    std::array<std::string, 4> original{"Steve", "64", "B 10 : S 5", "Stone"};
+    auto                       reparsed = splitSignText(joinSignText(original));
+    CHECK(reparsed == original);
+}
+
+TEST_CASE("整段文本解析：等价于先切分再解析") {
+    auto const fromText = parseShopSignText("Steve\n64\nB 10 : S 5\nStone", false, defaultConfig());
+    REQUIRE(fromText.ok());
+    CHECK(fromText.spec->amount == 64);
+    CHECK(fromText.spec->buyPrice == std::optional<std::int64_t>{10});
+    CHECK(fromText.spec->sellPrice == std::optional<std::int64_t>{5});
+
+    auto const blank = parseShopSignText("", false, defaultConfig());
+    CHECK_FALSE(blank.ok());
+    CHECK_FALSE(blank.looksLikeShopSign());
 }

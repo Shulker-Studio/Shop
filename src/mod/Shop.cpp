@@ -1,5 +1,7 @@
 #include "mod/Shop.h"
 
+#include "mod/SignEditListener.h"
+
 #include "ll/api/mod/RegisterHelper.h"
 
 namespace ss::shop {
@@ -10,20 +12,27 @@ Shop& Shop::getInstance() {
 }
 
 bool Shop::load() {
-    getSelf().getLogger().debug("Loading...");
-    // 读取配置、初始化存储
+    auto& logger = getSelf().getLogger();
+    logger.debug("Loading...");
+
+    mConfig = loadShopConfig(getSelf().getConfigDir() / "config.json", logger);
+    if (!mConfig) {
+        logger.error("配置不可用，Shop 拒绝加载");
+        return false;
+    }
     return true;
 }
 
 bool Shop::enable() {
     getSelf().getLogger().debug("Enabling...");
-    // 注册事件监听、命令、经济后端探测
+    registerSignEditListener();
     return true;
 }
 
 bool Shop::disable() {
     getSelf().getLogger().debug("Disabling...");
-    // 注销监听、刷新待写数据
+    unregisterSignEditListener();
+    mConfig.reset();
     return true;
 }
 

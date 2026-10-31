@@ -157,6 +157,7 @@ number      := digits [ "." digits ] [ "K" | "M" ]   // K=千, M=百万，可选
 
 - 商品 = 绑定容器里**第一个非空槽位**的物品类型。玩家在牌上写什么都改变不了它。
 - 第 4 行只是显示。规范化时用容器里那件物品的展示名覆盖，超宽截断，全名在表单里看。
+- 双箱没有统一的全局槽位顺序：第 4 行取"附着那一半的第一个非空槽位，没有再取另一半"。
 - `?` 仍然接受，含义是"让服务器填"，和留空、写任意名字等价。
 - 因为没有"解析物品名"这一步，校验链里**不存在"物品非法"这个失败分支**；唯一的失败情况是**容器为空**（没有商品可卖），提示"请先在箱子里放商品"。
 - 商品比较：按物品类型 + aux + 用户数据（附魔、耐久、自定义名）严格比较，避免"同名不同物"。玩家卖进来的物品必须与容器里的商品严格匹配才收。
@@ -168,7 +169,7 @@ number      := digits [ "." digits ] [ "K" | "M" ]   // K=千, M=百万，可选
 
 ```
 PlayerEditSignBeforeEvent
-  ├─ 解析 text()（该面的完整多行文本，行间用反斜杠 n（字面两字符）分隔）
+  ├─ 解析 text()（该面的完整多行文本，四行之间是真正的换行符 `\n`）
   ├─ 校验失败 → setCancelled(true)，包被丢弃，牌子保持原样（或按配置打掉）
   └─ 校验通过 → text() = 规范化后的四行
                  → origin() 发出，服务端与客户端同时得到规范化文本
@@ -259,6 +260,7 @@ PlayerEditSignBeforeEvent
 
 1. 基岩版告示牌单行实际可容纳字符数/宽度（决定物品名与价格行格式）。
 2. 表单回调线程与方块操作的线程安全性（表单回调可能不在主线程）。
+3. **包路径是否会写入 `mLastEditXuid`**。`setMessageForServerScripingOnly(side, text, ownerID)` 需要显式传 `ownerID`，说明 owner 不来自包；若引擎不写，ADR-0005 的店主判定需要在实际写入后补一次显式写入。
 
 ---
 
@@ -274,19 +276,21 @@ Java 版的 `uBlock.findConnectedContainer` 是「墙牌先看背面，然后按
 | --- | --- | --- |
 | 墙牌（贴在方块侧面） | 背面那一格 | 该格是容器才算 |
 | 站立牌（立在方块顶面） | 下方那一格 | 该格是容器才算 |
-| 悬挂牌（挂在天花板或侧下方） | 悬挂点那一格 | 该格是容器才算 |
+| 悬挂牌吊在方块底面 | 上方那一格 | 该格是容器才算 |
+| 悬挂牌挂在方块侧面 | —— | P0 不支持，见下 |
 
 - 站立牌立在**箱子旁边的地上** → 下方是地板，不是容器 → 不是商店。
 - 墙牌贴在**箱子旁边的墙上** → 背面是墙，不是容器 → 不是商店。
+- **侧挂的悬挂牌 P0 不认**：基岩版把两种悬挂形态做成同一个方块 ID（`minecraft:oak_hanging_sign`），侧挂时 `facing_direction` 与墙面垂直，方块状态里没有"挂在哪一面墙"的信息（PowerNukkit 的 `BlockHangingSign` 同样只能扫四周，且它的 `place` 用 `face.rotateY()` 存朝向）。猜错会把牌子绑到**旁边的另一个箱子**上，所以宁可拒绝并提示"牌子要贴在或立在箱子上"。吊在方块底面（`hanging == true`）的形态信息明确，正常支持。
 - 找不到附着容器 → `NO_CHEST`（管理员店同样适用，见 7.4）。
 
 **一对一**：一块牌只绑定它附着的那一个容器；一个容器也只被一块牌绑定。牌子旁边的其他箱子对这块牌不存在，仍是普通箱子——不存在"一块牌管一片箱子"的可能。唯一例外是双箱：原版本来就把两个方块当作一个容器，合并成 54 格。
 
 可作容器的方块（配置 `shopContainers`）：`minecraft:chest`、`minecraft:trapped_chest`，默认不含 barrel（可加）。
 
-判定方式：`blockSource.getBlockEntity(pos)` 非空且 `isTypeOrDerived(BlockActorType::Chest / BarrelBlock)`，或按 `Block::getTypeName()` 匹配。
+判定方式：附着格的方块实体非空、`isTypeOrDerived(BlockActorType::Chest / BarrelBlock)`，**并且** `Block::getTypeName()` 在 `shopContainers` 白名单里。两条都满足才算容器——只匹配名字但读不到容器内容，不能当商店。白名单不匹配时单独提示"这种容器不能当商店用"，不和"牌子没贴对"混在一起。
 
-墙牌背面的方向从方块状态的 `cardinal_direction` 反推（`Block::getState`），LeviLamina 没有导出 `SignDirection` 符号，这是已知的实现细节。
+墙牌的朝向从方块状态的 `facing_direction`（2 北 / 3 南 / 4 西 / 5 东）读出，退化时读 `cardinal_direction`；**朝向 = 牌子正面朝外的方向，附着点在它的反方向**（与 PowerNukkit `BlockWallSign::onUpdate` 用 `getBlockFace().getOpposite()` 找支撑方块一致）。状态名在方块状态表里按 `minecraft:` 前缀兼容比对，LeviLamina 没有导出 `SignDirection` 符号。
 
 ### 7.2 多商店规则
 
@@ -634,7 +638,7 @@ public:
 9. 双箱：两半各挂一块牌 → 第二块被拒（两半合并后是同一个库存）。
 10. 双箱：牌子只贴在一半上 → 可交易全部 54 格。
 11. 容器为空时写商店 → 提示"请先在箱子里放商品"，不创建。
-12. 编辑已有商店为非法内容 → 旧商店失效；保留牌子并提示。
+12. 编辑已有商店为非法内容 → 整个包被丢弃，**旧商店保持原样**并提示原因（与 §4.2 一致；Java 版会让旧店失效，这里不做，宁可少一次误操作）。
 13. 非 OP 在第 1 行写 `Admin Shop` → 仍是普通商店，店主是自己。
 
 **牌面防护**
@@ -701,6 +705,8 @@ public:
 | 商店税与 `pay_tax` 双重扣税 | 已知，**无法程序化检测** | `shopTaxRate > 0` 时无条件 WARN；服主不关 `pay_tax` 则商店税按 0 处理（见 8.9） |
 | H2/H3 自定义 hook 的符号漂移 | 已知 | 每个 LeviLamina 大版本回归一次；符号在 26.51.8 头文件中已确认存在 |
 | 编辑拦截的用户体验 | 待实测 | 交互阶段拦下可以不弹 UI，但需确认 `PlayerInteractBlockEvent` 的取消确实阻止 `OpenSignPacket` |
+| 包路径是否写入 `mLastEditXuid` | 待实测 | `setMessageForServerScripingOnly` 需要显式传 `ownerID`；若包路径不写，03/06 需要在写入后补一次显式 ownerID |
+| 侧挂的悬挂牌无法从状态判定墙面 | 已知，P0 不支持 | 基岩把两种悬挂形态合并成一个方块 ID，侧挂时 `facing_direction` 与墙面垂直；猜错会误绑旁边的箱子 |
 | 上蜡状态读取 | 已确认字段 | `SignBlockActor::mIsWaxed`（bool），无 xuid 记录 |
 | 并发/线程安全 | 待验证 | 表单回调切主线程执行方块操作 |
 

@@ -2,6 +2,10 @@
 
 #include "ll/api/mod/NativeMod.h"
 
+#include "mod/Config.h"
+
+#include <optional>
+
 namespace ss::shop {
 
 class Shop {
@@ -11,6 +15,9 @@ public:
     Shop() : mSelf(*ll::mod::NativeMod::current()) {}
 
     [[nodiscard]] ll::mod::NativeMod& getSelf() const { return mSelf; }
+
+    /// 配置在 `load()` 里读取并校验；非法时模组拒绝加载。
+    [[nodiscard]] std::optional<ShopConfig> const& config() const { return mConfig; }
 
     /// @return 模组是否加载成功。
     bool load();
@@ -22,7 +29,8 @@ public:
     bool disable();
 
 private:
-    ll::mod::NativeMod& mSelf;
+    ll::mod::NativeMod&       mSelf;
+    std::optional<ShopConfig> mConfig;
 };
 
 } // namespace ss::shop
