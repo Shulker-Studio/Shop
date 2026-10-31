@@ -4,15 +4,94 @@
 
 **Blocked by:** 04
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] 卖成功：背包减少、余额增加、库存增加
-- [ ] 玩家物品与容器商品不严格匹配（附魔、耐久、自定义名）→ 拒绝
-- [ ] 店主余额不足 → 拒绝或按部分成交
-- [ ] 店主离线且后端不支持离线 → 拒绝买与卖
-- [ ] 构造一次"钱已动、物品搬失败"的场景，验证补偿把钱退回
-- [ ] 补偿本身失败时：记严重日志、通知 OP、冻结该次操作，不自动重试
+- [x] 卖成功：背包减少、余额增加、库存增加
+- [x] 玩家物品与容器商品不严格匹配（附魔、耐久、自定义名）→ 拒绝
+- [x] 店主余额不足 → 拒绝或按部分成交
+- [x] 店主离线且后端不支持离线 → 拒绝买与卖
+- [x] 构造一次"钱已动、物品搬失败"的场景，验证补偿把钱退回
+- [x] 补偿本身失败时：记严重日志、通知 OP、冻结该次操作，不自动重试
 
 ## Comments
 
 - **冻结与 OP 通知已随 04 落地**（`TradeService.cpp` 的 `gFrozenTrades` + `notifyOperators`）：补偿失败时按「XUID + 牌子坐标」钉住并拒绝后续提交。本票的勾选项 6 只需把卖出路径接进同一套收尾（`undoAndRefund` / `broken`），不必重做。
+
+## Answer
+
+**已实现（`xmake` 构建通过，`xmake test` 124 cases / 2500 assertions 全绿）**
+
+- `src/shop/TradePlan.{h,cpp}`：买卖合成一份份数算法。`TradeDirection`（Buy/Sell）+ 一个 `TradeRequest`（`goodsUnits` / `roomUnits` / `payerFunds` 三个「量」由调用方按方向装，头文件里有对照表）+ `planTrade`。`tradeAllowance` 的判定（缺货 → 缺钱 → 装不下 → 单次上限 的优先级、部分成交开关）只有一处；`tradeRejectionMessage(direction, ...)` 按方向换说法（「商店的货不够」/「你手里没有这么多」，「你的钱不够」/「店主的钱不够、付不起这一笔」，「背包放不下」/「商店箱装不下」）。`directionVerb` 收掉散落的 `? "买" : "卖"`。
+- `src/shop/Economy.h`：`EconomyProvider::get` 改返回 `std::optional<std::int64_t>`——**空 = 读不到，0 = 真的 0 元**。`ScoreboardEconomy` 在账户不可记账（离线、目标没了、没有记分板身份）时返回空，玩家在线但没有分值才返回 0；`NullEconomy` 谁的余额都读不到。这是卖出方向的关键：把「读不到店主余额」当成 0 会对一个有钱的店主报「资金不足」。
+- `src/shop/UnitsForm.{h,cpp}`（原 `BuyForm.*`）：份数表单与确认表单只有一份实现，按 `TradeDirection` 参数化；买卖两边的差异收在一张 `Wording` 表里（价格/货/上限/总价/扣款收款/份数变少的说法），取数用 `ShopInfo::unitPriceOf` 与 `goodsCount`，没有第二套「按方向选价」。新增《这一笔现在只成交得了 N 份》的卖出确认文案（买入仍是《这家店现在只够成交 N 份》）。
+- `src/mod/TradeService.{h,cpp}`：`prepareCommon(direction, ...)` 做十项共用前置检查（牌子还在、非管理员店、有这个方向的价格、店主可解析、不能自交易、未冻结、非创造、后端可用、箱子在、商品不空），`prepareBuy`/`prepareSell` 只在它之上装角色并算上限；`sellUnits` 与 `buyUnits` 同构，共用 `confirmIfChanged`（份数/件数/金额任一不符先弹确认）、`moveMoney`（动钱前确认两边账户都能记账、Broken 走 `broken()`）、`undoAndRefund`（快照回写双箱与背包 + 反向退款）、`TradeSnapshots`、`gFrozenTrades`/`notifyOperators`、`refreshShopBox`。表单入口收成模板 `requestUnitsForm` / `submitTrade`，买卖各只剩一行差别。
+- 卖出容量：`shopBoxUnits` = 合并槽位上「空格按满栈 + 严格同种堆叠的剩余空间」→ 份数，与背包容量共用 `roomUnits`；实际放货 `putItemsIntoShopBox` 以 `Container::addItem` 剩下的 `ItemStack` 为真值，双箱按 `mergedSlots` 顺序先附着那一半、再另一半，放不下就整笔按快照回写并退款（**不会留下部分放入**）。
+- 严格同种仍然只走 `sameShopItem`（`ContainerFinderBds`）：卖出计数 `heldUnits`、扣货、容量计算都用它，没有第二份比较。另加一个**只用于诊断**的 `holdsSimilarItem`（只看 id + aux），把「你手里根本没有」与「你手里的同种物品附魔/耐久/自定义名不对」分开说——它不参与任何交易判定。
+- `src/mod/EconomyService.*`：`accountsRecordable(provider, payer, receiver)`——`transfer` 是「先扣款再入账，入账失败就把钱加回去」，加回本身也可能 `Broken`，所以在扣款之前先确认两边账户都能记账；`provider` 由调用方传入，检查的就是即将转账的那个后端。
+- `src/mod/ShopForm.*`：`openTradeForm` / `openTradeConfirmForm` 替代原来的买入专用两张表单，「出售」按钮接 `requestSellForm`。
+- `src/mod/ShopService.*`：`readShop` 在**箱子全空**时填 `unavailableReason`（既没货可卖、也看不出这家店收什么，DESIGN §5.3），点牌就不给买卖按钮；`inspectShop` 不覆盖这个更具体的原因。
+- 文档：DESIGN §8.1/§8.2（`get` 的 optional 语义）、§8.5（读不到余额的处置）、§10.1（卖出上限）、§10.2（买卖角色对照表 + 钱先货后为什么没有复制窗口 + 动钱前预检两边账户）、§10.3（卖出四个上限、关掉部分成交时三种原因分开报）；CHANGELOG 补 05 条目并改掉 04 里已失效的说法。
+
+### 为什么卖出也「钱在前、货在后」，而且没有复制窗口
+
+1. **先算完所有前置条件**（`planTrade` + `confirmIfChanged`），任一条不成立就整笔返回，一分钱一件货都不动。
+2. **先动钱，而且动钱前先确认两边账户都能记账**：`transfer` 的实现是「扣款 → 入账 → 入账失败则把钱加回」，加回本身也可能失败（那就是 `Broken`）。先确认 payer/receiver 的 `get` 都非空，就不会走到「先扣款再退款」这一步。卖出时 payer 是店主、receiver 是玩家（DESIGN §8.5 的表格）。
+3. **先从背包取货、再放进商店箱**：中间那一刻商品**两处都没有**（背包已经少了、箱子还没多）——这是「丢失窗口」，退路是快照回写 + 退款，玩家不会凭空多出货。反过来先塞箱子再扣背包，中间那一刻就是同一件货既在箱子里又在背包里，那才是复制。买入方向同理（先取箱、再进背包）。
+4. **每一步失败都有快照**：双箱两半与玩家背包各存一份 `ItemStack` 副本，失败整组写回并 `sendInventory(true)`；用整组槽位而不是「动过的那几格」，因为 `addItem` 自己挑格子。
+5. **补偿自己失败** → `broken()`：`fatal` 日志 + 在线 OP 红色提示 + `XUID@牌子坐标` 冻结，之后同一玩家对同一块牌的提交直接拒绝，不自动重试。
+
+### 决策与偏离
+
+- **`BuyRequest` / `SellRequest` 合并成 `TradeRequest`**（审查后修正）：两个结构字段完全同形，分开只会逼出两份一模一样的 `plan` 函数。代价是字段名必须按角色取（`goodsUnits` / `roomUnits` / `payerFunds`），头文件用一张对照表讲清「买入时是什么、卖出时是什么」。
+- **不实现「按方向分叉的容量」两套算法**：卖出容量与背包容量共用 `roomUnits`，只是容器与格数不同（商店箱是合并槽位，背包是 `getInventory()`）。
+- **不用 `Container::hasRoomForItem` 当容量判据**：它只看单一半箱子、且要求整批塞进一个容器；两半各剩 20 格时它能装 40 件，单半判却是否定的，会把合法的双箱卖单拒掉。容量只算一次，实际放货以 `addItem` 的残留为真值。
+- **空箱子不猜商品**：箱子全空时 `firstProductStack` 为空，卖出无从知道收什么，买入也必然 0 份。牌面第 4 行只有显示名，拿它反查物品会造出第二个真相源（§5.3），所以牌仍然算商店，只是正文写「商店箱里没有货，既没东西可卖，也看不出这家店收什么」并且不给按钮。
+- **免费店（`B 0` / `S 0`）不产生账户操作**：`moveMoney` 在 `total <= 0` 时整段跳过，预校验也因此不要求账户可读——否则一个 0 元店会被「读不到账户」误拦（审查后修正，买卖两侧都改了）。
+- **「不同种」不做成拒绝原因枚举**：`TradeRejection` 只放「由数字决定」的原因；「你手里这件的附魔不对」需要扫背包，是 mod 层的诊断，所以放在 `prepareSell` 里直接给一句人话。
+- **份数表单里没有实时刷新**（沿用 04）：每一档的总件数与金额都写死在正文里，卖出每档只写金额，动词由标题行的「卖出价」承担（审查后修正：原先卖出写「得 $ 5」，现在与买入同形，靠 `Wording` 区分「总价/收入」与「实际扣款/实际收款」）。
+- **余额行写明「你的余额」**（审查后修正）：卖出屏的限额来自店主余额，同屏出现两个「余额」会读错，所以玩家自己的那一行加「你的」，上限那一行写「受店主余额…」。
+- **`get` 改成 optional 而不是加一个 `tryGet`**：两个读余额的方法并存早晚有人调错，而「读不到」本来就是余额的一部分语义（已在 `Economy.h` 与 DESIGN §8.1 写明与 §8.1 原始签名的差异）。
+
+### 已知边界
+
+- **卖出要求箱子非空**：混装箱子里只有和商品严格同种的才计入容量/份数，其它物品占着格子会压缩能装的份数（`roomUnits` 只把「空格」与「同种剩余叠加」算成空间）。这是 §5.3「商品权威是第一个非空槽位」的直接后果，不是 bug。
+- **「不同种」的提示是尽力而为**：`holdsSimilarItem` 只看 id + aux，所以「同名不同附魔」能认出来；「同 id 不同 aux」（例如不同颜色的羊毛）不会被当成「同种但不对」，仍然报「你手里没有这么多」。
+- **补偿路径没有自动化测试**：`undoAndRefund` / `putItemsIntoShopBox` 的失败回滚需要真实容器，纯逻辑层测不到。已在 12 的清单里列出「构造钱已动、货搬失败的场景」与「冻结生效」两条真机验收项。
+- **冻结是进程内的**：重启即清空。事故要人工核对，重启前一直有效是更安全的默认（沿用 04）。
+- **点牌时不再因为「读不到店主余额」禁用按钮**（审查后修正）：读不到的是账户、与这家店能不能收钱无关；真正动钱那一步的预检会拒绝并保持两边余额不变。代价是玩家可能点进份数表单才看到「读不到你的余额」。
+- **`S 0` 免费收购**：玩家把货白送，`total == 0` 时不转账，也不检查账户——这在语义上是「店主付 0 元」，与 DESIGN §13 的免费店口径一致。
+- **管理员店的卖出**同样走「管理员商店的交易还没实现」（资金端属 11）。
+
+**审查后修正（code-review 两轴，两轮）**
+
+- **`get` 的 optional 语义**（Spec 轴）：`NullEconomy` 的注释还写着「读余额永远是 0」，与实现矛盾；DESIGN §8.2 仍写「补偿失败抛异常」，与 §8.1 第 3 条冲突。两处都改了。
+- **免费店的账户预检**（Spec 轴，两轮各一次）：第一轮把「店主账户读不到」塞进了 `prepareBuy`，导致 0 元店也被拒；第二轮发现卖出侧还有同样的洞。现在两侧都只在 `price > 0` 时要求账户可读。
+- **`TradePlan` 的两份实现**（Standards 轴）：`planBuy`/`planSell`、`BuyRequest`/`SellRequest` 逐字同形 → 合成 `TradeRequest` + `planTrade`；`TradeLimit` 与 `TradeRejection` 一一对应，删掉中间枚举。
+- **预检十项写了两遍**（Standards 轴，第二轮）：抽出 `prepareCommon(direction, ...)`，两个方向只剩「装角色 + 算上限」。
+- **`accountsRecordable` 另取全局后端**（Standards 轴，第二轮）：改成接调用方传进来的 `provider`，保证检查的对象就是即将转账的对象。
+- **同一个条件三种写法**（Standards 轴）：`requestBuyForm`/`submitBuy`/`requestSellForm`/`submitSell` 四个壳子收成 `requestUnitsForm` / `submitTrade` 模板；店主余额可读性的三处判断收成 `EconomyService::accountsRecordable`；「读不到你的余额」两句合成 `playerFundsUnknownReason()`；选价收进 `ShopInfo::unitPriceOf`，`Wording` 表替代散落的 `?:`。
+- **术语**（Standards 轴）：玩家文案里的「箱子」改成「商店箱」（GLOSSARY：`箱子` 只指方块本身）。
+- **卖出确认文案**（Standards + Spec 轴）：原来复用买入的《这家店现在只够成交 N 份》，卖出时真正原因常是「我手里的货/店主的钱/箱子空间」，改成《这一笔现在只成交得了 N 份》，并补了卖出×份数变少的用例。
+- **空箱子仍给「出售」按钮**（Spec 轴，第二轮）：`readShop` 现在直接填 `unavailableReason`，点牌就不给买卖按钮，而不是点进去才失败。
+- **「不同种」分不清「没有」与「不对」**（Spec 轴，第二轮）：新增只用于诊断的 `holdsSimilarItem`，卖出被拒时给出「附魔、耐久或自定义名对不上」。
+- **份数表单里两个「余额」**（Standards 轴，第二轮）：玩家自己的那行写「你的余额」，上限说明写「受店主余额…」。
+- **余额占位文案**（Spec 轴）：`balance == nullopt` 原来一律写「暂不可用（没有可用的经济后端）」，现在 `nullopt` 也涵盖「读不到这个账户」，改成中性的「暂时读不到（经济后端没给出这个账户的余额）」，具体原因由「状态：」那行承担。
+- **失效符号引用**（Standards 轴，第二轮）：DESIGN 与 `UnitsForm.h` 里还写着 `tradeAllowance` / `planBuy` / `planSell`，实际只有 `planTrade`。
+- **未采纳**：把 `buyUnits` / `sellUnits` 合成一个 `executeTrade(direction, ...)`（两者的货端容器不同——商店箱是合并两半、背包是 `Inventory::add`——合并要再造一层容器抽象，比两段对称代码更难读，也更难在出问题时对照）；`Wording` 里用 `int ShopInfoData::*` 成员指针取「剩余份数」（读代码时看不出取的是哪个成员，改成显式的 `goodsCount()`）；给补偿路径造一个纯逻辑的假容器层（只为了测 `undoAndRefund`，会把 BDS 容器语义复制一遍）。
+
+**指标**
+
+- `xmake -y`：Shop.dll 构建通过（clang-cl，`/W4` 无新增告警）。
+- `xmake test`：ShopTests 124 cases / 2500 assertions 全绿；`build/windows/x64/release/ShopTests.exe` 直接跑同样是 124 / 2500。
+- 新增/改写的用例：`planTrade` 的买卖两套（各含三条上限、部分成交、关掉部分成交时的三种原因、付费/免费、输入非法、件数溢出、方向文案）、`UnitsForm` 的卖表单与卖出确认正文、`Economy` 的「读不到 vs 0 元」、`ShopInfo` 的三句原因文案与空箱子原因。
+
+**只能真机验收的项（已转 12）**
+
+1. 卖一次：背包件数减少、余额增加、商店箱件数增加三者一致（§13 第 21 条的镜像）。
+2. 拿着附魔钻石剑卖普通钻石店 → 提示「附魔、耐久或自定义名对不上」，三者都不变（§13 第 25 条 + §5.3）。
+3. 店主余额不足 → 部分成交或整笔拒绝，且金额按实际份数重算（§13 第 26 条）。
+4. 店主离线（记分板后端）→ 买与卖都被拒，提示「店主不在线」。
+5. 商店箱装满到只剩不足一份的空间 → 卖一次被拒（「商店箱装不下这些物品」），背包与余额不变；双箱只塞满一半时应当成交到两半之和。
+6. 构造「钱已动、货搬失败」：把要卖的那一份在提交前挪走或让箱子刚好差一格，确认走「钱已退回、背包与箱子回到原样」。
+7. 补偿失败（可临时删掉记分板目标制造写入失败）→ 日志 `fatal`、在线 OP 收到红字、同一玩家对同一块牌再次提交被拒「这笔交易已被冻结」。
+8. 空箱子（卖光）时点牌：正文出现「商店箱里没有货…」，一个买卖按钮都没有。
