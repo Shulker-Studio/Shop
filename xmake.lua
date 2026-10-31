@@ -2,26 +2,20 @@ add_rules("mode.debug", "mode.release")
 
 add_repositories("levimc-repo https://github.com/LiteLDev/xmake-repo.git")
 
-option("target_type")
-    set_default("server")
-    set_showmenu(true)
-    set_values("server", "client")
-option_end()
-
--- add_requires("levilamina x.x.x") for a specific version
--- add_requires("levilamina develop") to use develop version
--- please note that you should add bdslibrary yourself if using dev version
-add_requires("levilamina", {configs = {target_type = get_config("target_type")}})
-
+-- Shop 是纯服务端模组
+add_requires("levilamina 26.51.8", {configs = {target_type = "server"}})
+-- 事件层依赖 iListenAttentively（告示牌编辑、开箱、爆炸/活塞/凋灵/火焰、双箱、货币事件）
+add_requires("ilistenattentively", {configs = {target_type = "server"}})
 add_requires("levibuildscript")
 
 if not has_config("vs_runtime") then
     set_runtimes("MD")
 end
 
-target("my-mod") -- Change this to your mod name.
+target("Shop")
     add_rules("@levibuildscript/linkrule")
-    add_rules("@levibuildscript/modpacker")
+    -- 版本号与 tooth.json 保持一致；发布时同步修改两处
+    add_rules("@levibuildscript/modpacker", {modVersion = "0.1.0"})
     if is_plat("windows") then
         add_defines("NOMINMAX", "UNICODE")
         set_exceptions("none") -- To avoid conflicts with /EHa.
@@ -41,17 +35,10 @@ target("my-mod") -- Change this to your mod name.
         )
         set_toolchains("clang-cl")
     end
-    add_packages("levilamina")
+    add_packages("levilamina", "ilistenattentively")
     set_kind("shared")
     set_languages("c++20")
     set_symbols("debug")
     add_headerfiles("src/**.h")
     add_files("src/**.cpp")
     add_includedirs("src")
-    if is_config("target_type", "server") then
-    --  add_includedirs("src-server")
-    --  add_files("src-server/**.cpp")
-    else
-    --  add_includedirs("src-client")
-    --  add_files("src-client/**.cpp")
-    end

@@ -1,5 +1,5 @@
-// This file will make your mod use LeviLamina's memory operators by default.
-// This improves the memory management of your mod and is recommended to use.
+// 本文件让模组默认使用 LeviLamina 的内存运算符，
+// 以改善内存管理，建议保留。
 
 #define LL_MEMORY_OPERATORS
 
