@@ -79,7 +79,7 @@ SignEditResult planSignEdit(
         auto const existing = parseShopSignFront(*sign, signConfig);
         if (existing.looksLikeShopSign()) {
             auto const owner = readShopOwner(*sign, existing);
-            auto const actor = shopActorOf(owner.xuid, editor.getXuid(), editor.isOperator());
+            auto const actor = shopActorOf(owner.xuid, editor.getXuid(), editor.isOperator(), owner.adminShop);
 
             // 归属交接：改之前已经是商店就不该跟着编辑者走（除管理员店 ⇄ 普通店之外）。
             handoff.wasShop           = true;
@@ -135,7 +135,7 @@ std::optional<ShopSnapshot> readShop(BlockSource& region, BlockPos const& signPo
     }
 
     auto const signConfig = toSignConfig(config);
-    auto const parsed     = parseShopSignText(sign->getMessage(SignTextSide::Front), /*editorIsOp=*/true, signConfig);
+    auto const parsed     = parseShopSignFront(*sign, signConfig);
     if (!parsed.ok()) {
         return std::nullopt; // 普通牌、非法牌
     }
@@ -189,7 +189,7 @@ inspectShop(BlockSource& region, BlockPos const& signPos, Player& viewer, ShopCo
 
     // 「谁是店主」只由 `shopActorOf` 判（ADR-0005），表单角色只是它的一种用法。
     ShopOwner const owner = readShopOwner(*sign, parsed);
-    ShopActor const actor = shopActorOf(owner.xuid, viewer.getXuid(), viewer.isOperator());
+    ShopActor const actor = shopActorOf(owner.xuid, viewer.getXuid(), viewer.isOperator(), owner.adminShop);
 
     ShopInteraction interaction{
         .actor       = actor,
@@ -202,6 +202,8 @@ inspectShop(BlockSource& region, BlockPos const& signPos, Player& viewer, ShopCo
     // 牌面保护不看容器（§9.2），只是没表单可弹。
     auto shop = readShop(region, signPos, config);
     if (!shop) {
+        // 两种停摆原因分开说：箱子没了 / 牌面已经不严格合法（改了配置、写了脏数据）。
+        interaction.unavailable = parsed.ok() ? ShopUnavailable::NoContainer : ShopUnavailable::NotValid;
         return interaction;
     }
 

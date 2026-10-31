@@ -58,7 +58,7 @@ bool isShopSignFront(SignBlockActor& sign, ShopSignConfig const& config);
 /// 自己改掉 `mLastEditXuid`（§6.5 第 3 条）；两种情况下都不能让归属跟着编辑者走，
 /// 否则 OP 改一下就把原店主锁在自己的店外了。
 ///
-/// 三个条件同时成立才动手：正面仍是合法商店牌（`isShopSignFront`）、附着容器可用、
+/// 三个条件同时成立才动手：正面仍是合法商店牌（`parseShopSignFront(...).ok()`）、附着容器可用、
 /// 算出来的目标 XUID 与牌上记的不一致。普通牌、非法牌、失去容器的牌一个字都不碰。
 ///
 /// 写入的是**当前文本本身**，不 refresh——客户端已经通过包拿到同一份文本，

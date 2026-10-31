@@ -2,6 +2,7 @@
 
 #include <array>
 #include <cctype>
+#include <cstddef>
 
 namespace ss::shop {
 namespace {
@@ -120,9 +121,13 @@ std::string onlyOwnerMessage(ShopActor actor, SignTouch touch) {
 
 } // namespace
 
-ShopActor shopActorOf(std::string_view recordedOwnerXuid, std::string_view actorXuid, bool actorIsOp) {
+ShopActor shopActorOf(std::string_view recordedOwnerXuid, std::string_view actorXuid, bool actorIsOp, bool adminShop) {
     if (actorIsOp) {
         return ShopActor::Operator; // DESIGN §11：OP 有全部权限，不再往下比 XUID
+    }
+    if (adminShop) {
+        // 管理员商店的管理权只给 OP（§11）：牌上记的 XUID 只是当时的创建者。
+        return ShopActor::Other;
     }
     if (recordedOwnerXuid.empty()) {
         return ShopActor::NoRecordedOwner;
@@ -168,6 +173,8 @@ std::string waxedSignEditMessage() { return "这块商店牌上了蜡，先拿�
 
 std::string shopBoxMissingMessage() { return "这家店暂时用不了（商店箱不在了），牌子还不能改"; }
 
+std::string shopInvalidMessage() { return "这块商店牌的写法现在不算有效商店，牌子还不能改"; }
+
 SignTouch classifySignTouch(std::string_view itemTypeName) {
     auto const name = normalizeItemName(itemTypeName);
     if (name.empty()) {
@@ -190,7 +197,8 @@ SignTouch classifySignTouch(std::string_view itemTypeName) {
         return SignTouch::HoneyComb;
     }
 
-    // 形状兜底：新版本加了颜色或材质时不至于静默放行。
+    // 形状兜底：新版本加了颜色或材质时不至于静默放行。裸名（`dye` / `axe`）不算：
+    // 要求 `size() >` 前缀，避免把「空的类别名」当成一类物品。
     auto const endsWith = [&name](std::string_view suffix) {
         return name.size() > suffix.size() && name.ends_with(suffix);
     };

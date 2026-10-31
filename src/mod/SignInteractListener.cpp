@@ -66,14 +66,17 @@ void onInteractBlock(ll::event::player::PlayerInteractBlockEvent& event) {
         return;
     }
 
-    // 店暂时停摆（附着格不是可用容器）：没有表单可弹。店主与 OP 仍然可以改牌面
-    // （放行给原版编辑界面，否则店坏了就永远修不回来），其余人拦下——牌还有主。
+    // 店暂时停摆（附着格不是可用容器，或牌面已不严格合法）：没有表单可弹。
+    // 谁能进原版编辑界面问的是与提交阶段同一个判据（`mayEditShopSignText`）：
+    // 店主与 OP 放行（店坏了要能修回来），游客拦下。
     if (!interaction->shop) {
-        if (canManageShop(interaction->actor)) {
+        if (mayEditShopSignText(interaction->actor)) {
             return;
         }
         event.cancel();
-        player.sendMessage(shopBoxMissingMessage());
+        player.sendMessage(
+            interaction->unavailable == ShopUnavailable::NoContainer ? shopBoxMissingMessage() : shopInvalidMessage()
+        );
         return;
     }
 

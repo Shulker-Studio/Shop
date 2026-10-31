@@ -67,11 +67,20 @@ struct ShopSnapshot {
 /// 只读取：不写方块、不发消息。
 std::optional<ShopSnapshot> readShop(BlockSource& region, BlockPos const& signPos, ShopConfig const& config);
 
+/// 牌子是商店牌、但现在不能交易的原因。交互阶段要据此告诉玩家为什么没有表单。
+enum class ShopUnavailable : std::uint8_t {
+    None,        ///< 能交易
+    NoContainer, ///< 附着格不是可用容器（箱子被拆了、换掉了）
+    NotValid,    ///< 牌面已经不严格合法（调小了 `maxShopAmount`、写了脏数据、改了管理员名）
+};
+
 /// 一次交互该给谁看什么：商店快照（能交易时）+ 身份。
 struct ShopInteraction {
-    /// 现在能交易吗。空 = 正面是商店牌，但附着格不是可用容器（店暂时停摆）。
+    /// 现在能交易吗。空 = 正面是商店牌但现在停摆了，原因在 `unavailable`。
     /// 牌面保护不看这个字段：箱子被拆了也不该让牌面变成人人可改（DESIGN §9.2）。
     std::optional<ShopSnapshot> shop;
+    /// `shop` 为空的原因（`shop` 有值时恒为 `None`）。
+    ShopUnavailable unavailable = ShopUnavailable::None;
     /// 这个人是谁（ADR-0005 的判定，只算一次）。
     ShopActor actor = ShopActor::Other;
     /// 表单角色，由 `canManageShop(actor)` 派生：店主与 OP 拿管理入口，其余拿买卖按钮。

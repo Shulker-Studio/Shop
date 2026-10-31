@@ -13,6 +13,11 @@
 #include "mc/world/level/BlockSource.h"
 #include "mc/world/level/block/actor/SignTextSide.h"
 
+#include <array>
+#include <cstddef>
+#include <optional>
+#include <utility>
+
 namespace ss::shop {
 namespace {
 
@@ -20,10 +25,6 @@ ll::event::ListenerPtr gSignEditListener;
 ll::event::ListenerPtr gSignEditedListener;
 
 /// 一次编辑的归属交接：Before 阶段判出，紧接着的 After 阶段用（DESIGN §5.4）。
-///
-/// 只存一条：同一块牌的两个事件是连着来的（服务端线程上一个接一个）。
-/// 生命周期很简：每个正面 Before 先把旧的那条丢掉（见 `onSignEdit`），只有 Normalized
-/// 才重新写入；取用前比对牌位（含维度）与编辑者，任何一边对不上就不消费、也不清。
 struct PendingOwnerHandoff {
     Cell             sign;
     int              dimension = 0; ///< `DimensionType` 的整数值：`Cell` 只描述维度内的一格
@@ -31,7 +32,38 @@ struct PendingOwnerHandoff {
     SignOwnerHandoff handoff;
 };
 
-std::optional<PendingOwnerHandoff> gPendingOwnerHandoff;
+/// 待消费的交接。做成一个小环而不是单槽：两个玩家同一 tick 各改各的牌时，
+/// 单槽会把前一个人的交接顶掉，那条 After 就什么也不写（引擎没写 XUID 的牌子会
+/// 静默变成无主牌）。环满时覆盖最旧的一条——Before → After 本来是挨着的，4 条够用。
+///
+/// 消费规则：从新到旧找第一条「牌位（含维度）+ 编辑者」都对得上的，取走并清掉；
+/// 找不到就什么也不做（别的模组、别的手势写的牌子不该动归属）。
+constexpr std::size_t kMaxPendingOwnerHandoffs = 4;
+
+std::array<std::optional<PendingOwnerHandoff>, kMaxPendingOwnerHandoffs> gPendingOwnerHandoffs;
+std::size_t                                                              gNextPendingOwnerHandoff = 0;
+
+void stashOwnerHandoff(PendingOwnerHandoff pending) {
+    gPendingOwnerHandoffs[gNextPendingOwnerHandoff] = std::move(pending);
+    gNextPendingOwnerHandoff                        = (gNextPendingOwnerHandoff + 1) % kMaxPendingOwnerHandoffs;
+}
+
+/// 取走与这次 After 对得上的那条；没有就返回空。
+std::optional<PendingOwnerHandoff> takeOwnerHandoff(Cell const& sign, int dimension, std::string const& editorXuid) {
+    for (std::size_t i = 0; i < kMaxPendingOwnerHandoffs; ++i) {
+        // 从新的往旧的找（`gNextPendingOwnerHandoff` 的前一格是最新写入的）
+        std::size_t const index =
+            (gNextPendingOwnerHandoff + kMaxPendingOwnerHandoffs - 1 - i) % kMaxPendingOwnerHandoffs;
+        auto& slot = gPendingOwnerHandoffs[index];
+        if (!slot || slot->sign != sign || slot->dimension != dimension || slot->editorXuid != editorXuid) {
+            continue;
+        }
+        auto taken = std::move(slot);
+        slot.reset();
+        return taken;
+    }
+    return std::nullopt;
+}
 
 using SignEditBeforeEvent = ila::mc::world::actor::player::PlayerEditSignBeforeEvent;
 using SignEditAfterEvent  = ila::mc::world::actor::player::PlayerEditSignAfterEvent;
@@ -41,10 +73,6 @@ void onSignEdit(SignEditBeforeEvent& event) {
     if (event.textSide() != SignTextSide::Front) {
         return;
     }
-
-    // 每一次正面编辑都先把上一次的交接丢掉：不是 Normalized 的那次（普通牌、被拒、
-    // 容器不可用）不会留下任何东西，也就不可能被后续同坐标/同玩家的 After 误消费。
-    gPendingOwnerHandoff.reset();
 
     auto const& config = Shop::getInstance().config();
     if (!config) {
@@ -66,12 +94,14 @@ void onSignEdit(SignEditBeforeEvent& event) {
         // 改包而不是事后写回：服务端与客户端拿到的是同一份规范化文本。
         event.text() = result.normalizedText;
         // 归属留给 After 阶段（那时文本才真写进去），先把它存下。
-        gPendingOwnerHandoff = PendingOwnerHandoff{
-            .sign       = toCell(event.pos()),
-            .dimension  = static_cast<int>(region.getDimensionId()),
-            .editorXuid = player.getXuid(),
-            .handoff    = result.ownerHandoff,
-        };
+        stashOwnerHandoff(
+            PendingOwnerHandoff{
+                .sign       = toCell(event.pos()),
+                .dimension  = static_cast<int>(region.getDimensionId()),
+                .editorXuid = player.getXuid(),
+                .handoff    = result.ownerHandoff,
+            }
+        );
         return;
     }
 }
@@ -82,12 +112,12 @@ void onSignEdit(SignEditBeforeEvent& event) {
 void onSignEdited(SignEditAfterEvent const& event) {
     auto& player = event.self();
 
-    // 先比对，匹配才消费：别的牌子、别的玩家、别的维度的事件不该吃掉这条待用的交接
-    // （吃掉会让引擎没写 XUID 的牌子退化成无主牌，那是一条静默降级的路）。
-    bool const matches =
-        gPendingOwnerHandoff && gPendingOwnerHandoff->sign == toCell(event.pos())
-        && gPendingOwnerHandoff->dimension == static_cast<int>(player.getDimensionBlockSource().getDimensionId())
-        && gPendingOwnerHandoff->editorXuid == player.getXuid();
+    // 先认领再判早退：认领了的那条一定要用掉，否则它会在环里被下一次同坐标的编辑捡走。
+    auto pending = takeOwnerHandoff(
+        toCell(event.pos()),
+        static_cast<int>(player.getDimensionBlockSource().getDimensionId()),
+        player.getXuid()
+    );
 
     // 背面是布告板：不读、不写、不校验（DESIGN §5.5）。
     if (event.textSide() != SignTextSide::Front) {
@@ -99,13 +129,11 @@ void onSignEdited(SignEditAfterEvent const& event) {
         return;
     }
 
-    if (!matches) {
+    if (!pending) {
         return; // 不是我们放行的那次编辑：归属不是我们该动的事
     }
 
-    auto handoff = std::move(gPendingOwnerHandoff->handoff);
-    gPendingOwnerHandoff.reset();
-    recordShopOwner(player.getDimensionBlockSource(), event.pos(), player, *config, handoff);
+    recordShopOwner(player.getDimensionBlockSource(), event.pos(), player, *config, pending->handoff);
 }
 
 } // namespace
@@ -132,7 +160,10 @@ void unregisterSignEditListener() {
         bus.removeListener<SignEditAfterEvent>(gSignEditedListener);
         gSignEditedListener.reset();
     }
-    gPendingOwnerHandoff.reset();
+    for (auto& slot : gPendingOwnerHandoffs) {
+        slot.reset();
+    }
+    gNextPendingOwnerHandoff = 0;
 }
 
 } // namespace ss::shop

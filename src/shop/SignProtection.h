@@ -20,7 +20,10 @@ enum class ShopActor : std::uint8_t {
 };
 
 /// 判定身份。`recordedOwnerXuid` 为空表示牌子没记下店主。
-ShopActor shopActorOf(std::string_view recordedOwnerXuid, std::string_view actorXuid, bool actorIsOp);
+///
+/// `adminShop` 为真时只有 OP 是主人（DESIGN §11：管理员商店的管理权只给 OP）。
+/// 牌上记的 XUID 只是当时创建它的那个 OP，他被撤权之后不该继续当店主。
+ShopActor shopActorOf(std::string_view recordedOwnerXuid, std::string_view actorXuid, bool actorIsOp, bool adminShop);
 
 /// 能不能拿到管理入口（点牌时的表单角色）。
 ///
@@ -34,7 +37,7 @@ bool canManageShop(ShopActor actor);
 /// 不各写一份：
 /// - 游客：不放；
 /// - 店主、OP：放；
-/// - 记录不到店主：放（fail-open，DESIGN §9.2「失败即放行」）。正常路径一定会写下
+/// - 记录不到店主：放（fail-open，DESIGN §9.2）。正常路径一定会写下
 ///   店主 XUID（`recordShopOwner`），记录缺失的牌不该因此永久锁死；代价是这种异常牌
 ///   会被第一个改它的人接手，已记在票面的已知边界里。
 bool mayEditShopSignText(ShopActor actor);
@@ -75,6 +78,9 @@ std::string waxedSignEditMessage();
 
 /// 商店牌还在、但附着格不是可用容器时点牌：没有表单可弹，也别把编辑界面递给非店主。
 std::string shopBoxMissingMessage();
+
+/// 商店牌还在、但它已经不严格合法（改了配置、或者牌子是脏数据）：同上，也没表单可弹。
+std::string shopInvalidMessage();
 
 /// 手持物品对告示牌会做的事（DESIGN §9.2 的「牌面防护」那一组）。
 ///

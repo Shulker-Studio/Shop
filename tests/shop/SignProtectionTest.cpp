@@ -2,7 +2,6 @@
 
 #include <doctest/doctest.h>
 
-#include <array>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -93,15 +92,25 @@ TEST_CASE("物品分类：不认识的一律当作不改牌子") {
     CHECK(classifySignTouch("minecraft:air") == SignTouch::None);
 }
 
-TEST_CASE("身份判定：OP 先判，其次空记录，再比 XUID") {
-    CHECK(shopActorOf("xuid-a", "xuid-a", /*actorIsOp=*/false) == ShopActor::Owner);
-    CHECK(shopActorOf("xuid-a", "xuid-b", false) == ShopActor::Other);
-    CHECK(shopActorOf("xuid-a", "xuid-b", /*actorIsOp=*/true) == ShopActor::Operator);
+TEST_CASE("身份判定：OP 先判，其次管理员店，再比 XUID") {
+    CHECK(shopActorOf("xuid-a", "xuid-a", /*actorIsOp=*/false, /*adminShop=*/false) == ShopActor::Owner);
+    CHECK(shopActorOf("xuid-a", "xuid-b", false, false) == ShopActor::Other);
+    CHECK(shopActorOf("xuid-a", "xuid-b", /*actorIsOp=*/true, false) == ShopActor::Operator);
     // OP 同时也是店主时仍算 OP（两边的权限一样，operator 更好解释）
-    CHECK(shopActorOf("xuid-a", "xuid-a", true) == ShopActor::Operator);
+    CHECK(shopActorOf("xuid-a", "xuid-a", true, false) == ShopActor::Operator);
     // 牌子没记下店主：谁都不是店主，也不是游客
-    CHECK(shopActorOf("", "xuid-a", false) == ShopActor::NoRecordedOwner);
-    CHECK(shopActorOf("", "xuid-a", true) == ShopActor::Operator);
+    CHECK(shopActorOf("", "xuid-a", false, false) == ShopActor::NoRecordedOwner);
+    CHECK(shopActorOf("", "xuid-a", true, false) == ShopActor::Operator);
+}
+
+TEST_CASE("身份判定：管理员商店只归 OP，牌上记的创建者不靠") {
+    // 牌上记的是「当时的创建者」；他被撤权之后不该继续当店主（§11）
+    CHECK(shopActorOf("xuid-ex-op", "xuid-ex-op", /*actorIsOp=*/false, /*adminShop=*/true) == ShopActor::Other);
+    CHECK(shopActorOf("xuid-ex-op", "xuid-other", false, true) == ShopActor::Other);
+    // 记录为空也一样：管理员店的信息不成问题
+    CHECK(shopActorOf("", "xuid-other", false, true) == ShopActor::Other);
+    // 现任 OP 照旧有全部权限
+    CHECK(shopActorOf("xuid-ex-op", "xuid-op", /*actorIsOp=*/true, true) == ShopActor::Operator);
 }
 
 TEST_CASE("身份判定：管理入口只给店主与 OP，记录缺失时不发给所有人") {
@@ -115,7 +124,7 @@ TEST_CASE("改牌权限：只有游客被挡，记录缺失时 fail-open") {
     CHECK(mayEditShopSignText(ShopActor::Owner));
     CHECK(mayEditShopSignText(ShopActor::Operator));
     CHECK_FALSE(mayEditShopSignText(ShopActor::Other));
-    // DESIGN §9.2「失败即放行」：记录缺失的牌不该因此永久锁死
+    // DESIGN §9.2：记录缺失的牌不该因此永久锁死（fail-open）
     CHECK(mayEditShopSignText(ShopActor::NoRecordedOwner));
 }
 
@@ -284,14 +293,7 @@ TEST_CASE("改牌提示：分得清有主的、没名字的、管理员商店的
     CHECK(ownerOnlyEditMessage("Alex", /*adminShop=*/true).find("OP") != std::string::npos);
 }
 
-TEST_CASE("拦下提示：五类操作的话互不相同，无主牌只提 OP") {
-    std::array<SignTouch, 5> const touches{
-        SignTouch::Dye,
-        SignTouch::InkSac,
-        SignTouch::GlowInkSac,
-        SignTouch::HoneyComb,
-        SignTouch::Axe,
-    };
+TEST_CASE("拦下提示：各类操作各有说法，无主牌只提 OP") {
     std::vector<std::string> const messages{
         touch("minecraft:red_dye", {.actor = ShopActor::Other}).message,
         touch("minecraft:ink_sac", {.actor = ShopActor::Other}).message,
@@ -299,10 +301,11 @@ TEST_CASE("拦下提示：五类操作的话互不相同，无主牌只提 OP") 
         touch("minecraft:honeycomb", {.actor = ShopActor::Other}).message,
         touch("minecraft:iron_axe", {.actor = ShopActor::Other, .waxed = true}).message,
     };
-    // 五句话都不空、互不相同（墨囊与荧光墨囊共用一句，这里只比它们各自非空）
+    // 五句话都不空；染色、上蜡、除蜡各说各的（墨囊与荧光墨囊共用一句，是有意为之）
     for (auto const& message : messages) {
         CHECK_FALSE(message.empty());
     }
+    CHECK(messages[0] != messages[3]);
     CHECK(messages[0] != messages[4]);
     CHECK(messages[3] != messages[4]);
 
@@ -310,7 +313,6 @@ TEST_CASE("拦下提示：五类操作的话互不相同，无主牌只提 OP") 
     auto const noOwner = touch("minecraft:honeycomb", {.actor = ShopActor::NoRecordedOwner}).message;
     CHECK(noOwner.find("只有 OP") != std::string::npos);
     CHECK(noOwner.find("店主") == std::string::npos);
-    (void)touches;
 }
 
 TEST_CASE("上蜡提示：一句话说清要先除蜡") {
