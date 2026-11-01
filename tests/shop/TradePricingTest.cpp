@@ -109,3 +109,22 @@ TEST_CASE("含税份数上限：卖出方向店主多付一份税") {
         CHECK(affordableUnitsWithTax(10, cost - 1, 0.1) == (units > 1 ? units - 1 : 0));
     }
 }
+
+TEST_CASE("无限库存：tradeUnits 的 min 里没有「库存」这一项（DESIGN §10.1 / §10.3）") {
+    auto const unlimited = StockView::makeUnlimited();
+
+    // 请求量才是上限：无上限的库存项不参与 min，也不靠一个很大的数糊过去
+    CHECK(tradeUnits(4, unlimited, 10, 10) == 4);
+    // 「收得下」也可以是无限（卖出方向的商店箱，票 02）
+    CHECK(tradeUnits(4, 10, unlimited, 10) == 4);
+    CHECK(tradeUnits(4, unlimited, unlimited, 4) == 4);
+    // 其余上限照旧生效：付得起的份数
+    CHECK(tradeUnits(4, unlimited, 10, 3) == 3);
+    // 有限的那一项仍然压上限（无限只关掉它自己那一项）
+    CHECK(tradeUnits(4, unlimited, 2, 10) == 2);
+    CHECK(tradeUnits(4, StockView::makeFinite(2), unlimited, 10) == 2);
+    // 有限 0 份是真的空了，不许被当成「无限」
+    CHECK(tradeUnits(4, StockView::makeFinite(0), unlimited, 10) == 0);
+    // 大数照旧，不会被哨兵截成别的意思
+    CHECK(tradeUnits(3456, unlimited, unlimited, 3456) == 3456);
+}

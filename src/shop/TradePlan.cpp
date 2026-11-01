@@ -15,13 +15,13 @@ namespace {
 /// 顺序即优先级：缺货优先（箱子空了跟买家有多少钱无关），最后才轮到单次上限——
 /// 那一条是服务器配置，不是玩家或这家店的问题。
 TradeRejection blockingReason(TradeRequest const& request, int units, int affordableUnits) {
-    if (request.goodsUnits < units) {
+    if (!request.goodsUnits.covers(units)) {
         return TradeRejection::NotEnoughGoods;
     }
     if (affordableUnits < units) {
         return TradeRejection::NotEnoughFunds;
     }
-    if (request.roomUnits < units) {
+    if (!request.roomUnits.covers(units)) {
         return TradeRejection::NoRoomToReceive;
     }
     return TradeRejection::OverUnitLimit;
@@ -57,8 +57,8 @@ double payerTaxRate(TradeRequest const& request) { return request.taxOnPayer ? r
 
 int maxTradeUnits(
     int          maxUnits,
-    int          goodsUnits,
-    int          roomUnits,
+    StockView    goodsUnits,
+    StockView    roomUnits,
     std::int64_t unitPrice,
     std::int64_t payerFunds,
     double       taxRate
@@ -69,11 +69,10 @@ int maxTradeUnits(
     return maxTradeUnits(maxUnits, goodsUnits, roomUnits, affordableUnitsWithTax(unitPrice, payerFunds, taxRate));
 }
 
-int maxTradeUnits(int maxUnits, int goodsUnits, int roomUnits, int affordableUnits) {
-    if (maxUnits <= 0) {
-        return 0;
-    }
-    return std::min(maxUnits, tradeUnits(std::numeric_limits<int>::max(), goodsUnits, roomUnits, affordableUnits));
+int maxTradeUnits(int maxUnits, StockView goodsUnits, StockView roomUnits, int affordableUnits) {
+    // `maxUnits` 就是「请求量」那一项：不拿 `INT_MAX` 当「不限制」的哨兵，
+    // 少的这两行正是「无限库存要不要参与 min」这件事只有一个出口的原因（见 `tradeUnits`）。
+    return tradeUnits(maxUnits, goodsUnits, roomUnits, affordableUnits);
 }
 
 TradeDecision planTrade(TradeRequest const& request) {
@@ -99,13 +98,13 @@ TradeDecision planTrade(TradeRequest const& request) {
 
     if (allowed <= 0) {
         // 谁挡住了就报谁：缺货优先，因为箱子/背包空了跟钱多钱少无关。
-        if (request.goodsUnits <= 0) {
+        if (request.goodsUnits.empty()) {
             return {.rejection = TradeRejection::NotEnoughGoods};
         }
         if (affordable <= 0) {
             return {.rejection = TradeRejection::NotEnoughFunds};
         }
-        if (request.roomUnits <= 0) {
+        if (request.roomUnits.empty()) {
             return {.rejection = TradeRejection::NoRoomToReceive};
         }
         // 只剩「份数天花板 <= 0」这一种：配置非法，不是玩家的问题。

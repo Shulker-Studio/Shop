@@ -540,3 +540,94 @@ TEST_CASE("停业：文案是「这家店暂停营业」，两个方向同一句
     CHECK(tradeRejectionMessage(TradeDirection::Buy, TradeRejection::ShopClosed) == "这家店暂停营业");
     CHECK(tradeRejectionMessage(TradeDirection::Sell, TradeRejection::ShopClosed) == "这家店暂停营业");
 }
+
+TEST_CASE("无限库存：买 1 / 2 / 4 份都给得出来，库存项不参与上限") {
+    for (int const units : {1, 2, 4}) {
+        auto request       = soundBuy();
+        request.requested  = units;
+        request.goodsUnits = StockView::makeUnlimited(); // 管理员店的模板箱
+        request.roomUnits  = StockView::makeFinite(units);
+        request.payerFunds = 10 * units;
+
+        auto const decision = planTrade(request);
+        REQUIRE(decision.ok());
+        CHECK(decision.plan->units == units);
+        CHECK(decision.plan->items == units * 64);
+        CHECK(decision.plan->total == std::int64_t{10} * units);
+    }
+}
+
+TEST_CASE("无限库存：自定义份数只看其余三个上限") {
+    auto request       = soundBuy();
+    request.requested  = 7;
+    request.goodsUnits = StockView::makeUnlimited();
+    request.roomUnits  = StockView::makeFinite(7);
+    request.payerFunds = 70;
+
+    auto const decision = planTrade(request);
+    REQUIRE(decision.ok());
+    CHECK(decision.plan->units == 7);
+    CHECK(decision.plan->items == 7 * 64);
+    CHECK(decision.plan->total == std::int64_t{70});
+}
+
+TEST_CASE("无限库存：余额不够仍然被拒") {
+    auto request       = soundBuy();
+    request.goodsUnits = StockView::makeUnlimited();
+    request.payerFunds = 9; // 一份 10
+
+    CHECK(planTrade(request).rejection == TradeRejection::NotEnoughFunds);
+}
+
+TEST_CASE("无限库存：单次上限（maxShopAmount）仍然生效") {
+    auto request       = soundBuy();
+    request.requested  = 5;
+    request.goodsUnits = StockView::makeUnlimited();
+    request.roomUnits  = StockView::makeFinite(5);
+    request.payerFunds = 100;
+    request.maxUnits   = 3;
+
+    auto const decision = planTrade(request);
+    REQUIRE(decision.ok());
+    CHECK(decision.plan->units == 3);
+    CHECK(decision.plan->total == std::int64_t{30});
+
+    request.allowPartial = false;
+    CHECK(planTrade(request).rejection == TradeRejection::OverUnitLimit);
+}
+
+TEST_CASE("无限库存：背包放不下仍然生效，而且是「装不下」不是「货不够」") {
+    auto request       = soundBuy();
+    request.requested  = 4;
+    request.goodsUnits = StockView::makeUnlimited();
+    request.roomUnits  = StockView::makeFinite(2);
+    request.payerFunds = 100;
+
+    auto const decision = planTrade(request);
+    REQUIRE(decision.ok());
+    CHECK(decision.plan->units == 2);
+
+    request.allowPartial = false;
+    // 库存无限时唯一的「收不了」原因是背包：不许报成缺货
+    CHECK(planTrade(request).rejection == TradeRejection::NoRoomToReceive);
+}
+
+TEST_CASE("无限库存：maxTradeUnits 不看库存项，其余上限照旧") {
+    auto const unlimited = StockView::makeUnlimited();
+
+    CHECK(maxTradeUnits(100, unlimited, 4, 10, 1000) == 4);         // 收货方空间
+    CHECK(maxTradeUnits(100, unlimited, 4, 10, 35) == 3);           // 付得起的份数
+    CHECK(maxTradeUnits(2, unlimited, 4, 10, 1000) == 2);           // 单次上限
+    CHECK(maxTradeUnits(100, unlimited, unlimited, 10, 1000) == 100); // 只剩天花板
+    CHECK(maxTradeUnits(0, unlimited, unlimited, 10, 1000) == 0);   // 天花板 <= 0 仍然成交不了
+    CHECK(maxTradeUnits(100, StockView::makeFinite(0), unlimited, 10, 1000) == 0); // 有限 0 份真的空
+}
+
+TEST_CASE("无限库存：模板箱有货也不靠「几份」说话，缺货不再是拒绝理由") {
+    auto request       = soundBuy();
+    request.goodsUnits = StockView::makeUnlimited();
+    request.roomUnits  = StockView::makeFinite(0); // 背包满
+    request.payerFunds = 100;
+
+    CHECK(planTrade(request).rejection == TradeRejection::NoRoomToReceive);
+}

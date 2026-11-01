@@ -114,6 +114,17 @@
   记分板记账，不必为一个 `dummy` 目标再手打命令）。
 - 顺带清掉 `SignInteractListener.cpp` 里 `sign_decision` 重构后遗留的未用函数 `actionName`。
 
+### 变更（P1 票 01：管理员店买入无限）
+
+- 纯逻辑新增 `StockView`（`src/shop/StockView.h`）：`makeFinite(n)` / `makeUnlimited()` 两个构造口，
+  无限时 `units` 为空——**不再用 `INT_MAX` / `-1` 当哨兵参与 `min`**。`TradeRequest::goodsUnits` /
+  `roomUnits`、`ShopInfoData::stockUnits`、`TradePricing::tradeUnits`、`maxTradeUnits` 全部换成它，
+  「无限那一项不参与 `min`」只在 `tradeUnits` 一处实现。既有测试的 `goodsUnits = 5` 靠隐式转换照旧可读。
+- 管理员店（`readShop`）的库存一律 `makeUnlimited()`；买入执行路径跳过「从箱子扣货」，
+  样品槽前后逐字段相同；表单份数行走同一个 `stockUnitsText`，无限写「无限（管理员店，永远有货）」。
+  卖出方向的 `heldUnits` 仍是有限（无限化就是复制物品），商店箱空间这一项留给票 02。
+  余额、`maxShopAmount`、背包空间三个上限在无限下照旧生效。
+
 ### 修复
 
 - **告示牌没有「除蜡」这回事**：早期把 Java 版铜块的规则套到了告示牌上，判出「斧头 = 除蜡」并在提示里教玩家「先拿斧头除蜡才能改」。实际原版告示牌上蜡后没有任何去除手段（Mojira MC-261313 判 Works As Intended；Wiki 写「若要修改则需破坏后重新放置」），

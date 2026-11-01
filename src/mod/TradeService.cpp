@@ -564,9 +564,13 @@ PreparedTrade prepareSell(BlockSource& region, Cell const& sign, Player& seller,
     // 份数与件数都要：件数为 0 才是「根本没有」，份数为 0 但件数不为 0 只是「不够一份」。
     auto const strictItems =
         countMatchingItems(seller.getInventory(), nullptr, seller.getInventory().getContainerSize(), context.product);
-    auto const strictCount     = static_cast<int>(std::min<std::int64_t>(strictItems, std::numeric_limits<int>::max()));
-    context.request.goodsUnits = unitsFromItems(strictCount, context.shop.info.amountPerUnit);
-    context.request.roomUnits  = shopBoxUnits(context.container, context.product, context.shop.info.amountPerUnit);
+    auto const strictCount = static_cast<int>(std::min<std::int64_t>(strictItems, std::numeric_limits<int>::max()));
+    // 卖出方向的「货」是玩家背包里的实物，**永远有限**：把它当无限 = 凭空给玩家复制物品。
+    // 无限只属于管理员店那一侧的模板箱（买入方向，见 `readShop` 与 `buyUnits`）。
+    int const heldUnits        = unitsFromItems(strictCount, context.shop.info.amountPerUnit);
+    int const boxRoomUnits     = shopBoxUnits(context.container, context.product, context.shop.info.amountPerUnit);
+    context.request.goodsUnits = StockView::makeFinite(heldUnits);
+    context.request.roomUnits  = StockView::makeFinite(boxRoomUnits);
 
     // 「我手里根本没有」与「我手里有钻石剑但不是这一把」得分开说（DESIGN §5.3 的严格同种）。
     // 只有严格同种一件都没有时才怀疑「货不对」；有 63 个差一个满一份的，原因就是不够一份。
@@ -577,8 +581,8 @@ PreparedTrade prepareSell(BlockSource& region, Cell const& sign, Player& seller,
     // 卖出表单要把「你手里有几份」「商店箱还能装几份」「店主余额」都摆出来
     // （DESIGN §10.1 第 3 步：表单要显示上限是怎么来的，不能只说“受它们限制”）。
     // 玩家自己的余额读不到不算错误：钱那一步会在扣款前再确认一次两边账户（见 `moveMoney`）。
-    context.shop.info.heldUnits    = context.request.goodsUnits;
-    context.shop.info.boxRoomUnits = context.request.roomUnits;
+    context.shop.info.heldUnits    = heldUnits;
+    context.shop.info.boxRoomUnits = boxRoomUnits;
     // 管理员店的「店主余额」不编一个数字：资金侧不设上限，它不是一个可读的账户。
     context.shop.info.ownerBalance = ownerFunds;
     context.shop.info.balance      = context.provider->get(seller.getXuid());
@@ -904,7 +908,11 @@ TradeResult buyUnits(
     // 这个顺序是关键：中间那一刻商品只在一处（箱子已经少了、背包还没多），
     // 不存在「同一件货同时在箱子和背包里」的复制窗口；反过来先塞背包再取箱子，
     // 中间那一刻就是凭空多出来的一份。
-    if (!takeMatchingItems(
+    //
+    // 管理员店是**模板箱**：箱子里的那一件只用来定「卖什么」，货是凭空发出去的，
+    // 所以这一整步要跳过——样品槽必须前后逐字段相同（spec D3 / 票 01）。
+    if (!info.adminShop
+        && !takeMatchingItems(
             *context->container.primary,
             context->container.secondary,
             context->container.ref.size,
@@ -936,8 +944,11 @@ TradeResult buyUnits(
 
     // 第 9 步刷新：背包推给客户端，商店箱（双箱两半）各自 refresh 一次
     // （DESIGN §7.3「分别 setItem 并各自 refresh」/ §10.2 第 9 步）。
+    // 管理员店的箱子一个字都没动，不必把它整箱重推一遍（白白让旁边的人看到一次假变化）。
     buyer.sendInventory(true);
-    refreshShopBox(region, context->container);
+    if (!info.adminShop) {
+        refreshShopBox(region, context->container);
+    }
 
     std::string message =
         "买到 " + std::to_string(plan.units) + " 份 " + info.itemName + "（共 " + std::to_string(plan.items) + " 个）";
@@ -946,7 +957,10 @@ TradeResult buyUnits(
     }
     if (plan.units < submission.units) {
         // 部分成交：如实说清楚为什么只给了这么多（DESIGN §10.3）。
-        message += "（商店箱里的货、余额或背包空间不够，只成交了 " + std::to_string(plan.units) + " 份）";
+        // 管理员店的库存是无限的，别把「商店箱里的货」列成一个原因——它不存在。
+        message += info.adminShop ? "（你的余额或背包空间不够，只成交了 " + std::to_string(plan.units) + " 份）"
+                                  : "（商店箱里的货、余额或背包空间不够，只成交了 " + std::to_string(plan.units)
+                                        + " 份）";
     }
     return {.status = TradeStatus::Done, .plan = plan, .message = std::move(message)};
 }

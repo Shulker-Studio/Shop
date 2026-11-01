@@ -162,10 +162,16 @@ std::optional<ShopSnapshot> readShop(BlockSource& region, BlockPos const& signPo
     // 停业是牌面上的状态（第 3 行末尾的 `:x`）：牌子一读就带过来，不靠内存标记。
     info.closed        = parsed.spec->closed;
     // 件数 → 份数的除法只有 `unitsFromItems` 一处，商店箱的货与背包容量共用。
-    info.stockUnits = unitsFromItems(
-        static_cast<int>(std::min<std::int64_t>(lookup.itemCount, std::numeric_limits<int>::max())),
-        info.amountPerUnit
-    );
+    //
+    // 管理员店的箱子是**模板箱**：里面那几件只用来定「这家店卖什么」，不是库存。
+    // 所以它的可成交份数是无限，而不是 `itemCount / 每份件数`（否则箱子只放一件样品时
+    // 表单会写「0 份」，而 `planTrade` 说无限——两套真相，spec D2）。
+    info.stockUnits = info.adminShop
+                        ? StockView::makeUnlimited()
+                        : StockView::makeFinite(unitsFromItems(
+                              static_cast<int>(std::min<std::int64_t>(lookup.itemCount, std::numeric_limits<int>::max())),
+                              info.amountPerUnit
+                          ));
     // 货币符号只从配置来：这里不留第二个默认值。
     info.currencySymbol = config.economy.currencySymbol;
 

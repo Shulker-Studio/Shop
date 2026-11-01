@@ -293,3 +293,25 @@ TEST_CASE("停业：管理入口照给（管理员店的 OP 是 Visitor，入口
     // 没有管理身份的人：停业的店一个按钮都没有
     CHECK(shopFormButtons(own, ShopFormRole::Visitor, /*canManage=*/false).empty());
 }
+
+TEST_CASE("表单正文：无限库存写「无限」，不编一个数字（DESIGN §7.4 / §10.1）") {
+    auto admin       = sampleShop();
+    admin.adminShop  = true;
+    admin.stockUnits = StockView::makeUnlimited();
+
+    auto const lines = shopInfoLines(admin);
+    CHECK(hasLine(lines, "可成交份数：无限（管理员店，永远有货）"));
+    // 旧的有限说法一个字都不该留下：同一个正文里两种真相最容易被读成「只有 3 份」
+    CHECK_FALSE(hasLine(lines, "可成交份数：3 份"));
+}
+
+TEST_CASE("表单按钮：无限库存照常给买卖按钮，库存不是藏按钮的理由") {
+    auto admin       = sampleShop();
+    admin.adminShop  = true;
+    admin.stockUnits = StockView::makeUnlimited();
+
+    auto const buttons = shopFormButtons(admin, ShopFormRole::Visitor, /*canManage=*/false);
+    REQUIRE(buttons.size() == 2);
+    CHECK(buttons[0].action == ShopFormAction::Buy);
+    CHECK(buttons[1].action == ShopFormAction::Sell);
+}

@@ -72,9 +72,9 @@ std::string capHintOf(ShopInfoData const& data, TradeDirection direction) {
     return wordingOf(direction).capHint;
 }
 
-/// 剩下的货有几份：买入看商店箱（`stockUnits`）、卖出看玩家手里（`heldUnits`）。
-int goodsCount(ShopInfoData const& data, TradeDirection direction) {
-    return direction == TradeDirection::Sell ? data.heldUnits : data.stockUnits;
+/// 剩下的货有几份：买入看商店箱（`stockUnits`，管理员店是无限）、卖出看玩家手里（`heldUnits`，永远有限）。
+StockView goodsOf(ShopInfoData const& data, TradeDirection direction) {
+    return direction == TradeDirection::Sell ? StockView::makeFinite(data.heldUnits) : data.stockUnits;
 }
 
 /// 「一份」的金额文本；价格缺失时给占位。
@@ -144,7 +144,7 @@ std::string unitsFormContent(TradeDirection direction, ShopInfoData const& data,
     append("每份：" + std::to_string(data.amountPerUnit) + " 个");
     append(std::string{words.priceLabel} + "：" + unitPriceText(data, direction) + " / 份");
     // 卖出的限额是玩家自己手里有几份，买入的限额是商店箱里还有几份（DESIGN §10.3）。
-    append(std::string{words.goodsLabel} + "：" + std::to_string(goodsCount(data, direction)) + " 份");
+    append(std::string{words.goodsLabel} + "：" + stockUnitsText(goodsOf(data, direction)));
     if (direction == TradeDirection::Sell) {
         // 卖出那三个上限中另两个（§10.3）：箱子还能装多少、店主付得起多少。
         // 买入侧的对应两行是「商店箱里的货还够」与「余额」。

@@ -1,5 +1,7 @@
 #pragma once
 
+#include "shop/StockView.h"
+
 #include <cstdint>
 #include <limits>
 #include <optional>
@@ -81,15 +83,20 @@ struct TradePlan {
 ///
 /// | 字段 | 买入 | 卖出 |
 /// | --- | --- | --- |
-/// | `goodsUnits` | 商店箱能凑几份 | 玩家手里有几份 |
-/// | `roomUnits` | 背包还能放几份 | 商店箱还能装几份 |
+/// | `goodsUnits` | 商店箱能凑几份（管理员店：无限） | 玩家手里有几份（**永远有限**） |
+/// | `roomUnits` | 背包还能放几份（永远有限） | 商店箱还能装几份（管理员店：无限，票 02） |
 /// | `payerFunds` | 买家余额 | 店主余额 |
+///
+/// 卖出方向的「货」是玩家背包里的实物，**必须保持有限**：把它当无限就等于凭空给玩家
+/// 复制物品（票 01 明令）。无限只属于管理员店那一侧的模板箱。
 struct TradeRequest {
     int          requested     = 1; ///< 玩家要成交几份
     int          amountPerUnit = 0; ///< 一份的件数（牌面第 2 行）
     std::int64_t unitPrice     = 0; ///< 一份的价格（买入价或卖出价）
-    int          goodsUnits    = 0; ///< 货现在够几份
-    int          roomUnits     = 0; ///< 收货方还能收几份
+    /// 货现在够几份。上限来自「这一个数字」，无限时它不参与 `min`（`StockView::finiteUnits`）。
+    StockView goodsUnits;
+    /// 收货方还能收几份。同上：无限时不参与 `min`。
+    StockView roomUnits;
     /// 付款方当前余额。**读不到时不能填 0**（那会把「读不到」当成「没钱」），
     /// 调用方要么先拒绝，要么这一笔根本不涉及钱（免费店）。
     std::int64_t payerFunds = 0;
@@ -132,13 +139,16 @@ struct TradeDecision {
 /// 这次最多能成交几份：`min(maxUnits, goodsUnits, roomUnits, 付款方余额能付的份数)`
 /// （DESIGN §10.1 第 3 步）。
 ///
+/// `goodsUnits` / `roomUnits` 是无限时**该项不参与 min**（管理员店的模板箱永远有货 / 永远收得下），
+/// 其余上限照旧生效——无限关掉的只有它自己那一项。
+///
 /// `taxRate` 非 0 时按**含税成本**算付款方的份数上限（见 `affordableUnitsWithTax`），
 /// 调用方只为「要额外掏这份税」的付款方传非 0（卖出方向的店主）。
 /// 份数表单显示的上限与交易执行的上限都调它，别在两处各自 `std::min` 一遍。
 int maxTradeUnits(
     int          maxUnits,
-    int          goodsUnits,
-    int          roomUnits,
+    StockView    goodsUnits,
+    StockView    roomUnits,
     std::int64_t unitPrice,
     std::int64_t payerFunds,
     double       taxRate = 0.0
@@ -146,7 +156,7 @@ int maxTradeUnits(
 
 /// 同上，但「付款方能承受几份」已经算好了（`planTrade` 要拿它区分是哪一条上限挡住的，
 /// 自己算一次再传进来，免得同一个二分跑两三遍）。
-int maxTradeUnits(int maxUnits, int goodsUnits, int roomUnits, int affordableUnits);
+int maxTradeUnits(int maxUnits, StockView goodsUnits, StockView roomUnits, int affordableUnits);
 
 /// 算出这次能成交几份、搬几件、多少钱；不能成交就说明是哪一条上限挡住的。
 ///

@@ -248,3 +248,24 @@ TEST_CASE("份数变少的确认正文：卖出的成因不是「这家店只够
     CHECK_FALSE(hasLine(content, "这家店现在只够成交"));
     CHECK(hasLine(content, "实际收款：$ 5"));
 }
+
+TEST_CASE("份数表单正文：无限库存写「无限」，不写成数字") {
+    auto admin       = sampleShop();
+    admin.adminShop  = true;
+    admin.stockUnits = StockView::makeUnlimited();
+
+    auto const content = unitsFormContent(TradeDirection::Buy, admin, makeUnitsFormModel(4));
+    CHECK(hasLine(content, "商店箱里的货还够：无限（管理员店，永远有货）"));
+    // 箱子里明明只有一件样品，写「5 份」会让玩家以为买 5 份就卖光
+    CHECK_FALSE(hasLine(content, "商店箱里的货还够：5 份"));
+}
+
+TEST_CASE("份数表单正文：卖出方向仍是玩家手里的数字，货没有被无限化") {
+    auto admin       = sampleShop();
+    admin.adminShop  = true;
+    admin.stockUnits = StockView::makeUnlimited(); // 只管买入；卖出看玩家背包
+
+    auto const content = unitsFormContent(TradeDirection::Sell, admin, makeUnitsFormModel(3));
+    CHECK(hasLine(content, "你手里有：3 份"));
+    CHECK_FALSE(hasLine(content, "你手里有：无限"));
+}

@@ -22,6 +22,16 @@ std::string moneyText(std::string const& symbol, std::int64_t amount) {
     return symbol + " " + std::to_string(amount);
 }
 
+std::string stockUnitsText(StockView const& stock) {
+    auto const finite = stock.finiteUnits();
+    if (!finite) {
+        // 无限不编数字：编出来的那个数会被玩家当成「还剩这么多」。括号里写清为什么无限，
+        // 因为同一家店卖出方向的「货」是有限的（玩家背包），只有模板箱是无限的。
+        return "无限（管理员店，永远有货）";
+    }
+    return std::to_string(*finite) + " 份";
+}
+
 std::optional<std::int64_t> unitPriceOf(ShopInfoData const& data, TradeDirection direction) {
     return direction == TradeDirection::Sell ? data.sellPrice : data.buyPrice;
 }
@@ -93,7 +103,7 @@ std::vector<std::string> shopInfoLines(ShopInfoData const& data) {
     if (!data.buyPrice) {
         lines.push_back("可成交份数：—（本店只收购，以你手里的数量为准）");
     } else {
-        lines.push_back("可成交份数：" + std::to_string(data.stockUnits) + " 份");
+        lines.push_back("可成交份数：" + stockUnitsText(data.stockUnits));
     }
 
     if (data.balance) {

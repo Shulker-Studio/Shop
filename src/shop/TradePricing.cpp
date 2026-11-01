@@ -30,11 +30,18 @@ int affordableUnits(std::int64_t unitPrice, std::int64_t funds) {
     return static_cast<int>(std::min<std::int64_t>(units, std::numeric_limits<int>::max()));
 }
 
-int tradeUnits(int requested, int stockUnits, int backpackUnits, int affordable) {
+int tradeUnits(int requested, StockView stock, StockView room, int affordable) {
     if (requested <= 0) {
         return 0;
     }
-    const int units = std::min({requested, stockUnits, backpackUnits, affordable});
+    // 无限的项**不进 min**：「库存无限」用的不是一个大数，而是这一项根本不存在。
+    // 所以漏掉一个调用点也不会得到「一边说无限、一边被卡住」——那两种说法在这里是同一处。
+    int units = std::min(requested, affordable);
+    for (auto const& view : {stock, room}) {
+        if (auto const finite = view.finiteUnits()) {
+            units = std::min(units, *finite);
+        }
+    }
     return std::max(units, 0);
 }
 

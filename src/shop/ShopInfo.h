@@ -24,7 +24,9 @@ struct ShopInfoData {
     int                         amountPerUnit = 0; ///< 一份的件数（牌面第 2 行）
     std::optional<std::int64_t> buyPrice;          ///< 一份的买入价，玩家付给店主
     std::optional<std::int64_t> sellPrice;         ///< 一份的卖出价，店主付给玩家
-    int                         stockUnits = 0;    ///< 可成交份数（商店箱里件数 / 每份件数）
+    /// 可成交份数（商店箱里件数 / 每份件数）。管理员店的模板箱是 `makeUnlimited()`：
+    /// 表单写「无限」，`planTrade` 的 `min` 里没有这一项（票 01）。
+    StockView stockUnits;
     /// 玩家手里的同种商品够几份。卖出方向的限额来源（DESIGN §10.3），
     /// 与 `balance` 一样是「谁在看」的属性，由调用方填；信息表单不显示它。
     int heldUnits = 0;
@@ -45,6 +47,12 @@ struct ShopInfoData {
 
 /// `$ 10` / `金币 10` / 符号为空时只留 `10`。
 std::string moneyText(std::string const& symbol, std::int64_t amount);
+
+/// 份数文本：`3 份` / `无限（管理员店，永远有货）`。
+///
+/// 表单正文里凡是显示「库存 / 还剩几份」的地方都走它：一处写「无限」、一处写数字
+/// 是最容易被读成「其实只剩几份」的两种真相（DESIGN §10.1 D2）。
+std::string stockUnitsText(StockView const& stock);
 
 /// 这个方向上「一份」的价格：买入看 `buyPrice`，卖出看 `sellPrice`（DESIGN §10.1）。
 ///
