@@ -156,6 +156,13 @@ attachedShopSignsAt(BlockSource& region, BlockPos const& containerPos, ShopConfi
 std::vector<AttachedShopSign>
 shopSignsWithAttachedCell(BlockSource& region, BlockPos const& attachedCell, ShopConfig const& config);
 
+/// 方块状态 `facing_direction` 的原始值（0 下 / 1 上 / 2 北 / 3 南 / 4 西 / 5 东）。
+///
+/// 投掷器靠它决定把物品喷向哪一格（DESIGN §6.2 H2d）：`pushOutItems` 只拿到 `BlockSource`，
+/// 朝向只能从方块状态读。读不到返回空，调用方放行——脏状态不该让一次搬运被误拦。
+/// 方向编号换成坐标这一步在纯逻辑层（`shop/ContentProtection.h` 的 `cellInDirection`）。
+std::optional<int> facingDirectionAt(BlockSource& region, BlockPos const& pos);
+
 /// 这一格是不是被商店占用的方块：商店牌本身，或绑着商店牌的容器（DESIGN §9.3）。
 ///
 /// 判据只在这里组装一次：破坏防护（08）的四条 hook 与 07 的攻击/拆除路径都问它，

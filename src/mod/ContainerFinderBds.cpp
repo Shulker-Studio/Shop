@@ -430,6 +430,12 @@ shopSignsWithAttachedCell(BlockSource& region, BlockPos const& attachedCell, Sho
     return attached;
 }
 
+std::optional<int> facingDirectionAt(BlockSource& region, BlockPos const& pos) {
+    // 状态名的命名空间差异（`minecraft:facing_direction`）由 `readIntState` 统一处理，
+    // 这里不另写一份「按名字找状态 ID」的循环。
+    return readIntState(region.getBlock(pos), "facing_direction");
+}
+
 bool isShopBlockAt(BlockSource& region, BlockPos const& pos, ShopConfig const& config) {
     // 便宜的粗筛：商店牌与容器都必有方块实体，没方块实体的格子一定不是。
     // 爆炸列表动辄上百格，大部分被这一句挡掉，不必每格都解析牌面文本。

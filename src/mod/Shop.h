@@ -33,4 +33,10 @@ private:
     std::optional<ShopConfig> mConfig;
 };
 
+/// 当前可用的配置；模组没启用（未加载或配置非法）时为空。
+///
+/// 破坏防护（08）与内容防偷（09）的每一条 hook 都先问它：读不到配置就原样放行原版
+/// ——宁可在空配置上放过一次搬运，也不要对着一份不存在的配置误判。
+[[nodiscard]] ShopConfig const* currentShopConfig();
+
 } // namespace ss::shop

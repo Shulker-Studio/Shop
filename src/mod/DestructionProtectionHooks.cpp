@@ -1,6 +1,7 @@
 #include "mod/DestructionProtectionHooks.h"
 
 #include "mod/ContainerFinderBds.h"
+#include "mod/HookSlots.h"
 #include "mod/Shop.h"
 #include "shop/DestructionProtection.h"
 
@@ -22,20 +23,12 @@
 #include "mc/world/level/dimension/Dimension.h"
 #include "mc/world/phys/AABB.h"
 
-#include <iterator>
 #include <type_traits>
 #include <vector>
 
 // 五条 hook 放在具名命名空间而不是匿名命名空间：宏展开里有一个 `inline static` 的
 // 注册计数，匿名命名空间会让它变成内部链接，clang-cl 于是报 unused-variable。
 namespace ss::shop::detail {
-
-/// 配置没加载成功时一律放行：那时模组不该在跑（`Shop::enable` 只在配置可用时调用我们），
-/// 这里只是兜底——宁可放过一次爆炸，也不要对着一份空配置误判。
-ShopConfig const* currentConfig() {
-    auto const& config = Shop::getInstance().config();
-    return config ? &*config : nullptr;
-}
 
 // ---------------------------------------------------------------------------
 // H3a 爆炸：把商店方块从「这次要炸掉的格子」里删掉
@@ -49,7 +42,7 @@ LL_TYPE_INSTANCE_HOOK(
     CoordinatorResult,
     EventRef<MutableBlockGameplayEvent<CoordinatorResult>> event
 ) {
-    auto const* config = currentConfig();
+    auto const* config = currentShopConfig();
     if (config == nullptr) {
         return origin(event);
     }
@@ -93,7 +86,7 @@ LL_TYPE_INSTANCE_HOOK(
     uchar           curBranchFacing,
     uchar           pistonMoveFacing
 ) {
-    auto const* config = currentConfig();
+    auto const* config = currentShopConfig();
     if (config != nullptr && isShopBlockAt(region, curPos, *config)) {
         // 原版把 false 读成「这一路推不动」：整次推动失败，别处的活塞照常工作。
         // 活塞没有「部分推动」的语义，所以这里不可能只挡住商店箱而让同一次推动的
@@ -155,7 +148,7 @@ LL_TYPE_INSTANCE_HOOK(
     BlockChangeContext const& changeSourceContext
 ) {
     if (witherDestroyInProgress()) {
-        auto const* config = currentConfig();
+        auto const* config = currentShopConfig();
         if (config != nullptr && isShopBlockAt(region, pos, *config)) {
             // 这一格不受凋灵影响；同一次破坏里的其他格子继续由原版毁掉
             return false;
@@ -181,7 +174,7 @@ LL_TYPE_INSTANCE_HOOK(
     int             age,
     BlockPos const& firePos
 ) {
-    auto const* config = currentConfig();
+    auto const* config = currentShopConfig();
     if (config != nullptr && isShopBlockAt(region, pos, *config)) {
         // 这一格不烧：火焰照常蔓延、旁边的木头照常烧掉（ADR-0004）
         return;
@@ -189,16 +182,9 @@ LL_TYPE_INSTANCE_HOOK(
     origin(region, pos, chance, random, age, firePos);
 }
 
-/// 一条 hook 的注册/反注册与它的状态。五条 hook 的接线方式完全相同，
-/// 只差一个名字和一对函数，所以用一张表而不是五段同形的 if——加第六条时只加一行。
-struct HookSlot {
-    char const* name;
-    int (*attach)();
-    bool (*detach)();
-    bool attached = false; ///< 已经挂过了，不重复挂、也不漏反注册（不代表「挂成功了」）
-};
-
-HookSlot gSlots[] = {
+/// 这一条 hook 的注册/反注册与它的状态；接线方式与 09 的内容防偷完全相同，
+/// 所以表结构与「挂上 / 逆序解开」的实现在 `mod/HookSlots.h`，这里只列名单。
+HookSlot gDestructionSlots[] = {
     {"BlockEventCoordinator::sendEvent",
      [] { return ExplosionStartedHook::hook(); },
      [] { return ExplosionStartedHook::unhook(); }},
@@ -220,36 +206,8 @@ HookSlot gSlots[] = {
 
 namespace ss::shop {
 
-void registerDestructionProtectionHooks() {
-    for (auto& slot : detail::gSlots) {
-        // 重复注册 = 同一条路径被拦两次；已经挂上的不重复挂（enable 不该被调两次，这里只是幂等）
-        if (slot.attached) {
-            continue;
-        }
-        // 返回值不拿来判成败：`ll::memory::hook` 只把它转发出去，成功对应 0 还是 1 不是契约
-        // （参考实现 ChestLock 也直接忽略）。记下原值供真机排查「符号漂移」，
-        // 真正的判据是功能是否生效（12 的验收项）。五条各自独立，一条不响不该拖垮其他四条。
-        int const status = slot.attach();
-        if (status != 0) {
-            Shop::getInstance().getSelf().getLogger().warn(
-                "破坏防护 hook 注册返回 {}（{}），若对应行为无效即为符号漂移",
-                status,
-                slot.name
-            );
-        }
-        slot.attached = true;
-    }
-}
+void registerDestructionProtectionHooks() { attachHooks(detail::gDestructionSlots); }
 
-void unregisterDestructionProtectionHooks() {
-    // 反注册按注册的逆序来，并且只动真的挂上了的那几条（注册失败的从未挂上）
-    for (auto slot = std::rbegin(detail::gSlots); slot != std::rend(detail::gSlots); ++slot) {
-        if (!slot->attached) {
-            continue;
-        }
-        slot->detach();
-        slot->attached = false;
-    }
-}
+void unregisterDestructionProtectionHooks() { detachHooks(detail::gDestructionSlots); }
 
 } // namespace ss::shop

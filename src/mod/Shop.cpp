@@ -1,6 +1,7 @@
 #include "mod/Shop.h"
 
 #include "mod/ContainerProtectionListener.h"
+#include "mod/ContentProtectionHooks.h"
 #include "mod/DestructionProtectionHooks.h"
 #include "mod/EconomyService.h"
 #include "mod/SignEditListener.h"
@@ -14,6 +15,11 @@ namespace ss::shop {
 Shop& Shop::getInstance() {
     static Shop instance;
     return instance;
+}
+
+ShopConfig const* currentShopConfig() {
+    auto const& config = Shop::getInstance().config();
+    return config ? &*config : nullptr;
 }
 
 bool Shop::load() {
@@ -37,11 +43,13 @@ bool Shop::enable() {
     registerSignInteractListener();
     registerContainerProtectionListener();
     registerDestructionProtectionHooks();
+    registerContentProtectionHooks();
     return true;
 }
 
 bool Shop::disable() {
     getSelf().getLogger().debug("Disabling...");
+    unregisterContentProtectionHooks();
     unregisterDestructionProtectionHooks();
     unregisterContainerProtectionListener();
     unregisterSignInteractListener();

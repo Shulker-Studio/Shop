@@ -228,10 +228,10 @@ PlayerEditSignBeforeEvent
 
 | 编号 | 目标 | 用途 | 风险 |
 | --- | --- | --- | --- |
-| H2a | `Hopper::_tryPullInItemsFromAboveContainer(BlockSource&, Container&, Vec3 const&)`、`Hopper::_pushOutItems(BlockSource&, Container&, Vec3 const&, int)` | 漏斗**方块与漏斗矿车**从商店箱抽货 / 往商店箱塞货（两者共用 `Hopper` actor 的抽取逻辑，hook 一次覆盖两者） | 中（iListenAttentively 无漏斗事件；ChestLock 已验证写法） |
+| H2a | `Hopper::_tryPullInItemsFromAboveContainer(BlockSource&, Container&, Vec3 const&)`、`Hopper::_pushOutItems(BlockSource&, Container&, Vec3 const&, int)` | 漏斗**方块与漏斗矿车**从商店箱抽货 / 往商店箱塞货（两者共用 `Hopper` actor 的抽取逻辑，hook 一次覆盖两者）；命中商店箱就跳过这一次搬运 | 中（iListenAttentively 无漏斗事件；ChestLock 已验证写法） |
 
-| H2c | `TransportItemsGoal::tick` / `_executeEvent`（`v1_21_100` 的新 AI goal，经 `ChestBlockActor::ChestCloser` 开箱取放） | 铜傀儡从商店箱取货 / 往商店箱放货 | 中（goal 粒度，取消会影响该傀儡的所有运输；也可能误伤同样使用该 goal 的其他生物） |
-| H2d | `DropperBlockActor::pushOutItems(BlockSource&)` | 投掷器往商店箱塞货 | 低 |
+| H2c | `TransportItemsGoal::_executeEvent(TransportItemsGoal::Event) const`（`v1_21_100` 的新 AI goal，经 `ChestBlockActor::ChestCloser` 开箱取放） | 铜傀儡从商店箱取货 / 往商店箱放货：丢掉「即将开始的取 / 放」这一个事件，**不取消 goal**（`canUse` / `canContinueToUse` / `tick` 一个都不碰，所以不会因为 goal 被取消而失去运输行为） | 中（goal 级取消会影响该傀儡的所有运输、也可能误伤同样用这个 goal 的生物，所以不走那条路；代价是「这个事件是不是搬运闸门」只能真机确认，见下方落地口径与 §14） |
+| H2d | `DropperBlockActor::pushOutItems(BlockSource&)` + `DropperBlockActor::getContainerAt(BlockSource&, Vec3 const&)` | 投掷器往商店箱塞货：只在这一次搬运的作用域里让容器查找交不出商店箱，原版因此把物品喷到地上，而不是把整个投掷器停掉 | 中（多压一层「`pushOutItems` 会先查目标容器」的假设；查不到就失效，`pushOutItems` 会留一条 warn 兜底） |
 | H3a | `ExplosionStartedEvent::mBlocks`（`TypedStorage<8,64,std::unordered_set<BlockPos>>`），由 `BlockEventCoordinator::sendEvent` 拦截 | 爆炸时把商店方块从方块列表里**剔除**，而不是取消整场爆炸 | 中（同 ChestLock 已验证） |
 | H3b | `PistonBlockActor::_attachedBlockWalker(BlockSource&, BlockPos const&, uchar, uchar)` | 活塞推动路径上遇到商店方块时返回 false（原版语义：这一路推不动）。推与拉都走这条移动路径，但「拉动也走它」尚未真机确认（12 有验收项） | 中 |
 | H3c | `WitherBoss::_destroyBlocks(Level&, AABB const&, BlockSource&, int, WitherAttackType)` **只置标志后放行** + `Level::$destroyBlock(BlockSource&, BlockPos const&, bool, BlockChangeContext const&)` 在标志期内逐格拒绝 | 凋灵破坏范围内商店方块逐格留下，其余照常被毁——**不是**提前返回 | 中高（头文件只给整个 `AABB`，逐格剔除只能落在 `Level::destroyBlock` 上；依赖「凋灵的销毁走这条路径」，只能在真机确认） |
@@ -241,6 +241,13 @@ PlayerEditSignBeforeEvent
 > H3 之所以不用 iListenAttentively 的 `ExplosionBeforeEvent` / `PistonPushBeforeEvent` / `WitherDestroyBeforeEvent` / `FireTryBurnBlockBeforeEvent`，是因为那些事件只能**取消整场**爆炸/推动/燃烧，粒度不对（ADR-0004）。这几条 hook 的符号在 LeviLamina 26.51.8 头文件中均已确认存在，写法参照 ChestLock。
 >
 > **H3c 与 ChestLock 不一样**：ChestLock 发现范围内有受保护箱子就 `return`，等于取消整场凋灵破坏——那正是 ADR-0004 拒绝的行为（旁边方块也一块不掉）。26.51.8 的 `_destroyBlocks` 只拿到一个 `AABB`，没有逐格的插手点，所以这里改成「`_destroyBlocks` 只置一个『凋灵正在破坏』的线程标志后放行原版，由 `Level::$destroyBlock` 在标志期内逐格拒绝」。标志只在这一次凋灵破坏期间为真，因此玩家拆除（07）、爆炸（H3a）、我们主动打掉商店牌都不受影响。若真机发现凋灵的销毁不走 `Level::destroyBlock`（守卫一次都没命中），退路是回到提前返回，代价是凋灵范围内旁的方块不被破坏（12 有对应验收项）。
+
+> **H2 的落点（09 落地时）**：四条路径（漏斗抽、漏斗/矿车塞、铜傀儡取放、投掷器塞）共用同一个判据——纯逻辑 `src/shop/ContentProtection.h` 的 `shouldSkipContentTransfer`（目标容器是商店箱就跳过这一次搬运），而「这一格是不是商店箱」仍然只问 `isShopBlockAt`。粒度的目标是「跳过这一次」，不是停掉装置：
+>
+> - **漏斗方块与漏斗矿车**：`_tryPullInItemsFromAboveContainer` 判漏斗正上方那一格（`pos` 是装置自己的位置，源容器固定在它上方），`_pushOutItems` 判 `attachedFace` 那一格（方向编号 0 下 / 1 上 / 2 北 / 3 南 / 4 西 / 5 东，由纯逻辑 `cellInDirection` 换成坐标，与 `neighboursOf` 共用同一张偏移表）。两条 hook 同时覆盖方块与矿车，不按形态各写一遍。
+> - **投掷器**：`pushOutItems` 只开一个「这一次的目标是商店箱」的 thread-local 作用域，由内层的 `getContainerAt` 对这一格返回 `nullptr`；原版找不到容器就走「喷到地上」的分支，物品不会留在投掷器里。内层若一次都没被问过（符号漂移，或这条版本不经过它），`pushOutItems` 会记一条 warn——不许静默。
+> - **铜傀儡**：只丢 `StartTakeInteractionWillSucceed` / `StartPlaceInteractionWillSucceed` 两个事件，「会失败」与「交互结束」原样放行；`canUse` / `canContinueToUse` / `tick` 一个都不碰，因此**不会因为 goal 被取消**而失去运输行为。这里有两件事只能在真机确认（12 有验收项），不能当成已证结论：① 这个事件是不是真正的搬运闸门（是的话货就搬不走，否则拦不住）；② 丢掉事件后 goal 会不会停在 `Interacting` 等一个永不开始的交互（表现为傀儡在箱子旁反复开箱或停住）。若 ① 不成立或 ② 发生，退路是在 `Interacting` 状态下让 `$canContinueToUse` 返回 false（引擎自己 `stop()` 收尾、关箱清状态，代价是这一趟运输白跑）。
+> - 五条 hook 都要求「配置读不到就原样放行」（`currentShopConfig()`），与 H3 的兜底同一条。
 
 ### 6.3 直接监听即可（iListenAttentively 提供，无需自己 hook）
 
@@ -559,6 +566,14 @@ public:
 - **凋灵不提前返回**：`WitherBoss::_destroyBlocks` 只置「凋灵正在破坏」的线程标志后放行原版，由 `Level::$destroyBlock` 在标志期内逐格拒绝（§6.2 H3c）。提前返回会把整场破坏取消，违反 ADR-0004。
 - 「拆商店牌依附的方块」单列一支（H3e）：拆的往往不是容器而是块普通方块，但牌子会物理掉落、商店随之消失，所以放行条件与拆牌相同（店主与 OP），提示要把后果说出来。牌挂在石头墙上也算——牌面判据不看附着容器（§9.2）。店主拆掉时什么都不用做：牌子由原版物理打落，与拆牌等价（§4.2）。
 
+**内容防偷**（表格里那三行：漏斗方块/漏斗矿车抽塞、铜傀儡取放、投掷器塞）的落地口径（09）：
+
+- 判据与 07／08 完全一致：只看「这一格是不是商店箱」（`isShopBlockAt`：牌面「像商店」+ 附着容器），不看 `shopContainers` 白名单、也不看店主——四条搬运路径（漏斗方块、漏斗矿车、铜傀儡、投掷器）对非店主、店主、OP 一律阻止。商店箱的内容只能通过交易流动，店主也不能拿漏斗替自己开箱。
+- 粒度是「这一次搬运」：漏斗与投掷器跳过这一次、下一次照常搬运别处；铜傀儡只丢「即将开始取/放」的那一个事件，不取消 goal（见 §6.2 的落地口径）。
+- 被拦之后物品去哪：投掷器走原版「找不到目标容器」的分支，物品**喷到地上**；漏斗与铜傀儡的物品留在原处，不复制、不掉落。
+- 配置缺失时一律放行（与 08 同一条兜底）：模组没启用时这几条 hook 对普通容器毫无影响。
+- 铜傀儡这一条的拦截只认 goal 记下的目标容器坐标（`mTargetContainerPosition`），粒度与可靠性都不如漏斗那两条；它是否真的挡住、会不会让 goal 卡在交互中，都以 12 的验收结果为准（§14 有两行对应风险）。
+
 「编辑商店牌文本」有两道闸：交互阶段取消 `PlayerInteractBlockEvent`（非店主连编辑界面都弹不出来），提交阶段在 `PlayerEditSignBeforeEvent` 里再判一次（非店主提交一律丢弃这个包）。后者是防绕过：别的模组、取消语义失效、以后从管理表单进编辑，都不该让改牌生效。
 
 有一个例外：**牌还在、但店停摆了**（附着格不再是可用容器，或牌面已经不严格合法）。这时没有表单可弹：能进原版编辑界面的判据与提交阶段相同（`mayEditShopSignText`），其余人被拦下并被告知停摆的原因（「商店箱不在了」/「写法现在不算有效商店」）——不能把编辑界面递给非店主，哪怕提交阶段还会兜底。
@@ -841,6 +856,14 @@ public:
 | 并发/线程安全 | 待验证 | 表单回调切主线程执行方块操作 |
 | 拆箱时手动打掉商店牌 | 待实测 | 在 `PlayerDestroyBlockEvent` 里调 `Level::destroyBlock` 毁牌；确认不会与原版物理/双箱处理重复掉落，且 `dropResources = true` 仍尊重 `doTileDrops` / 创造模式（验收第 34 条顺手看） |
 | `PlayerDestroyBlockEvent` 的触发时机 | 待实测 | 事件里能否读到 `ChestBlockActor::mLargeChestPaired`；若方块先被移除再发事件，反查会拿到空列表 → 商店箱静默放行、手动打牌也不执行（12 有验收项）。手动打牌是不可回滚的副作用：我们自己打完牌后若另一个监听取消了这次拆除，会留下「牌已掉、箱子还在」 |
+| 内容防偷五条 hook 的符号 | 待实测 | `Hopper::_tryPullInItemsFromAboveContainer` / `_pushOutItems`、`DropperBlockActor::pushOutItems` / `getContainerAt`、`TransportItemsGoal::_executeEvent` 在 26.51.8 头文件里都存在，但 `hook()` 的返回值不是契约（见 08 的同一条）。注册非 0 会留一条 warn，真正的判据是 12 的逐条验收 |
+| 投掷器的拦截依赖两层 | 待实测（本票最脆的一环） | 内层 `getContainerAt` 若不是 `pushOutItems` 的必经之路，投掷器会照常把货塞进商店箱。拦不住时 `pushOutItems` 会打一条 warn（不是静默）；退路是在入口就返回，代价是物品留在投掷器里、不落地 |
+| 铜傀儡的拦截点是不是搬运闸门 | 待实测 | `TransportItemsGoal::_executeEvent` 是 `const` 的通知式接口，「即将成功的取/放」是否真的由它触发搬运，从头文件看不出来。若实测挡不住，退路是 `$canContinueToUse` 在 `mState == Interacting` 且目标是商店箱时返回 false（引擎自己 `stop()`，代价是这一趟运输白跑） |
+| 铜傀儡丢掉事件后会不会卡在交互中 | 待实测 | 同一个 `_executeEvent` 也可能是状态推进点（丢掉 `FinishedInteraction` 会卡住，正说明这一点）。丢掉 `Start*` 后 goal 有可能停在 `Interacting` 等一个永不开始的交互，表现为傀儡在箱子旁反复开箱或停住——那样它虽然搬不走货，却是票面第 7 条要避免的形态。12 有专门验收项 |
+| 铜傀儡只认 `mTargetContainerPosition` | 已知 | 拦截判据只看 goal 记下的目标容器坐标。这个字段为空时我们放行（正常状态下此时也不会搬运）；若真机观察到「货被搬走但该字段为空」，说明它用了别的字段或别的路径，需要在 12 里记下来并补一处判据 |
+| 投掷器的坐标口径 | 待实测 | 内层 `getContainerAt` 收到的 `Vec3` 若不是目标格的方块原点（中心点或带偏移），我们会既挡不住、也可能没报——所以 warn 的触发条件改成「这次没真正挡到」（`reached == false`），并且分开报告「从没被问过」与「问了但坐标对不上」两种失效 |
+| 漏斗 `attachedFace` 的方向口径 | 待实测 | 沿用 ChestLock 的读法：`position` 是装置自己、`attachedFace` 是搬运方向。若真机发现漏斗往商店箱里塞货仍然成功，说明这一口径反了，把 `cellInDirection` 的入参取反即可（一处改动） |
+| 漏斗矿车与方块漏斗的同一性 | 待实测 | 票面要求一条 hook 同时覆盖两种形态（两者共用 `Hopper` actor 的逻辑）。这条假设来自头文件里 `Hopper::mIsEntity` 与两种形态共用同一批抽取/推出函数，需要真机各验一次 |
 | 「贴牌占箱子」 | 已知，P0 接受 | 保护从牌子推导（ADR-0002），P0 不记录箱子原主；任何人给尚未绑定的箱子贴一块像商店的牌，就能把它变成自己的商店箱，原主只能找 OP。与 Java 版 ChestShop 同为生态行为，P1 可考虑开店收费 / 领地插件 |
 
 ## 15. 配置草案
@@ -879,7 +902,7 @@ public:
 > 草案里的键随对应 ticket 落地。没有被实现读取的键（`protectShopChest`、`preventHopperExtraction`、
 > `allowMultipleShopsAtOneBlock`、`allowOneContainerPerShop`、`itemNameLocalized`、`removeInvalidShopSign`、
 > `dropSignOnCreationFailure`、`economy.createObjectiveIfMissing`、`economy.requireOwnerOnline`、`tax` 等）
-> 目前**不生效**——写进 `config.json` 也不会改变行为。已生效的键：`adminShopName`、`shopContainers`、
+> 目前**不生效**——写进 `config.json` 也不会改变行为。`preventHopperExtraction` 尤其要注意：内容防偷（09）**不读这个键**，因为 §9.2 规定漏斗 / 铜傀儡 / 投掷器对商店箱一律阻止（含店主与 OP），没有「关掉就不再防」的开关。已生效的键：`adminShopName`、`shopContainers`、
 > `maxShopAmount`、`allowPartialTransactions`、`blockSellPriceHigherThanBuy`、`allowOwnerOpenChest`、
 > `shopInteractionCooldownMs`、`ignoreCreativeMode`、`economy.backend`、`economy.scoreboardObjective`、
 > `economy.currencySymbol`。

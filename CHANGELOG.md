@@ -53,6 +53,13 @@
 - 拆商店牌**依附的方块**（`ShopBlockTouch::BreakSignSupport`、`src/mod/ContainerFinderBds.*` 的 `shopSignsWithAttachedCell`、`isShopBlockAt`）：拆掉那块墙/桶子/方块会让牌子物理掉落、商店消失，非店主因此能绕过“不能拆牌”。放行条件与拆牌相同（店主与 OP），接在 07 已有的 `PlayerAttackBlockBeforeEvent` / `PlayerDestroyBlockEvent` 监听里（不给同一事件注册第二个监听）；牌挂在石头墙上也算——牌面判据不看附着容器。
 - `src/shop/DestructionProtection.*` 把两个可判定的部分做成纯函数：`cellsToSpare`（哪些目标格子要放过：只放受保护的，其余照炸；爆炸用它筛方块列表，凋灵/火焰每次只有一格，直接问判据）与 `signsAttachedTo`（哪些牌附在目标格上：站立看下方、吊牌看上方、墙牌看向背面的反方向）。
 - `tests/shop/DestructionProtectionTest.cpp`（新）：剔除语义与依附几何，共 7 个中文用例；`ContainerProtectionTest.cpp` 补 4 个 `BreakSignSupport` 的用例。
+- 内容防偷（`src/shop/ContentProtection.*`、`src/mod/ContentProtectionHooks.*`）：漏斗方块、漏斗矿车、铜傀儡、投掷器都动不了商店箱里的东西。四条路径共用同一个判据（`shouldSkipContentTransfer`：目标容器是商店箱就跳过**这一次**搬运）+ 同一个「这一格是不是商店箱」（`isShopBlockAt`），不看白名单、也不看店主——商店箱的内容只能通过交易流动，店主也不能拿漏斗替自己开箱。粒度是「这一次搬运」，不是停掉装置。
+- H2a 漏斗（`Hopper::_tryPullInItemsFromAboveContainer` / `_pushOutItems`）：抽判漏斗正上方那一格，塞判 `attachedFace` 那一格；方块漏斗与漏斗矿车共用 `Hopper` actor 的同一套逻辑，两条 hook 同时覆盖两种形态。
+- H2d 投掷器（`DropperBlockActor::pushOutItems` + `DropperBlockActor::getContainerAt`）：入口只开一个「这一次目标是商店箱」的 thread-local 作用域，由内层容器查找交不出那一格，原版因此把物品**喷到地上**，而不是把投掷器停掉；只要这一次没真正挡到（内层没被问过，或问了但坐标对不上）就打一条 warn 并说明是哪种失效，不许静默。
+- H2c 铜傀儡（`TransportItemsGoal::_executeEvent`）：只丢掉「即将成功的取 / 即将成功的放」两个事件，`canUse` / `canContinueToUse` / `tick` 一个都不碰——不取消 goal，所以不会因为 goal 被取消而失去运输行为。这个落点是否真是搬运闸门、丢掉事件后 goal 会不会停在交互中，都属于只能真机确认的部分（已转 12）。
+- `src/shop/ContentProtection.*`（新，纯逻辑）：`cellInDirection`（`facing_direction` 0 下 / 1 上 / 2 北 / 3 南 / 4 西 / 5 东 → 目标格，与 `neighboursOf` 共用同一张偏移表）、`cellAbove`、`shouldSkipContentTransfer`。方向几何与「跳不跳」都有 doctest 覆盖（`tests/shop/ContentProtectionTest.cpp`，5 个中文用例）。
+- `src/mod/ContainerFinderBds.*` 新增 `facingDirectionAt`：投掷器的朝向只能从方块状态读，状态名的命名空间差异复用既有的 `readIntState`，不另写一份查表。
+- `src/mod/HookSlots.*`（新）：把「一张 `HookSlot{name, attach, detach, attached}` 表 + 挂上 / 逆序解开」收成一份实现，08 的破坏防护与 09 的内容防偷共用；`currentShopConfig()` 也提到 `Shop.h`，两条保护路径的「配置缺失就放行」只有一处定义。
 
 ### 变更
 
