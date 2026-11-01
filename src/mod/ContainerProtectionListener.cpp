@@ -42,9 +42,10 @@ struct ShopBlockSubject {
 /// 把「这一格方块」识别成保护对象。空 = 与商店无关，交给原版。
 ///
 /// 告示牌不是容器，两个分支不会同时命中；牌子优先（DESIGN §9.2：拆牌即关店）。
-/// 「这一格是不是被商店占用」只问 `isShopBlockAt`（那就只有一处口径，08 的四条 hook 也用它）；
+/// 「这一格是不是被商店占用」只问 `isShopBlockAt`（判据只有那一个定义，08 的四条 hook 也用它）；
 /// 这里只负责在它说「是」之后，把后续判定要用的细节（店主 / 绑着的牌）拿出来。
-std::optional<ShopBlockSubject> shopBlockAt(BlockSource& region, BlockPos const& pos, ShopConfig const& config) {
+/// （判据与细节因此会各解析一次牌面；这两个事件都按玩家操作频率走，换来一个口径是值当的。）
+std::optional<ShopBlockSubject> shopSubjectAt(BlockSource& region, BlockPos const& pos, ShopConfig const& config) {
     if (!isShopBlockAt(region, pos, config)) {
         return std::nullopt;
     }
@@ -115,6 +116,25 @@ void reject(Event& event, Player& player, ShopBlockDecision const& decision) {
     player.sendMessage(decision.message);
 }
 
+/// 攻击/拆除一格方块前的公共前段：先判这一格是不是商店方块，不是的话再判「这格上挂着谁的商店牌」
+/// （H3e），该拦就拦。
+///
+/// 返回空 = 这一格要么已经被拦下、要么与商店无关（含「只是挂着商店牌的普通方块，放行」），
+/// 调用方直接收工；返回对象 = 这一格是商店方块且放行，后续处理交给调用方。
+template <class Event>
+std::optional<ShopBlockSubject>
+shopSubjectOrRejected(Event& event, BlockSource& region, BlockPos const& pos, Player& player, ShopConfig const& config) {
+    auto const              subject  = shopSubjectAt(region, pos, config);
+    ShopBlockDecision const decision = subject
+                                         ? judge(*subject, ShopBlockTouch::BreakSign, ShopBlockTouch::BreakChest, player, config)
+                                         : judgeSupportBlock(region, pos, player, config);
+    if (!decision.allowed) {
+        reject(event, player, decision);
+        return std::nullopt;
+    }
+    return subject;
+}
+
 /// 右键打开容器：普通容器原版怎么处理就怎么处理。
 void onOpenContainer(OpenContainerBeforeEvent& event) {
     auto const& config = Shop::getInstance().config();
@@ -132,28 +152,16 @@ void onOpenContainer(OpenContainerBeforeEvent& event) {
 }
 
 /// 左键攻击方块：在挖掘进度开始之前就拦下，免得非店主对着商店箱徒劳地挖。
+/// 放行后不做事——拆除路径才是权威。
 void onAttackBlock(AttackBlockBeforeEvent& event) {
     auto const& config = Shop::getInstance().config();
     if (!config) {
         return;
     }
 
-    auto&      player  = event.self();
-    auto&      region  = player.getDimensionBlockSource();
-    auto const subject = shopBlockAt(region, event.pos(), *config);
-    if (!subject) {
-        // 不是商店方块本身，但可能挂着商店牌（H3e，与拆除那道用同一个判据）
-        ShopBlockDecision const support = judgeSupportBlock(region, event.pos(), player, *config);
-        if (!support.allowed) {
-            reject(event, player, support);
-        }
-        return;
-    }
-    ShopBlockDecision const decision =
-        judge(*subject, ShopBlockTouch::BreakSign, ShopBlockTouch::BreakChest, player, *config);
-    if (!decision.allowed) {
-        reject(event, player, decision);
-    }
+    auto& player = event.self();
+    auto& region = player.getDimensionBlockSource();
+    (void)shopSubjectOrRejected(event, region, event.pos(), player, *config);
 }
 
 /// 拆除方块：权威兜底（攻击被拦下之后仍可能有别的路径把方块拆掉）。
@@ -165,26 +173,13 @@ void onDestroyBlock(DestroyBlockEvent& event) {
 
     auto&      player  = event.self();
     auto&      region  = player.getDimensionBlockSource();
-    auto const subject = shopBlockAt(region, event.pos(), *config);
-    if (!subject) {
-        // 不是商店方块本身，但可能挂着商店牌（H3e）：放行时什么都不用做，
-        // 牌子会在下一拍被原版物理打落——与拆牌等价（DESIGN §4.2）。
-        ShopBlockDecision const support = judgeSupportBlock(region, event.pos(), player, *config);
-        if (!support.allowed) {
-            reject(event, player, support);
-        }
-        return;
-    }
+    // 放行「挂着商店牌的普通方块」时什么都不用做：牌子会在下一拍被原版物理打落，
+    // 与拆牌等价（DESIGN §4.2）；也是 H3e 与拆牌共用同一判据的地方。
+    auto const subject = shopSubjectOrRejected(event, region, event.pos(), player, *config);
 
-    ShopBlockDecision const decision =
-        judge(*subject, ShopBlockTouch::BreakSign, ShopBlockTouch::BreakChest, player, *config);
-    if (!decision.allowed) {
-        reject(event, player, decision);
-        return;
-    }
-
-    // 拆牌：放行即关店——保护状态从牌子推导（ADR-0002），牌子没了箱子立刻恢复成普通箱子。
-    if (subject->isSign) {
+    // 与商店无关、已经被拦下、或者拆的就是商店牌（放行即关店：保护状态从牌子推导，ADR-0002，
+    // 牌子没了箱子立刻恢复成普通箱子）——都不用再做什么。
+    if (!subject || subject->isSign) {
         return;
     }
 

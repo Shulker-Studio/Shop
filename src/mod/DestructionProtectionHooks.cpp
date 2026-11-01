@@ -26,6 +26,8 @@
 #include <type_traits>
 #include <vector>
 
+// 五条 hook 放在具名命名空间而不是匿名命名空间：宏展开里有一个 `inline static` 的
+// 注册计数，匿名命名空间会让它变成内部链接，clang-cl 于是报 unused-variable。
 namespace ss::shop::detail {
 
 /// 配置没加载成功时一律放行：那时模组不该在跑（`Shop::enable` 只在配置可用时调用我们），
@@ -193,7 +195,7 @@ struct HookSlot {
     char const* name;
     int (*attach)();
     bool (*detach)();
-    bool attached = false;
+    bool attached = false; ///< 已经挂过了，不重复挂、也不漏反注册（不代表「挂成功了」）
 };
 
 HookSlot gSlots[] = {
@@ -224,11 +226,16 @@ void registerDestructionProtectionHooks() {
         if (slot.attached) {
             continue;
         }
-        // 返回值非 0 表示符号没挂上（多半是版本漂移）。五条各自独立：
-        // 一条失败不该拖垮其他四条，所以逐条记日志、不 early return。
-        if (slot.attach() != 0) {
-            Shop::getInstance().getSelf().getLogger().error("破坏防护 hook 注册失败：{}", slot.name);
-            continue;
+        // 返回值不拿来判成败：`ll::memory::hook` 只把它转发出去，成功对应 0 还是 1 不是契约
+        // （参考实现 ChestLock 也直接忽略）。记下原值供真机排查「符号漂移」，
+        // 真正的判据是功能是否生效（12 的验收项）。五条各自独立，一条不响不该拖垮其他四条。
+        int const status = slot.attach();
+        if (status != 0) {
+            Shop::getInstance().getSelf().getLogger().warn(
+                "破坏防护 hook 注册返回 {}（{}），若对应行为无效即为符号漂移",
+                status,
+                slot.name
+            );
         }
         slot.attached = true;
     }

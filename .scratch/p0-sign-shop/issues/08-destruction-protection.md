@@ -28,7 +28,7 @@
 - `src/mod/ContainerFinderBds.{h,cpp}`：
   - `isShopBlockAt(region, pos, config)`：**判据只在这一次组装**（§9.3：牌面「像商店」+ 附着容器），四条 hook 与拆除路径共用；带一道「有没有方块实体」的粗筛（商店牌与容器必有，爆炸列表里大部分格子一句就挡掉）。
   - `shopSignsWithAttachedCell(region, 附着格, config)`：与 07 的 `attachedShopSignsAt` 互为两个口径——那个问「这一格**容器**绑着哪些牌」，这个只问「哪些牌的附着格是这一格」，不管这一格是不是容器。
-- `src/mod/DestructionProtectionHooks.{h,cpp}`（新，5 条 hook，手动注册/反注册，逐条记账，一条符号漂移不拖垮其他四条）：
+- `src/mod/DestructionProtectionHooks.{h,cpp}`（新，5 条 hook，手动注册/反注册，一张表逐条记账，一条符号漂移不拖垮其他四条）：
   - H3a `BlockEventCoordinator::sendEvent`：只处理 `ExplosionStartedEvent` 那一支（同一个 coordinator 还发别的方块事件），把商店方块从 `mBlocks` 里删掉再放行。
   - H3b `PistonBlockActor::_attachedBlockWalker`：路径上遇到商店方块返回 false。
   - H3c `WitherBoss::_destroyBlocks`（只置线程局部标志后放行原版）+ `Level::$destroyBlock`（标志期内对商店方块返回 false）。
@@ -48,6 +48,7 @@
 
 **已知边界**
 
+- **`hook()` 的成功返回值不是契约**：`ll::memory::hook` 只是把 `pl::hook` 的 int 转发出去，0 还是 1 代表成功在 LL 文档里没写（参考实现 ChestLock 直接忽略）。因此注册时**不拿它判成败**，挂上就记 `attached`，非 0 只记一条 warn 供排查；真机判据是功能是否生效（12 有验收项）。
 - **爆炸剔除依赖 `ValueOrRef` 给的是真引用**：`sendEvent` 里拿到的是 `Details::ValueOrRef<ExplosionStartedEvent>`，我们原地改 `mBlocks`。若某版本给它的是副本，剔除会静默失效（12 的 TNT 项写了判据与退路）。
 - **凋灵逐格剔除依赖一处引擎路径假设**：凋灵销毁方块必须经过 `Level::destroyBlock`。这一条无法单测（不给 hook 写假装验证的单测），只能真机验收；若守卫一次都没命中，退路是回到提前返回并接受「凋灵范围内旁的方块不被破坏」。
 - **店主拆依附方块时牌子靠原版物理掉落**：我们只放行，不自己打牌（自己打会与物理重复掉落）。若真机发现牌子不掉，则「与拆牌等价」不成立，需要改成放行时显式 `Level::destroyBlock` 打牌。

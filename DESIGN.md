@@ -250,12 +250,12 @@ PlayerEditSignBeforeEvent
 | `ila::mc::world::actor::player::PlayerEditSignAfterEvent` | 牌子已更新后的通知：按 Before 阶段定下的归属写回 ownerID（DESIGN §5.4） | 否 |
 | `ila::mc::world::actor::player::PlayerOpenContainerBeforeEvent` | 阻止非店主开商店箱；`pos` / `containerType` / `containerActorId` 齐全 | 是 |
 | `ila::mc::world::actor::player::PlayerAttackBlockBeforeEvent` | 左键点方块（可做"左键=卖"，也用于提前拦截拆牌） | 是 |
-| `ll::event::player::PlayerDestroyBlockEvent`（LL 原生） | 拆牌/拆箱保护；放行拆商店箱时先按原版语义打掉绑在上面的商店牌（双箱拆一半也要掉） | 是 |
+| `ll::event::player::PlayerDestroyBlockEvent`（LL 原生） | 拆牌/拆箱保护；放行拆商店箱时先按原版语义打掉绑在上面的商店牌（双箱拆一半也要掉）；08 的 H3e（拆依附方块）也挂在这里 | 是 |
 | `ila::mc::world::ChestPairWithBeforeEvent` | 双箱配对时校验两半归属 | 是 |
-| `ila::mc::world::ExplosionBeforeEvent` | 爆炸保护（`explosion()` 可取受影响方块） | 是 |
-| `ila::mc::world::PistonPushBeforeEvent` | 活塞推商店箱/牌 | 是 |
-| `ila::mc::world::WitherDestroyBeforeEvent` | 凋灵破坏 | 是 |
-| `ila::mc::world::FireTryBurnBlockBeforeEvent` | 火烧商店箱/牌 | 是 |
+| `ila::mc::world::ExplosionBeforeEvent` | 备选：只能取消整场爆炸，粒度不对，08 改用 §6.2 H3a（`explosion()` 可取受影响方块） | 是（整场） |
+| `ila::mc::world::PistonPushBeforeEvent` | 备选：只能取消整次推动，08 改用 §6.2 H3b | 是（整次） |
+| `ila::mc::world::WitherDestroyBeforeEvent` | 备选：只能取消凋灵那一次整体破坏，08 改用 §6.2 H3c | 是（整次） |
+| `ila::mc::world::FireTryBurnBlockBeforeEvent` | 备选：只能取消一次燃烧，08 改用 §6.2 H3d 的 `FireBlock::checkBurn` | 是（整次） |
 | `ila::legacyMoney::MoneyChangeBeforeEvent` | 观测/拦截 LegacyMoney 的 Set/Add/Reduce/Trans | 是 |
 | `ila::mc::server::ReceivePacketBeforeEvent<BlockActorDataPacket>` | 备选：若不想依赖 `PlayerEditSignBeforeEvent`，可自行过滤 | 是 |
 
@@ -798,7 +798,7 @@ public:
 34a. 普通箱子与普通告示牌不受影响：开箱、攻击、拆除都照常。
 35. TNT 在商店箱旁爆炸 → **商店箱幸存，旁边的方块照常被炸掉**。
 36. 活塞推商店箱 → 推不动；推旁边的方块 → 正常推动。
-37. 凋灵破坏 / 火焰 → 商店箱不受影响。
+37. 凋灵破坏 / 火焰 → 商店箱不受影响，**而范围内的其他方块照常被毁**（整场哑火也算不合格，见 §6.2 H3c）。
 38. 漏斗方块在商店箱上方抽、下方塞 → 都无效。
 39. 漏斗矿车停在商店箱下方 → 吸不走货（与漏斗方块共用同一拦截）。
 40. 铜傀儡走到商店箱旁 → 取不走也放不进。
