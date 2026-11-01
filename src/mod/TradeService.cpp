@@ -8,6 +8,7 @@
 #include "mod/Shop.h"
 #include "mod/ShopForm.h"
 #include "mod/ShopService.h"
+#include "mod/TransactionLog.h"
 #include "mod/WallClock.h"
 #include "shop/ShopInfo.h"
 #include "shop/TradeGate.h"
@@ -375,6 +376,40 @@ TradeResult undoAndRefund(TradeFrame& frame, bool restoreBackpack, std::string m
         return broken(freeze, std::move(message) + "，而且退款也失败了（" + *failed + "），请联系管理员");
     }
     return reject(std::move(message) + "，这笔交易没有成交，钱已退回");
+}
+
+/// 流水需要的「交易事实」（`p1-transaction-log` 票 01）。两个方向只有 `dir` 不同。
+///
+/// 在这里取、而不是等 `finishTrade` 再去读世界：商品模板、店主名、单价都是**这一笔**的样子，
+/// 交易走完之后箱子、牌子或在线名单可能已经变了。而 `TradeStatus` 到流水三态的映射、
+/// 以及「哪种终态值得写」都是流水侧的知识，所以 `TradeLogResult` 不在这里填。
+TradeFacts tradeFactsFor(
+    TradeDirection                  direction,
+    Player&                         trader,
+    Cell const&                     sign,
+    ShopSnapshot const&             shop,
+    ShopConfig const&               config,
+    ItemStack const&                product,
+    std::int64_t                    unitPrice,
+    economy::EconomyProvider const& provider
+) {
+    TradeFacts facts;
+    facts.dir         = direction;
+    facts.dimensionId = trader.getDimensionId();
+    facts.shop        = sign;
+    facts.ownerXuid   = shop.ownerXuid;
+    // 管理员店的「店主」是配置里那个名字（spec：`owner.name = adminShopName`），
+    // 不是牌上记的创建者——`readShopOwner` 在 `PlayerInfo` 里查得到时会拿创建者的名字。
+    facts.ownerName   = shop.info.adminShop ? config.adminShopName : shop.info.ownerName;
+    facts.admin       = shop.info.adminShop;
+    facts.backend     = std::string{provider.name()};
+    facts.playerXuid  = trader.getXuid();
+    facts.playerName  = trader.getNameTag();
+    facts.itemId      = product.getTypeName();
+    facts.itemAux     = static_cast<int>(product.getAuxValue());
+    facts.itemName    = product.getName();
+    facts.unitPrice   = unitPrice;
+    return facts;
 }
 
 /// 一次交易的全部前置条件（DESIGN §10.2 第 2、3 步的输入）。买卖共用这一个结构：
@@ -841,6 +876,13 @@ void finishTrade(Player& player, Cell const& sign, TradeDirection direction, Tra
         return;
     }
     player.sendMessage(result.message);
+    // 成交流水（`p1-transaction-log` spec D1）：唯一接线点就是这里，两个方向每一种终态
+    // 都从这里出去。票 01 只记 `Done → ok`（记录由 `buyUnits` / `sellUnits` 在成交那一刻造好，
+    // 填了才有东西可写）；拒绝与冻结在票 02 接。写失败只 warn：交易已经成交，
+    // 流水不是它的一部分。
+    if (result.tradeLog) {
+        writeTradeRecord(*result.tradeLog);
+    }
     if (result.done()) {
         // 管理员店卖出销毁的货留档（`p1-transaction-log` spec D5）。写失败只 warn：
         // 交易已经成交，留档不是它的一部分——不许因为磁盘满了把一笔生意判成失败。
@@ -993,7 +1035,26 @@ TradeResult buyUnits(
                                   : "（商店箱里的货、余额或背包空间不够，只成交了 " + std::to_string(plan.units)
                                         + " 份）";
     }
-    return {.status = TradeStatus::Done, .plan = plan, .message = std::move(message)};
+    TradeResult result{.status = TradeStatus::Done, .plan = plan, .message = std::move(message)};
+    // 流水在 `Done` 之前造好：`ts`、店主名、商品与单价都还是这一笔的样子。
+    // 落盘在 `Done` 之后（`finishTrade`）——写不进去也不能把成交判成失败。
+    result.tradeLog = composeTradeRecord(
+        tradeFactsFor(
+            TradeDirection::Buy,
+            buyer,
+            sign,
+            context->shop,
+            config,
+            context->product,
+            request.unitPrice,
+            provider
+        ),
+        plan,
+        TradeLogResult::Ok,
+        {},
+        nowIso8601Local()
+    );
+    return result;
 }
 
 TradeResult sellUnits(
@@ -1116,7 +1177,30 @@ TradeResult sellUnits(
                                   : "（你手里的货、店主的钱或商店箱空间不够，只成交了 " + std::to_string(plan.units)
                                         + " 份）";
     }
-    return {.status = TradeStatus::Done, .plan = plan, .message = std::move(message), .discarded = std::move(discarded)};
+    TradeResult result{
+        .status  = TradeStatus::Done,
+        .plan    = plan,
+        .message = std::move(message),
+        .discarded = std::move(discarded),
+    };
+    // 流水同样在 `Done` 之前造好（票 01）：管理员店卖出的 `discarded` 与这一条同属一次交接。
+    result.tradeLog = composeTradeRecord(
+        tradeFactsFor(
+            TradeDirection::Sell,
+            seller,
+            sign,
+            context->shop,
+            config,
+            context->product,
+            request.unitPrice,
+            provider
+        ),
+        plan,
+        TradeLogResult::Ok,
+        {},
+        nowIso8601Local()
+    );
+    return result;
 }
 
 void requestBuyForm(Player& viewer, Cell const& sign) {

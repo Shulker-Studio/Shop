@@ -3,6 +3,7 @@
 #include "shop/ContainerFinder.h"
 #include "shop/DiscardRecord.h"
 #include "shop/TradePlan.h"
+#include "shop/TradeRecord.h"
 
 #include <cstdint>
 #include <optional>
@@ -40,6 +41,12 @@ struct TradeResult {
     /// `finishTrade` 做：留档失败只 warn，绝不能把一笔已经成交的生意判成失败
     /// （`p1-transaction-log` spec D5）。普通店与买入方向留空。
     std::vector<DiscardRecord> discarded;
+    /// 这一笔的成交流水（`p1-transaction-log` 票 01）。
+    ///
+    /// 在 `buyUnits` / `sellUnits` 里**成交那一刻**造好（`ts` 与交易事实都是这一笔的样子，
+    /// 之后箱子、牌子、店主名都可能被改），`finishTrade` 只负责落盘。
+    /// 空 = 这一笔不写流水（票 01 只有 `Done` 会填；拒绝与冻结在票 02 补）。
+    std::optional<TradeRecord> tradeLog;
 
     [[nodiscard]] bool done() const { return status == TradeStatus::Done; }
     [[nodiscard]] bool needsConfirm() const { return status == TradeStatus::NeedsConfirm; }

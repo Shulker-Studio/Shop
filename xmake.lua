@@ -9,6 +9,9 @@ add_requires("ilistenattentively", {configs = {target_type = "server"}})
 add_requires("levibuildscript")
 -- 纯逻辑层的单元测试（header-only），只被 ShopTests 使用，不进入 Shop.dll
 add_requires("doctest 2.5.3")
+-- JSON：交易流水用 nlohmann::ordered_json 生成（键序固定、转义交给它）。header-only，
+-- 纯逻辑层与测试都要它；levilamina 包不传递它，必须单独声明。
+add_requires("nlohmann_json 3.12.0")
 
 if not has_config("vs_runtime") then
     set_runtimes("MD")
@@ -50,7 +53,7 @@ target("Shop")
         )
         set_toolchains("clang-cl")
     end
-    add_packages("levilamina", "ilistenattentively")
+    add_packages("levilamina", "ilistenattentively", "nlohmann_json")
     set_kind("shared")
     set_languages("c++20")
     set_symbols("debug")
@@ -70,7 +73,7 @@ target("ShopTests")
         set_toolchains("clang-cl")
         add_cxflags("/EHa", "/utf-8")
     end
-    add_packages("doctest")
+    add_packages("doctest", "nlohmann_json")
     add_includedirs("src")
     add_files("src/shop/**.cpp", "tests/**.cpp")
     add_tests("default")
