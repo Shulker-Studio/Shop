@@ -1,5 +1,7 @@
 #include "mod/ContainerFinderBds.h"
 
+#include "shop/SampleSlot.h"
+
 #include "mod/ShopOwner.h"
 
 #include "mc/deps/core/string/HashedString.h"
@@ -143,16 +145,21 @@ void forEachMergedSlot(Container& primary, Container* secondary, int slots, Fn&&
 }
 
 /// 商品模板 = 商店箱里（双箱合并）第一个非空槽位的物品（附着那一半优先，DESIGN §5.3）。
+///
+/// 管理员店管这一格叫**样品槽**（票 03）。「第一个非空」这条规则本身在纯逻辑层
+/// （`shop/SampleSlot.h` 的 `sampleSlotIndex`），这里只负责回答「第 i 格空不空」——
+/// 于是「0 号空、1 号有钻石」这种情形能在单测里直接断言，不必造容器。
 ItemStack const* firstNonEmptyStack(Container& primary, Container* secondary, int slots) {
-    ItemStack const* product = nullptr;
-    forEachMergedSlot(primary, secondary, slots, [&](ItemStack const& stack) {
-        if (stack.isNull()) {
-            return true;
-        }
-        product = &stack;
-        return false;
+    auto const merged = mergedSlots(primary, secondary, slots);
+    auto const index  = sampleSlotIndex(static_cast<int>(merged.size()), [&merged](int slot) {
+        MergedSlot const& at = merged[static_cast<std::size_t>(slot)];
+        return at.container->getItem(at.slot).isNull();
     });
-    return product;
+    if (!index) {
+        return nullptr;
+    }
+    MergedSlot const& at = merged[static_cast<std::size_t>(*index)];
+    return &at.container->getItem(at.slot);
 }
 
 /// 把容器两半合成一个 `ContainerRef`，并带上要读写物品的两个指针。不看白名单。

@@ -467,6 +467,12 @@ PreparedTrade prepareCommon(
     if (found == nullptr) {
         // 商品权威是商店箱里第一个非空槽位（DESIGN §5.3）：箱子空了就没人知道这家店收什么，
         // 也没东西可卖。牌面第 4 行只有显示名，拿它反查物品会造出第二个真相源，P0 不做。
+        //
+        // 管理员店此时不是「缺货」而是「还没设商品」（票 03）：两条原因分开说，
+        // 因为前者等补货、后者只能由 OP 往模板箱里放一件样品。
+        if (shop->info.adminShop) {
+            return {.error = unavailableReasonForEmptyBox(/* adminShop=*/true)};
+        }
         return {
             .error = selling ? "商店箱里没有货，看不出这家店收什么"
                              : tradeRejectionMessage(direction, TradeRejection::NotEnoughGoods)

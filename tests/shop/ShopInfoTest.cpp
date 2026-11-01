@@ -315,3 +315,53 @@ TEST_CASE("表单按钮：无限库存照常给买卖按钮，库存不是藏按
     CHECK(buttons[0].action == ShopFormAction::Buy);
     CHECK(buttons[1].action == ShopFormAction::Sell);
 }
+
+TEST_CASE("模板箱空：管理员店说「还没设商品」，与普通店「没有货」是两条不同的原因") {
+    auto const adminReason   = unavailableReasonForEmptyBox(/* adminShop=*/true);
+    auto const regularReason = unavailableReasonForEmptyBox(/* adminShop=*/false);
+
+    CHECK(adminReason != regularReason);
+    CHECK(adminReason.find("还没设商品") != std::string::npos);
+    CHECK(adminReason.find("样品") != std::string::npos);
+    // 普通店的原因一个字都没变：箱子空了就是缺货，补货就恢复
+    CHECK(regularReason == emptyBoxReason());
+    CHECK(regularReason.find("没有货") != std::string::npos);
+}
+
+TEST_CASE("模板箱空：正文写「还没设商品」，不是「商店箱里没有货」") {
+    auto admin            = sampleShop();
+    admin.adminShop       = true;
+    admin.stockUnits      = StockView::makeUnlimited();
+    admin.unavailableReason = unavailableReasonForEmptyBox(/* adminShop=*/true);
+
+    auto const lines = shopInfoLines(admin);
+    CHECK(hasLine(lines, "状态：" + unavailableReasonForEmptyBox(/* adminShop=*/true)));
+    CHECK_FALSE(hasLine(lines, "状态：" + emptyBoxReason()));
+}
+
+TEST_CASE("模板箱空：买卖按钮一个都不给，管理入口照给（OP 才能进去补样品）") {
+    auto admin              = sampleShop();
+    admin.adminShop         = true;
+    admin.stockUnits        = StockView::makeUnlimited();
+    admin.unavailableReason = unavailableReasonForEmptyBox(/* adminShop=*/true);
+
+    auto const visitor = shopFormButtons(admin, ShopFormRole::Visitor, /*canManage=*/false);
+    CHECK(visitor.empty());
+
+    auto const op = shopFormButtons(admin, ShopFormRole::Visitor, /*canManage=*/true);
+    REQUIRE(op.size() == 1);
+    CHECK(op[0].action == ShopFormAction::Manage);
+}
+
+TEST_CASE("模板箱有样品：买卖按钮照常给，与「还没设商品」是两种状态") {
+    auto admin         = sampleShop();
+    admin.adminShop    = true;
+    admin.stockUnits   = StockView::makeUnlimited();
+    admin.unavailableReason.clear(); // 有样品 → 没有「不可交易」的原因
+
+    auto const buttons = shopFormButtons(admin, ShopFormRole::Visitor, /*canManage=*/true);
+    REQUIRE(buttons.size() == 3); // 管理 + 购买 + 出售
+    CHECK(buttons[0].action == ShopFormAction::Manage);
+    CHECK(buttons[1].action == ShopFormAction::Buy);
+    CHECK(buttons[2].action == ShopFormAction::Sell);
+}

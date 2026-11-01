@@ -138,6 +138,17 @@
   在 `finishTrade` 里 `Done` 之后落盘到 `plugins/Shop/logs/discarded-YYYY-MM-DD.jsonl`；写失败只 warn。
   （`transactionLog.enabled` 这个开关属于 `p1-transaction-log`，等它落地后接管这条通道。）
 
+### 变更（P1 票 03：样品槽语义与「还没设商品」）
+
+- 新增纯逻辑 `SampleSlot.h`：`sampleSlotIndex(slots, isEmpty)` = **第一个非空槽位**（不是固定 0 号槽）。
+  `src/mod/ContainerFinderBds` 的 `firstNonEmptyStack` 改成只提供「第 i 格空不空」，
+  「第一个非空」这条规则因此只有一份实现，且能单测（0 号空 / 1 号有 / 全空 / 其余格忽略）。
+- 新增 `unavailableReasonForEmptyBox(bool adminShop)`：普通店「商店箱里没有货，补货后恢复」与
+  管理员店「这家管理员店还没设商品：往商店箱里放一件样品，它就卖这个」是**两条不同的原因**，
+  `readShop` 与提交路径的预校验都走它；空箱时买卖按钮一个不给、管理入口照给。
+- 模板箱语义写进 DESIGN §7.4 / §5.3：不参与库存增减、卖进来的物品销毁（留档）、其余格子忽略、
+  不做持久化（换商品 = 换第一格）；GLOSSARY 新增「样品槽」。
+
 ### 修复
 
 - **告示牌没有「除蜡」这回事**：早期把 Java 版铜块的规则套到了告示牌上，判出「斧头 = 除蜡」并在提示里教玩家「先拿斧头除蜡才能改」。实际原版告示牌上蜡后没有任何去除手段（Mojira MC-261313 判 Works As Intended；Wiki 写「若要修改则需破坏后重新放置」），

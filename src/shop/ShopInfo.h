@@ -98,9 +98,20 @@ std::string taxChargeFailureReason(std::string const& detail);
 /// 收商店税时钱已经动过且没能还原（§10.2 第 8 步的严重错误）。
 std::string taxBrokenReason(std::string const& detail);
 
-/// 商店箱空了的原因：没东西可卖，也看不出这家店收什么（商品权威是第一个非空槽位，DESIGN §5.3）。
+/// 普通店的商店箱空了的原因：没东西可卖，也看不出这家店收什么（商品权威是第一个非空槽位，DESIGN §5.3）。
 /// 牌面第 4 行仍作商品名显示（那是旧记录），所以这里只讲「现在没法交易」。
 std::string emptyBoxReason();
+
+/// 盒子空了时的不可交易原因。**两条原因不许合并**（票 03）：
+///
+/// - 普通店：`emptyBoxReason()`——「商店箱里没有货」，意思是**卖光了**，补货就恢复；
+/// - 管理员店：模板箱里没有样品，意思是**这家店还没设商品**（不是缺货，它永远不会缺货）。
+///   「卖光了」与「还没设商品」是两件事：前者等补货，后者只能由 OP 放一件样品，
+///   报错报成前一种会让玩家以为过一个小时就自动有了。
+///
+/// 判据在 mod 层是同一句「第一个非空槽位不存在」（`firstProductStack`），所以这里按店的性质分叉，
+/// 而不是让调用方各自拼一句文案。
+std::string unavailableReasonForEmptyBox(bool adminShop);
 
 /// 表单标题：普通店 `<店主> 的商店`，管理员店 `管理员商店`（DESIGN §10.1）。
 std::string shopFormTitle(ShopInfoData const& data);

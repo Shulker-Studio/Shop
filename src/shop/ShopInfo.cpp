@@ -62,6 +62,15 @@ std::string noSystemAccountReason() {
 
 std::string emptyBoxReason() { return "商店箱里没有货，现在没法交易（补货后恢复）"; }
 
+std::string unavailableReasonForEmptyBox(bool adminShop) {
+    if (!adminShop) {
+        return emptyBoxReason();
+    }
+    // 管理员店的模板箱空着不是「卖光了」：它永远不会卖光，只是还没告诉它卖什么。
+    // 写成缺货会让玩家一直在那儿等补货，而补货这件事对模板箱没有意义。
+    return "这家管理员店还没设商品：往商店箱里放一件样品，它就卖这个";
+}
+
 std::string taxChargeFailureReason(std::string const& detail) { return "收取商店税失败（" + detail + "）"; }
 
 std::string taxBrokenReason(std::string const& detail) {

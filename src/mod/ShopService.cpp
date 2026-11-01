@@ -177,8 +177,9 @@ std::optional<ShopSnapshot> readShop(BlockSource& region, BlockPos const& signPo
 
     // 箱子全空：既没东西可卖，也看不出这家店收什么（商品权威是第一个非空槽位，DESIGN §5.3）。
     // 牌子还是商店（不会被当成普通牌），只是现在什么都交易不了，原因写在正文里。
+    // 管理员店的说法不同：它的箱子是模板，空着 = **还没设商品**（票 03），不是「卖光了」。
     if (lookup.error == ContainerError::Empty) {
-        info.unavailableReason = emptyBoxReason();
+        info.unavailableReason = unavailableReasonForEmptyBox(info.adminShop);
     }
 
     return ShopSnapshot{.info = info, .ownerXuid = owner.xuid};
