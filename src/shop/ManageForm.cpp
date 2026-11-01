@@ -12,7 +12,7 @@
 namespace ss::shop {
 namespace {
 
-constexpr std::string_view kInputHint = "改价与件数只写数字：价格留空表示这一侧不做生意，但至少要留一侧价格";
+constexpr std::string_view kInputHint = "改价与件数只写数字：价格留空表示这一侧不做生意，但至少要留一侧价格（停业请用下面的按钮）";
 
 constexpr std::string_view kBothEmptyReason =
     "至少要留一侧价格，否则这块牌就不再是商店牌（箱子会失去保护）。想关店请拆牌，或者停业（牌子与库存都留着）";
@@ -67,16 +67,22 @@ ManageEdit validatedEdit(ShopSpec next, ShopSignConfig const& config) {
     return {.spec = std::move(next), .error = {}};
 }
 
-ManageEdit withPrice(ShopSpec const& current, PriceSide side, std::string_view input, ShopSignConfig const& config) {
-    auto const parsed = parsePriceInput(input);
-    if (parsed.given && !parsed.price) {
-        return {.spec = std::nullopt, .error = notAnIntegerReason(side)};
+/// `applyManageEdit` 里的一格价格：没填（`nullopt`）= 这次不改这一侧，跳过；
+/// 填了就解析并写进 `next`。返回空 = 接着干；有字符串 = 直接交给玩家的原因（输入不合法）。
+std::optional<std::string> applyPrice(
+    std::optional<std::string> const& input,
+    PriceSide                         side,
+    ShopSpec&                         next
+) {
+    if (!input) {
+        return std::nullopt;
     }
-
-    ShopSpec next  = current;
-    auto&    price = side == PriceSide::Buy ? next.buyPrice : next.sellPrice;
-    price          = parsed.price;
-    return validatedEdit(std::move(next), config);
+    auto const parsed = parsePriceInput(*input);
+    if (parsed.given && !parsed.price) {
+        return notAnIntegerReason(side);
+    }
+    (side == PriceSide::Buy ? next.buyPrice : next.sellPrice) = parsed.price;
+    return std::nullopt;
 }
 
 /// 管理表单上一个带当前值的按钮：`改买入价（现在 $ 10 / 份）`。
@@ -111,33 +117,62 @@ std::vector<ShopFormButton> shopManageFormButtons(ShopInfoData const& data) {
         {priceButtonLabel("改买入价", data.buyPrice, data.currencySymbol, "不出售"), ShopFormAction::ManageBuyPrice},
         {priceButtonLabel("改卖出价", data.sellPrice, data.currencySymbol, "不收购"), ShopFormAction::ManageSellPrice},
         {"改每份件数（现在 " + std::to_string(data.amountPerUnit) + " 个）", ShopFormAction::ManageAmount},
+        // 停业与恢复营业是同一个动作的两个方向，按当前状态只给一个：两个按钮同时挂着，
+        // 店主得自己先想明白哪个才算话。
+        {data.closed ? "恢复营业" : "停业", ShopFormAction::ToggleClosed},
     };
 }
 
+ManageEdit applyManageEdit(ShopSpec const& current, ManageEditRequest const& request, ShopSignConfig const& config) {
+    ShopSpec next = current;
+
+    if (auto const error = applyPrice(request.buyPrice, PriceSide::Buy, next)) {
+        return {.spec = std::nullopt, .error = *error};
+    }
+    if (auto const error = applyPrice(request.sellPrice, PriceSide::Sell, next)) {
+        return {.spec = std::nullopt, .error = *error};
+    }
+
+    if (request.amount) {
+        // 件数的文法（只收 ASCII 十进制、落在 1..maxShopAmount）只有一份，就是牌面第 2 行那个
+        // `parseAmountLine`：表单只是允许输入框两端带空白（与买卖价一致），拿走之后的字串没区别。
+        // 手写编辑那条路不接受空白，因为它读的是牌面：“牌面第 2 行是权威整数”（DESIGN §5.1）。
+        //
+        // 与价格那边唯一的宽严差异：`parseAmountLine` 会先剥颜色码，所以 `§a16` 在这里能认出成 16，
+        // 而价格框会把它当非法。牌面上颜色码是常态，不该反过来让店主在输入框里卡死。
+        auto const amount = parseAmountLine(trimCopy(*request.amount), config.maxShopAmount);
+        if (!amount) {
+            return {.spec = std::nullopt, .error = amountOutOfRangeMessage(config.maxShopAmount)};
+        }
+        next.amount = *amount;
+    }
+
+    if (request.closed) {
+        next.closed = *request.closed;
+    }
+
+    // 收尾校验对「只改件数 / 只停业」是空跑：它们造不出「两侧都空」或「S > B」，
+    // 而现在的牌已经过了 `parseShopSignText`。集中在一处的好处是：以后再加一格时，
+    // 不会因为它看起来「碰不到价」就把校验漏掉。
+    return validatedEdit(std::move(next), config);
+}
+
 ManageEdit withBuyPrice(ShopSpec const& current, std::string_view input, ShopSignConfig const& config) {
-    return withPrice(current, PriceSide::Buy, input, config);
+    return applyManageEdit(current, {.buyPrice = std::string{input}}, config);
 }
 
 ManageEdit withSellPrice(ShopSpec const& current, std::string_view input, ShopSignConfig const& config) {
-    return withPrice(current, PriceSide::Sell, input, config);
+    return applyManageEdit(current, {.sellPrice = std::string{input}}, config);
 }
 
 ManageEdit withAmount(ShopSpec const& current, std::string_view input, ShopSignConfig const& config) {
-    // 件数的文法（只收 ASCII 十进制、落在 1..maxShopAmount）只有一份，就是牌面第 2 行那个
-    // `parseAmountLine`：表单只是允许输入框两端带空白（与买卖价一致），拿走之后的字串没区别。
-    // 手写编辑那条路不接受空白，因为它读的是牌面：“牌面第 2 行是权威整数”（DESIGN §5.1）。
-    //
-    // 与价格那边唯一的宽严差异：`parseAmountLine` 会先剥颜色码，所以 `§a16` 在这里能认出成 16，
-    // 而价格框会把它当非法。牌面上颜色码是常态，不该反过来让店主在输入框里卡死。
-    auto const amount = parseAmountLine(trimCopy(input), config.maxShopAmount);
-    if (!amount) {
-        return {.spec = std::nullopt, .error = amountOutOfRangeMessage(config.maxShopAmount)};
-    }
+    return applyManageEdit(current, {.amount = std::string{input}}, config);
+}
 
-    ShopSpec next = current;
-    next.amount   = *amount;
-    // 件数不碰价：改完不会造出「两侧都空」或「S > B」，而现在的牌已经过了 `parseShopSignText`。
-    return {.spec = std::move(next), .error = {}};
+ManageEdit withToggledClosed(ShopSpec const& current, std::string_view /*input*/, ShopSignConfig const& config) {
+    // 停业不需要输入：点一下就是「切成另一个状态」。翻转读的是当前牌面解析出的值，
+    // 所以两个店主同时点也不会各自基于一个旧值写回去。
+    return applyManageEdit(current, {.closed = !current.closed}, config);
 }
 
 } // namespace ss::shop

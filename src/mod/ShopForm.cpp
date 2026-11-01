@@ -66,7 +66,8 @@ void onButton(Player& player, Cell const& sign, ShopFormAction action) {
         requestManageInputForm(player, sign, action);
         return;
     case ShopFormAction::ToggleClosed:
-        // 03 接上之前，没有任何表单会发出这个动作。
+        // 停业不需要输入框：直接走提交那一段（与三个输入框共用 `submitManageEdit` 的链）。
+        requestManageToggleClosed(player, sign);
         return;
     }
 }
@@ -202,6 +203,11 @@ std::string sellPriceEditMessage(ShopSpec const& spec, ShopConfig const& config)
 
 std::string amountEditMessage(ShopSpec const& spec, ShopConfig const&) {
     return "一份的件数已改为 " + std::to_string(spec.amount) + " 个";
+}
+
+std::string closedEditMessage(ShopSpec const& spec, ShopConfig const&) {
+    // 停业不是关店：牌子、库存、归属、保护都还在，所以提示里说清「随时能开回来」。
+    return spec.closed ? "这家店已停业：牌子、库存与价格都留着，随时可以恢复营业" : "这家店已恢复营业";
 }
 
 /// 管理表单上一张单输入框表单的全部内容：控件名、三句文案与初值，再加上校验与成功提示。
@@ -425,6 +431,12 @@ void requestManageInputForm(Player& viewer, Cell const& sign, ShopFormAction act
         }
         openManageInputForm(player, sign, action, target.shop->info, target.waxed, toSignConfig(config));
     });
+}
+
+void requestManageToggleClosed(Player& viewer, Cell const& sign) {
+    // 不做任何前置检查，也不弹输入框：`submitManageEdit` 自己会重新取牌、重新鉴权、
+    // 重新解析牌面，然后才写牌。停业与改价在这里必须是同一条路。
+    submitManageEdit(viewer, sign, ManageChange{&withToggledClosed, &closedEditMessage}, std::string{});
 }
 
 void openTradeForm(Player& viewer, Cell const& sign, TradeDirection direction, ShopInfoData const& data, int maxUnits) {

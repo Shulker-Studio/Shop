@@ -16,6 +16,10 @@ namespace ss::shop {
 struct ShopInfoData {
     std::string                 ownerName;         ///< 店主显示名；管理员商店可以留空
     bool                        adminShop = false; ///< 管理员商店（DESIGN §7.4）
+    /// 停业中（牌面第 3 行的 `:x`，票 03）：谁都不能买卖，但牌子、归属、库存、保护全不变。
+    /// 它与 `unavailableReason` **分开**：那个是「现在不可用的原因」（店主离线 / 没后端……），
+    /// 这个是店主自己拉的闸，两种状态得能同时说清楚。
+    bool                        closed = false;
     std::string                 itemName;          ///< 商品展示名；容器空时用牌面第 4 行
     int                         amountPerUnit = 0; ///< 一份的件数（牌面第 2 行）
     std::optional<std::int64_t> buyPrice;          ///< 一份的买入价，玩家付给店主
@@ -125,12 +129,12 @@ struct ShopFormButton {
     ShopFormAction action = ShopFormAction::Buy;
 };
 
-/// 按钮列表：管理入口只看 `canManage`，买卖按钮只看 `role` 与 `unavailableReason`。
+/// 按钮列表：管理入口只看 `canManage`，买卖按钮只看 `role`、`closed` 与 `unavailableReason`。
 ///
 /// 两件事**故意分开**（spec D5）：
-/// - `canManage` 为真时**总是**给管理入口，与 `unavailableReason` 无关——否则管理员店一停业
+/// - `canManage` 为真时**总是**给管理入口，与 `closed` / `unavailableReason` 无关——否则管理员店一停业
 ///   就一个按钮都没有，永远无法恢复营业（管理员店的 OP 在交易上是 `Visitor`）；
-/// - 买卖按钮仍然按 `role` 与 `unavailableReason` 给：店主收不了钱时一个买卖按钮都不给，
+/// - 买卖按钮仍然按 `role`、`closed` 与 `unavailableReason` 给：停业或店主收不了钱时一个买卖按钮都不给，
 ///   这不是「不行就不行」，而是提前把必然失败的路径藏起来（DESIGN §8.5）。
 ///
 /// 店主（`Manager`）不跟自己交易：除了管理入口不给买卖按钮（DESIGN §10.1）。

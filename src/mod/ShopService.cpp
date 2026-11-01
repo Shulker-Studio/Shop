@@ -159,6 +159,8 @@ std::optional<ShopSnapshot> readShop(BlockSource& region, BlockPos const& signPo
     info.amountPerUnit = parsed.spec->amount;
     info.buyPrice      = parsed.spec->buyPrice;
     info.sellPrice     = parsed.spec->sellPrice;
+    // 停业是牌面上的状态（第 3 行末尾的 `:x`）：牌子一读就带过来，不靠内存标记。
+    info.closed        = parsed.spec->closed;
     // 件数 → 份数的除法只有 `unitsFromItems` 一处，商店箱的货与背包容量共用。
     info.stockUnits = unitsFromItems(
         static_cast<int>(std::min<std::int64_t>(lookup.itemCount, std::numeric_limits<int>::max())),

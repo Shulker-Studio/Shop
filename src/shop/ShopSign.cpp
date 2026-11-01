@@ -7,7 +7,10 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <optional>
 #include <string>
+#include <string_view>
+#include <utility>
 #include <vector>
 
 namespace ss::shop {
@@ -61,6 +64,31 @@ std::string toLower(std::string_view text) {
         lower.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(c))));
     }
     return lower;
+}
+
+/// 停业段：价格行末尾的一个独立记号（`B 10 : S 5 :x`）。
+/// 用短标记是因为第 3 行宽度本来就紧（已经有两个价）；它与 `B`/`S` 同级，不会与金额解析歧义。
+constexpr std::string_view kClosedMarker = "x";
+
+/// 价格行按 `:` 切段，并把末尾的停业段（`x`）剥出来。
+///
+/// 顺序不能反：单侧价格时停业段是**第二段**（`S 5 :x`），先查「段数 > 2」会把合法的
+/// `B 10 : S 5 :x` 一起拒掉。剥完之后必须还剩 1..2 个价格段。
+struct PriceSegments {
+    std::vector<std::string_view> parts;
+    bool                          closed = false;
+};
+
+std::optional<PriceSegments> splitPriceSegments(std::string_view text) {
+    std::vector<std::string_view> parts  = splitOn(text, ':');
+    bool const                    closed = !parts.empty() && toLower(trimView(parts.back())) == kClosedMarker;
+    if (closed) {
+        parts.pop_back();
+    }
+    if (parts.empty() || parts.size() > 2) {
+        return std::nullopt;
+    }
+    return PriceSegments{std::move(parts), closed};
 }
 
 /// 价格行里的方向（B = 买入，S = 卖出）。大小写不敏感，对齐 Java 版先 upper 再解析的行为。
@@ -227,17 +255,17 @@ std::optional<PricePair> parsePriceLine(std::string_view line) {
         return std::nullopt;
     }
 
-    const std::vector<std::string_view> segments = splitOn(text, ':');
-    if (segments.size() > 2) {
+    auto const segments = splitPriceSegments(text);
+    if (!segments.has_value()) {
         return std::nullopt;
     }
-    const bool single = segments.size() == 1;
+    const bool single = segments->parts.size() == 1;
 
     PricePair prices;
     bool      seenBuy  = false;
     bool      seenSell = false;
 
-    for (const std::string_view rawSegment : segments) {
+    for (const std::string_view rawSegment : segments->parts) {
         const std::string_view segment = trimView(rawSegment);
         if (segment.empty()) {
             return std::nullopt;
@@ -290,6 +318,7 @@ std::optional<PricePair> parsePriceLine(std::string_view line) {
     if (!prices.buy.has_value() && !prices.sell.has_value()) {
         return std::nullopt;
     }
+    prices.closed = segments->closed;
     return prices;
 }
 
@@ -350,6 +379,7 @@ parseShopSign(const std::array<std::string_view, 4>& lines, bool editorIsOp, con
     spec.buyPrice  = prices->buy;
     spec.sellPrice = prices->sell;
     spec.adminShop = isAdminShop(ownerName, config.adminShopName, editorIsOp);
+    spec.closed    = prices->closed;
     return {spec, ShopSignError::None};
 }
 
@@ -368,6 +398,13 @@ formatShopSign(const ShopSpec& spec, std::string_view ownerDisplayName, std::str
             priceLine += " : ";
         }
         priceLine += "S " + std::to_string(*spec.sellPrice);
+    }
+    // 停业段恒在最后（解析就是「先剥最后一段」）：两处必须对称。
+    // `closed` 的 spec 至少有一侧价（`parseShopSign` / `applyManageEdit` 的入参不变量），
+    // 所以这里的守卫只是不为一个造不出来的状态编一个非法价格行。
+    if (spec.closed && !priceLine.empty()) {
+        priceLine += " :";
+        priceLine += kClosedMarker;
     }
     lines[2] = std::move(priceLine);
     lines[3] = std::string{itemDisplayName};

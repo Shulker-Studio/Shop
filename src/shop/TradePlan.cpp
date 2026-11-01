@@ -77,6 +77,12 @@ int maxTradeUnits(int maxUnits, int goodsUnits, int roomUnits, int affordableUni
 }
 
 TradeDecision planTrade(TradeRequest const& request) {
+    // 停业是整家店的属性：比任何上限（也比「输入不合法」）优先。
+    // 玩家看到的原因应该是「这家店暂停营业」，不是「商店的货不够」。
+    if (request.closed) {
+        return {.rejection = TradeRejection::ShopClosed};
+    }
+
     if (request.requested <= 0 || request.unitPrice < 0 || request.amountPerUnit <= 0) {
         return {.rejection = TradeRejection::InvalidRequest};
     }
@@ -130,6 +136,9 @@ TradeDecision planTrade(TradeRequest const& request) {
 std::string tradeRejectionMessage(TradeDirection direction, TradeRejection rejection) {
     bool const selling = direction == TradeDirection::Sell;
     switch (rejection) {
+    case TradeRejection::ShopClosed:
+        // 两个方向同一句：停业是店的事，与「谁来买还是卖」无关。
+        return "这家店暂停营业";
     case TradeRejection::OwnerOffline:
         return ownerOfflineReason();
     case TradeRejection::NotEnoughGoods:

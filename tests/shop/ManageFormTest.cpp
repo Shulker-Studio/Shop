@@ -329,10 +329,11 @@ TEST_CASE("管理表单正文：上蜡的牌补一句，免得店主以为改不
     CHECK_FALSE(mentions(plain, "上了蜡"));
 }
 
-TEST_CASE("管理表单按钮：三个入口都带上当前值") {
+TEST_CASE("管理表单按钮：三个改价 / 改件数入口都带上当前值") {
     auto const buttons = shopManageFormButtons(sampleShop());
 
-    REQUIRE(buttons.size() == 3);
+    // 票 03 之后第四个是停业 / 恢复营业（它不带当前值，本用例不管它）。
+    REQUIRE(buttons.size() == 4);
     CHECK(buttons[0].action == ShopFormAction::ManageBuyPrice);
     CHECK(mentions(buttons[0].label, "改买入价"));
     CHECK(mentions(buttons[0].label, "$ 10"));
@@ -351,7 +352,7 @@ TEST_CASE("管理表单按钮：没有买入价时说「不出售」，不显示
     data.buyPrice.reset();
 
     auto const buttons = shopManageFormButtons(data);
-    REQUIRE(buttons.size() == 3);
+    REQUIRE(buttons.size() == 4);
     CHECK(mentions(buttons[0].label, "不出售"));
     CHECK_FALSE(mentions(buttons[0].label, "$"));
     // 另一侧照常显示：一侧不做生意不影响另一侧。
@@ -363,8 +364,110 @@ TEST_CASE("管理表单按钮：没有卖出价时说「不收购」") {
     data.sellPrice.reset();
 
     auto const buttons = shopManageFormButtons(data);
-    REQUIRE(buttons.size() == 3);
+    REQUIRE(buttons.size() == 4);
     CHECK(mentions(buttons[1].label, "不收购"));
     CHECK_FALSE(mentions(buttons[1].label, "$"));
     CHECK(mentions(buttons[0].label, "$ 10"));
+}
+
+TEST_CASE("管理按钮：营业时写「停业」，停业时写「恢复营业」，不会同时出现") {
+    auto const open = shopManageFormButtons(sampleShop());
+    REQUIRE(open.size() == 4);
+    CHECK(open[3].action == ShopFormAction::ToggleClosed);
+    CHECK(open[3].label == "停业");
+    for (auto const& button : open) {
+        CHECK(button.label != "恢复营业");
+    }
+
+    auto data   = sampleShop();
+    data.closed = true;
+    auto const closed = shopManageFormButtons(data);
+    REQUIRE(closed.size() == 4);
+    CHECK(closed[3].action == ShopFormAction::ToggleClosed);
+    CHECK(closed[3].label == "恢复营业");
+    // 「停业」这个动作在停业后不该还挂在按钮上
+    for (auto const& button : closed) {
+        CHECK(button.label != "停业");
+    }
+}
+
+TEST_CASE("停业：只翻 closed 位，价格与件数一个字不动") {
+    ShopSpec spec = sampleSpec();
+
+    auto const closed = withToggledClosed(spec, "", ShopSignConfig{});
+    REQUIRE(closed.ok());
+    CHECK(closed.spec->closed);
+    CHECK(closed.spec->buyPrice == spec.buyPrice);
+    CHECK(closed.spec->sellPrice == spec.sellPrice);
+    CHECK(closed.spec->amount == spec.amount);
+
+    // 恢复营业：与停业之前完全相等，原价一分不差
+    auto const reopened = withToggledClosed(*closed.spec, "", ShopSignConfig{});
+    REQUIRE(reopened.ok());
+    CHECK_FALSE(reopened.spec->closed);
+    CHECK(reopened.spec->buyPrice == spec.buyPrice);
+    CHECK(reopened.spec->sellPrice == spec.sellPrice);
+    CHECK(reopened.spec->amount == spec.amount);
+    CHECK(reopened.spec->adminShop == spec.adminShop);
+}
+
+TEST_CASE("停业：牌面上留下 :x，规范化与再解析都不丢") {
+    auto const closed = withToggledClosed(sampleSpec(), "", ShopSignConfig{});
+    REQUIRE(closed.ok());
+
+    auto const formatted = formatShopSign(*closed.spec, "Alex", "钻石");
+    CHECK(formatted[SignLine::PriceLine] == "B 10 : S 5 :x");
+
+    // 停业状态存在牌面上：不靠内存，重启后仍然有效
+    auto const reparsed = parseShopSignText(joinSignText(formatted), false, ShopSignConfig{});
+    REQUIRE(reparsed.ok());
+    CHECK(reparsed.spec->closed);
+}
+
+TEST_CASE("统一入口：一次只改一格，其余原样带过去") {
+    auto const price = applyManageEdit(sampleSpec(), {.buyPrice = std::string{"20"}}, ShopSignConfig{});
+    REQUIRE(price.ok());
+    CHECK(price.spec->buyPrice == 20);
+    CHECK(price.spec->sellPrice == 5);
+    CHECK(price.spec->amount == 64);
+    CHECK_FALSE(price.spec->closed);
+
+    auto const amount = applyManageEdit(sampleSpec(), {.amount = std::string{"16"}}, ShopSignConfig{});
+    REQUIRE(amount.ok());
+    CHECK(amount.spec->amount == 16);
+    CHECK(amount.spec->buyPrice == 10);
+    CHECK(amount.spec->sellPrice == 5);
+
+    auto const sell = applyManageEdit(sampleSpec(), {.sellPrice = std::string{}}, ShopSignConfig{});
+    REQUIRE(sell.ok());
+    CHECK_FALSE(sell.spec->sellPrice.has_value());
+    CHECK(sell.spec->buyPrice == 10);
+
+    // 什么都不填 = 原样返回
+    auto const untouched = applyManageEdit(sampleSpec(), {}, ShopSignConfig{});
+    REQUIRE(untouched.ok());
+    CHECK(untouched.spec->buyPrice == 10);
+    CHECK(untouched.spec->sellPrice == 5);
+    CHECK(untouched.spec->amount == 64);
+    CHECK_FALSE(untouched.spec->closed);
+}
+
+TEST_CASE("统一入口：改价与停业可以同时生效，校验仍然只有一份") {
+    auto const closedWithPrice =
+        applyManageEdit(sampleSpec(), {.buyPrice = std::string{"20"}, .closed = true}, ShopSignConfig{});
+    REQUIRE(closedWithPrice.ok());
+    CHECK(closedWithPrice.spec->buyPrice == 20);
+    CHECK(closedWithPrice.spec->closed);
+
+    // 停业不豁免「至少要留一侧价格」：第 3 行不能既没价、又只剩一个标记
+    ShopSpec onlyBuy = sampleSpec();
+    onlyBuy.sellPrice.reset();
+    auto const bothEmpty = applyManageEdit(onlyBuy, {.buyPrice = std::string{}, .closed = true}, ShopSignConfig{});
+    CHECK_FALSE(bothEmpty.ok());
+    CHECK(mentions(bothEmpty.error, "至少要留一侧价格"));
+
+    // 件数非法与停业同一次提交里：报件数，不为停业放行
+    auto const badAmount = applyManageEdit(sampleSpec(), {.amount = std::string{"9999"}, .closed = true}, ShopSignConfig{});
+    CHECK_FALSE(badAmount.ok());
+    CHECK(mentions(badAmount.error, "份的件数"));
 }

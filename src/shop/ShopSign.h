@@ -14,6 +14,8 @@ namespace ss::shop {
 struct PricePair {
     std::optional<std::int64_t> buy;
     std::optional<std::int64_t> sell;
+    /// 价格行末尾的停业段（`:x`）。停业不删价格：价格全留着，恢复营业时原价一分不差。
+    bool closed = false;
 };
 
 /// 参与解析的配置项，与 config.json 的字段一一对应。
@@ -29,6 +31,9 @@ struct ShopSpec {
     std::optional<std::int64_t> buyPrice;   ///< 一份的买入价，玩家付给店主
     std::optional<std::int64_t> sellPrice;  ///< 一份的卖出价，店主付给玩家
     bool                        adminShop = false;
+    /// 停业中（价格行末尾的 `:x`）。牌面、归属、库存、保护都不动，只是谁都不能买卖；
+    /// 状态存在牌面上，所以重启后仍然有效（ADR-0002：牌子是唯一数据源）。
+    bool closed = false;
 };
 
 enum class ShopSignError {
@@ -72,12 +77,18 @@ std::string amountOutOfRangeMessage(int maxShopAmount);
 
 /// 解析第 3 行（价格）。
 ///
-/// 文法：`segment (":" segment)?`，`segment := [B|S] amount | amount [B|S]`，
+/// 文法：`segment (":" segment)? [":" closed]`，`closed := "x"`，
+/// `segment := [B|S] amount | amount [B|S]`，
 /// `amount := number | "free"`，`number := digits [ "." digits ] [ "K" | "M" ]`。
+/// - 先把**最后一段**是 `x`（大小写不敏感、允许两端空白）的那个段剥掉，剩下的按下面几条解：
+///   单侧价格时它就是第二段（`S 5 :x`），所以「段数上限」必须在剥离之后才检查；
 /// - 只有一段时按 B 处理；
 /// - 两段都必须显式写明方向，且方向不能重复；
 /// - `free` 与 `0` 等价；小数向下取整，小数位最多 9 位；
+/// - 剥离之后至少要剩一个价：只有 `x` 没有价（`x`、`:x`）返回 `std::nullopt`；
 /// - 负数、空段、多余冒号、无法识别的记号、溢出都返回 `std::nullopt`。
+///
+/// `PricePair::closed` 就是那个被剥掉的段：停业是**牌面上**的状态，不是内存里的开关。
 std::optional<PricePair> parsePriceLine(std::string_view line);
 
 /// 这一对价格是否因为「卖出价高于买入价」而被配置拒绝（`blockSellPriceHigherThanBuy`）。
@@ -105,6 +116,9 @@ parseShopSign(const std::array<std::string_view, 4>& lines, bool editorIsOp, con
 
 /// 规范化：把商店定义拼回四行文本。第 1 行的名字由调用方决定
 /// （普通店传店主显示名，管理员店传配置名）。
+///
+/// 停业恒写成末尾的 `:x`（`B 10 : S 5 :x`、单侧 `S 5 :x`）：写法归一（大小写、空白都收成
+/// 这一种），解析与格式化因此互逆——`parsePriceLine` 剥的就是这一段。
 std::array<std::string, 4>
 formatShopSign(const ShopSpec& spec, std::string_view ownerDisplayName, std::string_view itemDisplayName);
 

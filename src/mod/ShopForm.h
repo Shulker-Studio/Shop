@@ -32,6 +32,12 @@ void requestManageForm(Player& viewer, Cell const& sign);
 /// 三个入口共用同一条提交链，差别只在表单文案与合成函数。
 void requestManageInputForm(Player& viewer, Cell const& sign, ShopFormAction action);
 
+/// 管理表单上「停业 / 恢复营业」的入口（票 03）。
+///
+/// 这一项**没有输入框**：点一下就该生效，所以它不进 `CustomForm`，直接走
+/// `requestManageInputForm` 提交那一段的同一条链（重新取牌 → 重新解析 → 规范化 → 写牌 → 发包）。
+void requestManageToggleClosed(Player& viewer, Cell const& sign);
+
 /// 打开「几份」表单（DESIGN §10.1 第 3 步）。买卖共用同一张表单：档位与上限都是「份数」的事。
 ///
 /// `maxUnits` 由调用方算好（货的份数、收货方容量、付款方余额三者取最小）；这里只负责

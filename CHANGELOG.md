@@ -84,6 +84,11 @@
 - `withSellPrice` / `withAmount` 与 `withBuyPrice` 共用同一套输入解析与同一份收尾校验：买卖两侧走 `parsePriceInput` + `validatedEdit`（两侧都清空拒绝、卖出价高于买入价拒绝），换一侧只换「落到哪个字段」与提示里的名字；件数直接问牌面第 2 行那份 `parseAmountLine`（“什么叫合法件数”只有一份），范围文案由新的 `amountOutOfRangeMessage` 供手写编辑与管理表单共用。两侧都清空的提示补上「想关店请拆牌，或者停业（牌子与库存都留着）」，并说明箱子会失去保护（spec D6）。
 - 三张单输入框表单与提交链只有一份（`src/mod/ShopForm.cpp` 的 `manageInputField` / `openManageInputForm` / `submitManageEdit`）：控件名、三句文案与初值按 `action` 取，`重新取牌 → 重新解析 → 重新鉴权 → 写牌 → 发整维度` 是同一段（提交只接「合成函数 + 成功提示」，不把表单文案带进去），`ManageSellPrice` / `ManageAmount` 不再在 `onButton` 里占位返回。输入读回仍只走 `get_if<std::string>`，读不到报「读不到这个输入框的值」而不是当 0 / 当留空。
 - `tests/shop/ManageFormTest.cpp` 补 16 个中文用例：卖出价正常改 / 留空 / 只写空白 / 非法输入 / `S > B`（两边相等放行、买入价为空时不比）/ 两侧都空、件数 `1` 与 `maxShopAmount` / `0` 与 `maxShopAmount+1` / 留空与非整数、改完 `formatShopSign` 与手写编辑同格式、改完仍是商店牌、三个按钮的当前值与缺价文案。
+- 停业 / 恢复营业（P1 票 03）：管理表单第四个按钮，按当前状态只给一个（「停业」/「恢复营业」）。停业状态写在第 3 行末尾的 `:x`（`B 10 : S 5 :x`、单侧 `S 5 :x`），价格、归属、库存与保护一个字不变，恢复营业就是去掉那一段——「原价一分不差」因此是结构上成立的。牌子即数据源，重启后仍然停业。
+- 价格行解析改成「**先剥离最后一段**」：末尾一段 trim 后等于 `x`（大小写不敏感、`: x` 也认）就判停业并剔除，剩下的再按原文法解且必须至少剩一个价；`segments.size() > 2` 的检查挪到剥离之后（否则 `B 10 : S 5 :x` 会先被拒）。规范化恒输出 `:x`，所以解析与格式化互逆，手写编辑写 `:x` 同样生效且不会被抹掉。
+- `TradeRejection::ShopClosed` + 「这家店暂停营业」：判据在 `planTrade` 最前面（比任何上限与输入校验都优先，两个方向同一句），提交阶段再判一次（防停业之前打开的旧表单）。停业时点牌正文多一行同一句、一个买卖按钮都不给。
+- 管理入口在停业时照给（回归断言：管理员店的 OP 在交易上是 `Visitor`，入口一消失就永久停业，只能拆牌）。
+- 管理表单四个动作收在 `applyManageEdit` 一处（spec「Testing Decisions」的那条缝）：`withBuyPrice` / `withSellPrice` / `withAmount` / `withToggledClosed` 都是它的薄包装，校验（输入非法、两侧都清空、`S > B`）只有一份；停业不豁免其中任何一条。停业这一项没有输入框，但仍走 `submitManageEdit` 的同一条链（重新取牌 → 重新解析 → 规范化 → 写牌 → 发整维度），没有第二条写牌路径。
 
 ### 变更
 

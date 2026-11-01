@@ -47,7 +47,7 @@ Shop 自己写一份 append-only 的成交流水：
 | `ts` | 服务器本地时间，ISO-8601 带时区偏移，如 `2026-11-01T13:23:12+08:00` |
 | `event` | `trade`（本 spec 只有这一种；以后加 `create` / `close` 等） |
 | `result` | `ok` / `fail` / `frozen` |
-| `reason` | `result != ok` 时的机器可读原因（`no_money` / `no_stock` / `no_space` / `owner_offline` / `shop_closed`…），复用现有拒绝原因枚举，不新造一套文案。**以后每加一个 `TradeRejection` 枚举值都要同步加到这里**（停业会加 `shop_closed`） |
+| `reason` | `result != ok` 时的机器可读原因（`no_money` / `no_stock` / `no_space` / `owner_offline` / `shop_closed`…），复用现有拒绝原因枚举，不新造一套文案。**以后每加一个 `TradeRejection` 枚举值都要同步加到这里**（`TradeRejection::ShopClosed` 已随票 03 落地，对应 `shop_closed`） |
 | `dir` | `buy` / `sell`（从**玩家**视角） |
 | `shop` | `{dim, x, y, z}` 商店牌坐标 |
 | `owner` | `{xuid, name}` 店主；管理员店 `xuid` 为空串、`name` 为 `adminShopName` |

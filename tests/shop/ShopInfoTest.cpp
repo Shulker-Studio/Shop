@@ -251,3 +251,45 @@ TEST_CASE("表单按钮：能交易时买家拿到购买与出售两个按钮") 
     CHECK(buttons[0].action == ShopFormAction::Buy);
     CHECK(buttons[1].action == ShopFormAction::Sell);
 }
+
+TEST_CASE("停业：正文多一行「这家店暂停营业」") {
+    auto open = sampleShop();
+    CHECK_FALSE(hasLine(shopInfoLines(open), "这家店暂停营业"));
+
+    auto closed = open;
+    closed.closed = true;
+    CHECK(hasLine(shopInfoLines(closed), "这家店暂停营业"));
+    // 其余正文照旧：停业只是多一行状态，价格与库存都留着
+    CHECK(hasLine(shopInfoLines(closed), "买入价：$ 10 / 份"));
+    CHECK(hasLine(shopInfoLines(closed), "可成交份数：3 份"));
+}
+
+TEST_CASE("停业：一个买卖按钮都不给") {
+    auto data   = sampleShop();
+    data.closed = true;
+
+    CHECK(shopFormButtons(data, ShopFormRole::Visitor, /*canManage=*/false).empty());
+    // 店主本来就没有买卖按钮，停业与否都一样
+    CHECK(shopFormButtons(data, ShopFormRole::Manager, /*canManage=*/true).size() == 1);
+}
+
+TEST_CASE("停业：管理入口照给（管理员店的 OP 是 Visitor，入口一消失就永久停业）") {
+    // 回归（spec D5 / 票 03）：停业不许把店主自己锁在外面。
+    auto admin      = sampleShop();
+    admin.adminShop = true;
+    admin.closed    = true;
+
+    auto const adminButtons = shopFormButtons(admin, ShopFormRole::Visitor, /*canManage=*/true);
+    REQUIRE(adminButtons.size() == 1);
+    CHECK(adminButtons[0].action == ShopFormAction::Manage);
+
+    // 普通店的店主同理（Manager 分支先返回，不碰 closed）
+    auto own   = sampleShop();
+    own.closed = true;
+    auto const ownerButtons = shopFormButtons(own, ShopFormRole::Manager, /*canManage=*/true);
+    REQUIRE(ownerButtons.size() == 1);
+    CHECK(ownerButtons[0].action == ShopFormAction::Manage);
+
+    // 没有管理身份的人：停业的店一个按钮都没有
+    CHECK(shopFormButtons(own, ShopFormRole::Visitor, /*canManage=*/false).empty());
+}

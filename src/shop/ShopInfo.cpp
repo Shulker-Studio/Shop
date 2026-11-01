@@ -65,9 +65,14 @@ std::string shopFormTitle(ShopInfoData const& data) {
 
 std::vector<std::string> shopInfoLines(ShopInfoData const& data) {
     std::vector<std::string> lines;
-    lines.reserve(7);
+    lines.reserve(8);
 
     lines.push_back("店主：" + ownerText(data));
+    // 停业写在最上面：玩家点开表单第一眼就该看到这家店不接客，
+    // 而不必先读完价格再自己推。与「状态：<原因>」不同：那个是后端/在线状态，这个是店主拉的闸。
+    if (data.closed) {
+        lines.push_back("这家店暂停营业");
+    }
     lines.push_back("商品：" + (data.itemName.empty() ? std::string{"—"} : data.itemName));
     lines.push_back("每份：" + std::to_string(data.amountPerUnit) + " 个");
 
@@ -137,7 +142,9 @@ std::vector<ShopFormButton> shopFormButtons(ShopInfoData const& data, ShopFormRo
         return buttons;
     }
 
-    if (!data.unavailableReason.empty()) {
+    // 店不能交易：停业与「原因非空」一样都不摆买卖按钮（停业时正文写「这家店暂停营业」，
+    // 其它原因在 `shopInfoLines` 的「状态：」那一行）。两条合成一个分支，免得两个逐字相同的 return。
+    if (data.closed || !data.unavailableReason.empty()) {
         // 必然失败的路径不摆在按钮上（DESIGN §8.5）；正文已经写了原因。
         return buttons;
     }

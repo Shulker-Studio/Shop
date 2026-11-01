@@ -29,6 +29,7 @@ std::string_view directionVerb(TradeDirection direction);
 /// 「创造模式不能交易」这类需要世界状态的原因留在 mod 层。
 enum class TradeRejection : std::uint8_t {
     None,
+    ShopClosed,      ///< 这家店停业中（牌面第 3 行的 `:x`）：比任何上限都优先
     OwnerOffline,    ///< 后端不支持离线记账，店主又不在线（DESIGN §8.5）
     NotEnoughGoods,  ///< 货凑不出请求的份数
     NotEnoughFunds,  ///< 付款方的余额不够
@@ -100,6 +101,9 @@ struct TradeRequest {
     bool backendSupportsOffline = false; ///< `EconomyProvider::supportsOffline()`
     /// `requireOwnerOnline`（DESIGN §8.5）：只对不支持离线记账的后端有意义。
     bool requireOwnerOnline = true;
+    /// 这家店停业中（牌面第 3 行的 `:x`，票 03）。像 `ownerOnline` 一样是**整家店**的属性：
+    /// 停业时任何一笔都不成立，与要几份、箱子里有没有货无关。
+    bool closed = false;
     /// 商店税率（DESIGN §8.9）：这笔交易的税 = `total × taxRate`，向下取整。
     /// **两个方向都要传**——税是从这笔生意里抽的，与谁承担那一笔无关。
     /// 后端不能销毁余额（记分板）时由调用方填 0：那样税根本收不走，算出来只会让账对不上。
@@ -147,6 +151,9 @@ int maxTradeUnits(int maxUnits, int goodsUnits, int roomUnits, int affordableUni
 /// 算出这次能成交几份、搬几件、多少钱；不能成交就说明是哪一条上限挡住的。
 ///
 /// 纯逻辑：不读世界、不写钱、不发消息。买入与卖出共用这一份算法（DESIGN §10.3）。
+///
+/// `request.closed` 是第一条判据：停业是整家店的状态，比缺货、没钱、份数超限
+/// （以及输入本身不合法）都优先——否则停业的店会先报「商店的货不够」这类不相干的原因。
 TradeDecision planTrade(TradeRequest const& request);
 
 /// 拒绝原因 → 玩家提示（中文）。

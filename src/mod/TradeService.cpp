@@ -396,6 +396,16 @@ PreparedTrade prepareCommon(
     if (!shop) {
         return {.error = "这家商店已经不在了"};
     }
+    if (shop->info.closed) {
+        // 停业是整家店的属性，比任何上限（以及“这一侧不收/不卖”）都优先。
+        //
+        // 它与 `planTrade` 里那一条**不是可合并的重复**，不要当“死逻辑”删掉（已经有过一次审查提议）：
+        // - 这里：提交路径的**用户可见闸口**。旧表单（店主在玩家打开份数表单之后才停业）
+        //   走到这里时，箱子可能已经空了、后端可能不可用、店主可能已离线——那些原因都不如
+        //   「这家店暂停营业」对得上号。
+        // - `planTrade`：纯逻辑层的**权威判据**与单测缝，不靠「调用方已经拦过」这个前提。
+        return {.error = tradeRejectionMessage(direction, TradeRejection::ShopClosed)};
+    }
     if (!unitPriceOf(shop->info, direction)) {
         return {.error = selling ? "这家店不收购" : "这家店不出售"};
     }
@@ -455,6 +465,10 @@ PreparedTrade prepareCommon(
     context.request.amountPerUnit          = context.shop.info.amountPerUnit;
     context.request.maxUnits               = config.maxShopAmount;
     context.request.allowPartial           = config.allowPartialTransactions;
+    context.request.closed                 = context.shop.info.closed;
+    // 注：`prepareCommon` 上面已经把停业的店拦了，所以这份 `closed` 在生产路径上恒为 false。
+    // 仍然装进去，是因为 `planTrade` 是纯逻辑层的权威判据：它不该依赖「调用方已经拦过」这个前提
+    // （单测、以后新加的调用路径都靠它）。
     // 管理员店没有「店主此刻在不在线」这回事：对手方是系统账户（§8.5 表格的「同左」）。
     context.request.ownerOnline            = context.shop.info.adminShop
                                           || onlinePlayer(context.shop.ownerXuid) != nullptr;

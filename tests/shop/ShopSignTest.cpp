@@ -353,3 +353,124 @@ TEST_CASE("整段文本解析：等价于先切分再解析") {
     CHECK_FALSE(blank.ok());
     CHECK_FALSE(blank.looksLikeShopSign());
 }
+
+TEST_CASE("价格行：末尾的 x 段表示停业（先剥离最后一段，再按原文法解）") {
+    auto both = parsePriceLine("B 10 : S 5 :x");
+    REQUIRE(both.has_value());
+    CHECK(both->buy == std::optional<std::int64_t>{10});
+    CHECK(both->sell == std::optional<std::int64_t>{5});
+    CHECK(both->closed);
+
+    // 单侧价格时 `:x` 就是第二段——把它当「第三段」实现就会在这里被 `segments.size() > 2` 误杀
+    auto sellOnly = parsePriceLine("S 5 :x");
+    REQUIRE(sellOnly.has_value());
+    CHECK_FALSE(sellOnly->buy.has_value());
+    CHECK(sellOnly->sell == std::optional<std::int64_t>{5});
+    CHECK(sellOnly->closed);
+
+    // 冒号两边不留空白也认（`B 10:x`，与 `B 10K` 同一种「贴着写」）
+    auto glued = parsePriceLine("B 10:x");
+    REQUIRE(glued.has_value());
+    CHECK(glued->buy == std::optional<std::int64_t>{10});
+    CHECK(glued->closed);
+
+    // 大小写与空白都认：与 B/S、K/M 同一条口径
+    auto upper = parsePriceLine("B 10 : S 5 : X");
+    REQUIRE(upper.has_value());
+    CHECK(upper->closed);
+
+    auto spaced = parsePriceLine("B 10 : S 5 :  x  ");
+    REQUIRE(spaced.has_value());
+    CHECK(spaced->closed);
+
+    // 省略方向的那一段也能带停业标记
+    auto bare = parsePriceLine("10 :x");
+    REQUIRE(bare.has_value());
+    CHECK(bare->buy == std::optional<std::int64_t>{10});
+    CHECK(bare->closed);
+}
+
+TEST_CASE("价格行：营业中的店 closed 为假") {
+    auto open = parsePriceLine("B 10 : S 5");
+    REQUIRE(open.has_value());
+    CHECK_FALSE(open->closed);
+
+    auto single = parsePriceLine("B 10");
+    REQUIRE(single.has_value());
+    CHECK_FALSE(single->closed);
+}
+
+TEST_CASE("价格行：只有 x 没有价按非法处理") {
+    CHECK_FALSE(parsePriceLine("x").has_value());
+    CHECK_FALSE(parsePriceLine("X").has_value());
+    CHECK_FALSE(parsePriceLine(":x").has_value());
+    CHECK_FALSE(parsePriceLine(": x").has_value());
+    // x 只认最后一段：写在前面就是别的东西
+    CHECK_FALSE(parsePriceLine("x : B 10").has_value());
+    // 只允许一个标记
+    CHECK_FALSE(parsePriceLine("B 10 :x :x").has_value());
+}
+
+TEST_CASE("价格行：带 :x 的价格行仍然要过原来的文法") {
+    CHECK_FALSE(parsePriceLine("B 10 : S 5 : S 1 :x").has_value());
+    CHECK_FALSE(parsePriceLine("S 10 : S 5 :x").has_value());
+    CHECK_FALSE(parsePriceLine("B 10 : 5 :x").has_value());
+    CHECK_FALSE(parsePriceLine("B :x").has_value());
+    CHECK_FALSE(parsePriceLine("B -5 :x").has_value());
+    CHECK_FALSE(parsePriceLine("B 10 : :x").has_value());
+}
+
+TEST_CASE("规范化：停业追加 :x，营业不写") {
+    ShopSpec spec;
+    spec.amount    = 64;
+    spec.buyPrice  = 10;
+    spec.sellPrice = 5;
+
+    auto const open = formatShopSign(spec, "Steve", "钻石");
+    CHECK(open[SignLine::PriceLine] == "B 10 : S 5");
+
+    spec.closed = true;
+    auto const closed = formatShopSign(spec, "Steve", "钻石");
+    CHECK(closed[SignLine::PriceLine] == "B 10 : S 5 :x");
+
+    // 单侧价格也只在末尾追加一个段，不会写成 `S 5 : :x`
+    spec.buyPrice.reset();
+    auto const sellOnly = formatShopSign(spec, "Steve", "钻石");
+    CHECK(sellOnly[SignLine::PriceLine] == "S 5 :x");
+}
+
+TEST_CASE("规范化与解析：:x 来回一趟不丢") {
+    ShopSpec spec;
+    spec.amount    = 64;
+    spec.buyPrice  = 10;
+    spec.sellPrice = 5;
+    spec.closed    = true;
+
+    auto const formatted = formatShopSign(spec, "Steve", "钻石");
+    auto const parsed    = parseShopSignText(joinSignText(formatted), false, defaultConfig());
+    REQUIRE(parsed.ok());
+    CHECK(parsed.spec->closed);
+    CHECK(parsed.spec->buyPrice == spec.buyPrice);
+    CHECK(parsed.spec->sellPrice == spec.sellPrice);
+    CHECK(parsed.spec->amount == spec.amount);
+    CHECK(formatShopSign(*parsed.spec, "Steve", "钻石")[SignLine::PriceLine] == "B 10 : S 5 :x");
+}
+
+TEST_CASE("四行解析：手写 :x 也是合法写法，规范化后留着") {
+    auto const result = parseShopSign(lines("Steve", "64", "B 10 : S 5 :x", "?"), false, defaultConfig());
+    REQUIRE(result.ok());
+    CHECK(result.spec->closed);
+    CHECK(formatShopSign(*result.spec, "Steve", "钻石")[SignLine::PriceLine] == "B 10 : S 5 :x");
+}
+
+TEST_CASE("四行解析：停业的牌仍然「像商店牌」") {
+    // 停业不许靠清空价格行实现：第 3 行没有 B/S 就整体失去保护（spec D1）
+    auto const closed = parseShopSign(lines("Steve", "64", "B 10 : S 5 :x", "?"), false, defaultConfig());
+    CHECK(closed.looksLikeShopSign());
+    CHECK(closed.ok());
+
+    // 停业标记写错：像商店牌，仍要拦下改牌并给原因
+    auto const broken = parseShopSign(lines("Steve", "64", "B 10 :x :x", "?"), false, defaultConfig());
+    CHECK(broken.looksLikeShopSign());
+    CHECK(broken.error == ShopSignError::BadPrice);
+}

@@ -226,6 +226,7 @@ TEST_CASE("每条拒绝原因都有玩家看得懂的提示") {
     CHECK_FALSE(tradeRejectionMessage(TradeDirection::Buy, TradeRejection::NoRoomToReceive).empty());
     CHECK_FALSE(tradeRejectionMessage(TradeDirection::Buy, TradeRejection::OwnerOffline).empty());
     CHECK_FALSE(tradeRejectionMessage(TradeDirection::Buy, TradeRejection::InvalidRequest).empty());
+    CHECK_FALSE(tradeRejectionMessage(TradeDirection::Buy, TradeRejection::ShopClosed).empty());
     CHECK(tradeRejectionMessage(TradeDirection::Buy, TradeRejection::None).empty());
 }
 
@@ -500,4 +501,42 @@ TEST_CASE("卖出方向：份数上限按含税成本算，店主不会多卖一
     CHECK(decision.plan->units == 9);
     CHECK(decision.plan->total == std::int64_t{90});
     CHECK(decision.plan->tax == std::int64_t{9});
+}
+
+TEST_CASE("停业：closed 压过所有上限与输入校验，返回 ShopClosed") {
+    auto request          = soundBuy();
+    request.closed        = true;
+    request.goodsUnits    = 0; // 缺货
+    request.roomUnits     = 0; // 背包满
+    request.payerFunds    = 0; // 没钱
+    request.amountPerUnit = 64;
+
+    auto const decision = planTrade(request);
+    CHECK_FALSE(decision.ok());
+    CHECK(decision.rejection == TradeRejection::ShopClosed);
+
+    // 连同「输入本身不合法」也压过：停业是整家店的状态，不是玩家填错了什么
+    auto broken          = request;
+    broken.amountPerUnit = 0;
+    CHECK(planTrade(broken).rejection == TradeRejection::ShopClosed);
+}
+
+TEST_CASE("停业：卖出方向同样拒绝") {
+    auto request   = soundSell();
+    request.closed = true;
+    CHECK(planTrade(request).rejection == TradeRejection::ShopClosed);
+}
+
+TEST_CASE("停业：恢复营业后一切照旧") {
+    auto request   = soundBuy();
+    request.closed = false;
+
+    auto const decision = planTrade(request);
+    REQUIRE(decision.ok());
+    CHECK(decision.plan->units == 1);
+}
+
+TEST_CASE("停业：文案是「这家店暂停营业」，两个方向同一句") {
+    CHECK(tradeRejectionMessage(TradeDirection::Buy, TradeRejection::ShopClosed) == "这家店暂停营业");
+    CHECK(tradeRejectionMessage(TradeDirection::Sell, TradeRejection::ShopClosed) == "这家店暂停营业");
 }
