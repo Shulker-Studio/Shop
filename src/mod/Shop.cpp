@@ -1,8 +1,10 @@
 #include "mod/Shop.h"
+#include "mod/ShopCommand.h"
 
 #include "mod/ContainerProtectionListener.h"
 #include "mod/ContentProtectionHooks.h"
 #include "mod/DestructionProtectionHooks.h"
+#include "mod/DebugLog.h"
 #include "mod/EconomyService.h"
 #include "mod/SignEditListener.h"
 #include "mod/SignInteractListener.h"
@@ -46,6 +48,8 @@ bool Shop::enable() {
     registerContainerProtectionListener();
     registerDestructionProtectionHooks();
     registerContentProtectionHooks();
+    // 命令只服务观测：注册失败不影响模组，不影响上面的任何一条接线。
+    registerShopCommand();
     return true;
 }
 
@@ -58,6 +62,8 @@ bool Shop::disable() {
     unregisterSignEditListener();
     resetTradeService();
     resetEconomy();
+    // 调试开关不跨启用周期：换一次配置重启后还开着 debug，控制台会被刷满。
+    setShopDebugEnabled(false);
     mConfig.reset();
     return true;
 }

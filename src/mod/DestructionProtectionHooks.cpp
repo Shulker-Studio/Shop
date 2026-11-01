@@ -210,4 +210,6 @@ void registerDestructionProtectionHooks() { attachHooks(detail::gDestructionSlot
 
 void unregisterDestructionProtectionHooks() { detachHooks(detail::gDestructionSlots); }
 
+std::span<HookSlot const> destructionHookSlots() { return detail::gDestructionSlots; }
+
 } // namespace ss::shop

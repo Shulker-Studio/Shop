@@ -9,8 +9,15 @@ namespace ss::shop {
 
 /// 记分板经济后端（DESIGN §8.6 第 1 条）：余额 = 玩家在某个记分板目标上的分值。
 ///
-/// 只支持在线玩家：记分板以 `ScoreboardId` 为键，离线玩家没有可写的 ID，
-/// 所以 `supportsOffline()` 是 false（DESIGN §8.5）。
+/// **支持离线账户**（2026-11-01）：记分板身份的内部键是 `PlayerScoreboardId`（= 玩家的
+/// `ActorUniqueID`），它存在玩家存档里，所以人不在线也能拿到——照 LSE 的
+/// `mc.addPlayerScore(uuid, …)`（「可修改离线玩家计分板」）同一条路：
+/// `XUID → PlayerInfo 的 uuid → DBStorage 的 player_<uuid> → ServerId → UniqueID → getId(...)`。
+///
+/// 用 ID 而不是名字：改名、重名都不影响，也不会记到同名的假玩家身份上。
+///
+/// 仍然是「只支持**有身份**的离线玩家」：`getId` 返回 `INVALID`（这个人本世界还没有过记分板身份）
+/// 时安全失败，不硬建——按名字建出来的是假玩家身份，真人上线后会多出一行同名的。
 ///
 /// 分值内部是 `int32`，每次写入前都过 `economy::toScoreValue`，超出范围直接拒绝，
 /// 不静默截断（DESIGN §8.2）。
@@ -30,13 +37,18 @@ public:
     create(std::string objectiveName, bool createIfMissing, economy::ProbeIssue& issue);
 
     std::string_view name() const override { return "scoreboard"; }
-    bool             supportsOffline() const override { return false; }
+    bool             supportsOffline() const override { return true; }
     /// 管理员店的资金侧（DESIGN §7.4）：钱进 = 扣掉付款方的分（销毁），钱出 = 给收款方加分
     /// （凭空记账）。两笔都只需要一个在线玩家，而交易的两头总有一头是玩家。
-    ///
-    /// 注意与 `supportsMoneySink()` 的区别：那个只用于商店税，10 已经把记分板刻意排除在外
-    /// （§8.9），这里不让它变成真，否则记分板服会突然开始收税。
     bool supportsSystemAccount() const override { return true; }
+
+    /// 商店税（DESIGN §8.9）：**能**。付给系统账户就是「只扣付款方、谁都不加」，
+    /// 记分板上那就是一笔真销毁，与 LegacyMoney 的 `LLMoney_Trans(from, "", n)` 同义。
+    ///
+    /// 早先这里返回 false（理由是「记分板没有能把钱移出经济系统的账户」，10 落地时把它
+    /// 排除在税之外），2026-11-01 真机后改掉：污染的不是「有没有账户」而是「有没有对手方」，
+    /// 税本来就不需要对手方。两个后端现在在税上行为一致，服主换后端不会突然开始/停止收税。
+    bool supportsMoneySink() const override { return true; }
 
     std::optional<std::int64_t> get(economy::Account const& account) const override;
     bool                        set(economy::Account const& account, std::int64_t amount) override;

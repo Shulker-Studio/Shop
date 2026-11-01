@@ -59,7 +59,9 @@ TEST_CASE("物品分类：蜜蜡只认蜜蜡，不认蜜蜡块") {
     CHECK(classifySignTouch("minecraft:honeycomb_block") == SignTouch::None);
 }
 
-TEST_CASE("物品分类：斧头按材质逐个认，镐不算斧头") {
+TEST_CASE("物品分类：斧头不是「除蜡」，与空手同归普通点击") {
+    // 原版告示牌的蜡去不掉（斧头只对铜块有效，Mojira MC-261313 判 WAI），
+    // 所以斧头不该是一类「改牌子」的物品
     for (auto const* name :
          {"minecraft:wooden_axe",
           "minecraft:stone_axe",
@@ -67,21 +69,20 @@ TEST_CASE("物品分类：斧头按材质逐个认，镐不算斧头") {
           "minecraft:golden_axe",
           "minecraft:iron_axe",
           "minecraft:diamond_axe",
-          "minecraft:netherite_axe"}) {
-        CHECK(classifySignTouch(name) == SignTouch::Axe);
+          "minecraft:netherite_axe",
+          "minecraft:emerald_axe"}) {
+        CHECK(classifySignTouch(name) == SignTouch::None);
     }
-    // 「pickaxe」也以 axe 结尾，不能按后缀套
+    // 镐、锹同样不改牌子
     CHECK(classifySignTouch("minecraft:diamond_pickaxe") == SignTouch::None);
     CHECK(classifySignTouch("minecraft:golden_shovel") == SignTouch::None);
+    CHECK(classifySignTouch("minecraft:axe") == SignTouch::None);
 }
 
-TEST_CASE("物品分类：白名单没收录的染料/斧头按形状兜底") {
-    // 新版本加颜色或材质时，别静默放行——兜底归到对应的一类
+TEST_CASE("物品分类：白名单没收录的染料按形状兜底") {
+    // 新版本加颜色时，别静默放行——兜底归到染料
     CHECK(classifySignTouch("minecraft:coral_dye") == SignTouch::Dye);
-    CHECK(classifySignTouch("minecraft:emerald_axe") == SignTouch::Axe);
-    // 镐也以 axe 结尾，但它不改牌子
     CHECK(classifySignTouch("minecraft:copper_pickaxe") == SignTouch::None);
-    CHECK(classifySignTouch("minecraft:axe") == SignTouch::None);
 }
 
 TEST_CASE("物品分类：不认识的一律当作不改牌子") {
@@ -169,32 +170,33 @@ TEST_CASE("提交闸：身份与上蜡两条规则、两句话只在一处") {
     for (auto const actor : {ShopActor::Owner, ShopActor::Operator}) {
         auto const waxed = signTextEditRejection(actor, /*waxed=*/true, "Alex", false);
         REQUIRE(waxed.has_value());
-        CHECK(waxed->find("除蜡") != std::string::npos);
+        CHECK(waxed->find("上了蜡") != std::string::npos);
     }
     // 先身份后上蜡：非店主在上蜡的牌上拿到的是「不是你的店」，不泄露蜡的状态
     auto const both = signTextEditRejection(ShopActor::Other, /*waxed=*/true, "Alex", false);
     REQUIRE(both.has_value());
     CHECK(both->find("Alex") != std::string::npos);
-    CHECK(both->find("除蜡") == std::string::npos);
+    CHECK(both->find("上了蜡") == std::string::npos);
     // 管理员商店单独一句（§11）
     auto const admin = signTextEditRejection(ShopActor::Other, false, "Alex", /*adminShop=*/true);
     REQUIRE(admin.has_value());
     CHECK(admin->find("OP") != std::string::npos);
 }
 
-TEST_CASE("交互决策：上蜡后店主自己也进不了编辑界面，提示先除蜡") {
+TEST_CASE("交互决策：上蜡后店主自己也进不了编辑界面，提示只能拆牌重立") {
     auto const decision = touch("", {.actor = ShopActor::Owner, .sneaking = true, .waxed = true});
     CHECK(decision.action == SignTouchAction::Block);
-    CHECK(decision.message.find("除蜡") != std::string::npos);
+    CHECK(decision.message.find("上了蜡") != std::string::npos);
+    CHECK(decision.message.find("拆掉") != std::string::npos);
+    // 店主拿斧头也一样：斧头不是解药，那一下只是普通点击
+    auto const axe = touch("minecraft:iron_axe", {.actor = ShopActor::Owner, .sneaking = true, .waxed = true});
+    CHECK(axe.action == SignTouchAction::Block);
+    CHECK(axe.message.find("拆掉") != std::string::npos);
 }
 
-TEST_CASE("交互决策：非店主的染料、墨囊、荧光墨囊、蜜蜡、斧头全部拦下") {
+TEST_CASE("交互决策：非店主的染料、墨囊、荧光墨囊、蜜蜡全部拦下") {
     for (auto const* name :
-         {"minecraft:red_dye",
-          "minecraft:ink_sac",
-          "minecraft:glow_ink_sac",
-          "minecraft:honeycomb",
-          "minecraft:iron_axe"}) {
+         {"minecraft:red_dye", "minecraft:ink_sac", "minecraft:glow_ink_sac", "minecraft:honeycomb"}) {
         auto const decision = touch(name, {.actor = ShopActor::Other, .waxed = true});
         CHECK(decision.action == SignTouchAction::Block);
         CHECK_FALSE(decision.message.empty());
@@ -212,9 +214,10 @@ TEST_CASE("交互决策：看背面也不能给别人的商店牌上蜡、染色
     CHECK(
         touch("minecraft:honeycomb", {.actor = ShopActor::Other, .facingFront = false}).action == SignTouchAction::Block
     );
+    // 斧头在背面同样是普通点击：原版没有除蜡这个操作，也就没什么可拦的
     CHECK(
-        touch("minecraft:iron_axe", {.actor = ShopActor::Other, .waxed = true, .facingFront = false}).action
-        == SignTouchAction::Block
+        touch("minecraft:iron_axe", {.actor = ShopActor::Other, .facingFront = false}).action
+        == SignTouchAction::PassThrough
     );
     CHECK(
         touch("minecraft:red_dye", {.actor = ShopActor::Other, .facingFront = false}).action == SignTouchAction::Block
@@ -235,18 +238,16 @@ TEST_CASE("交互决策：店主的染料、墨囊、荧光墨囊、蜜蜡交给
     }
 }
 
-TEST_CASE("交互决策：斧头只在牌子真的上了蜡时才是「除蜡操作」") {
-    CHECK(
-        touch("minecraft:iron_axe", {.actor = ShopActor::Owner, .waxed = true}).action == SignTouchAction::PassThrough
-    );
-    // 非店主拿着斧头点已上蜡的牌：除不了蜡（§13 第 18 条）
-    CHECK(touch("minecraft:iron_axe", {.actor = ShopActor::Other, .waxed = true}).action == SignTouchAction::Block);
-    // 没上蜡就没有蜡可除：这一下什么都不改，就当普通点击（正面弹表单、背面放行），谁都一样
+TEST_CASE("交互决策：拿斧头点商店牌就是普通点击") {
+    // 上没上蜡都一样：正面弹表单，背面放行——斧头从来不是「解锁工具」（§13 第 18 条按此改）
     CHECK(touch("minecraft:iron_axe", {.actor = ShopActor::Owner}).action == SignTouchAction::TakeOver);
     CHECK(touch("minecraft:iron_axe", {.actor = ShopActor::Other}).action == SignTouchAction::TakeOver);
+    CHECK(touch("minecraft:iron_axe", {.actor = ShopActor::Other, .waxed = true}).action == SignTouchAction::TakeOver);
+    CHECK(touch("minecraft:iron_axe", {.actor = ShopActor::Other, .facingFront = false}).action == SignTouchAction::PassThrough);
+    // 只剩「潜行 + 想改文本」这一条会被蜡挡住
     CHECK(
-        touch("minecraft:iron_axe", {.actor = ShopActor::Other, .facingFront = false}).action
-        == SignTouchAction::PassThrough
+        touch("minecraft:iron_axe", {.actor = ShopActor::Other, .sneaking = true, .waxed = true}).action
+        == SignTouchAction::TakeOver
     );
 }
 
@@ -255,10 +256,13 @@ TEST_CASE("交互决策：每种操作的拦下提示都说到点子上") {
     CHECK(touch("minecraft:ink_sac", {.actor = ShopActor::Other}).message.find("文字样式") != std::string::npos);
     CHECK(touch("minecraft:glow_ink_sac", {.actor = ShopActor::Other}).message.find("文字样式") != std::string::npos);
     CHECK(touch("minecraft:honeycomb", {.actor = ShopActor::Other}).message.find("上蜡") != std::string::npos);
-    CHECK(
-        touch("minecraft:iron_axe", {.actor = ShopActor::Other, .waxed = true}).message.find("除蜡")
-        != std::string::npos
-    );
+    // 已经上蜡的牌：四样物品都得到同一句「上了蜡，都改不了了」
+    for (auto const* name :
+         {"minecraft:red_dye", "minecraft:ink_sac", "minecraft:glow_ink_sac", "minecraft:honeycomb"}) {
+        auto const decision = touch(name, {.actor = ShopActor::Other, .waxed = true});
+        CHECK(decision.action == SignTouchAction::Block);
+        CHECK(decision.message.find("上了蜡") != std::string::npos);
+    }
 }
 
 TEST_CASE("交互决策：分类漏判时非店主仍然安全") {
@@ -299,9 +303,10 @@ TEST_CASE("拦下提示：各类操作各有说法，无主牌只提 OP") {
         touch("minecraft:ink_sac", {.actor = ShopActor::Other}).message,
         touch("minecraft:glow_ink_sac", {.actor = ShopActor::Other}).message,
         touch("minecraft:honeycomb", {.actor = ShopActor::Other}).message,
-        touch("minecraft:iron_axe", {.actor = ShopActor::Other, .waxed = true}).message,
+        // 已上蜡的牌说另一句：不是「不给你改」，而是「谁都改不了」
+        touch("minecraft:red_dye", {.actor = ShopActor::Other, .waxed = true}).message,
     };
-    // 五句话都不空；染色、上蜡、除蜡各说各的（墨囊与荧光墨囊共用一句，是有意为之）
+    // 四句话都不空；染色、上蜡、上蜡后各说各的（墨囊与荧光墨囊共用一句，是有意为之）
     for (auto const& message : messages) {
         CHECK_FALSE(message.empty());
     }
@@ -315,8 +320,13 @@ TEST_CASE("拦下提示：各类操作各有说法，无主牌只提 OP") {
     CHECK(noOwner.find("店主") == std::string::npos);
 }
 
-TEST_CASE("上蜡提示：一句话说清要先除蜡") {
-    // 「先拿斧头除蜡」：说清要怎么做，不是只说「不行」
-    CHECK(waxedSignEditMessage().find("除蜡") != std::string::npos);
-    CHECK(waxedSignEditMessage().find("斧头") != std::string::npos);
+TEST_CASE("上蜡提示：说清去不掉蜡，出路是拆牌重立") {
+    // 不能再说「先拿斧头除蜡」——原版根本没有这个操作（Mojira MC-261313 判 WAI）
+    CHECK(waxedSignEditMessage().find("先拿斧头除蜡") == std::string::npos);
+    CHECK(waxedSignEditMessage().find("上了蜡") != std::string::npos);
+    CHECK(waxedSignEditMessage().find("拆掉") != std::string::npos);
+    // 四种物品在已上蜡的牌上共用一句：颜色/发光/再上蜡都不行了
+    auto const touchMessage = waxedSignTouchMessage();
+    CHECK(touchMessage.find("上了蜡") != std::string::npos);
+    CHECK(touchMessage.find("颜色") != std::string::npos);
 }

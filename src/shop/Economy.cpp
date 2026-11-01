@@ -8,7 +8,6 @@ namespace {
 
 /// 后端名 ↔ 枚举。配置里能写哪些名字由 DESIGN §8.4 决定，只在这张表里列一次。
 constexpr std::pair<Backend, std::string_view> kBackendNames[] = {
-    {Backend::Auto,        "auto"        },
     {Backend::LegacyMoney, "legacy_money"},
     {Backend::Scoreboard,  "scoreboard"  },
     {Backend::Builtin,     "builtin"     },
@@ -62,9 +61,8 @@ std::string legalBackendNamesText(std::string_view separator) {
 
 BackendProbes probesFor(Backend configured) {
     switch (configured) {
-    case Backend::Auto:
     case Backend::LegacyMoney:
-        return {true, true};
+        return {true, false};
     case Backend::Scoreboard:
         return {false, true};
     case Backend::Builtin:
@@ -94,32 +92,36 @@ BackendSelection selectBackend(Backend configured, BackendCandidates const& cand
     BackendSelection selection;
 
     // 空实现不需要探测：「一个能记账的后端都没有」就是它的定义。
-    // `builtin`（P1）同理：配置校验已经拒了它，万一漏到这儿也不拿记分板顶替——
+    // `builtin`（P1）同理：配置校验已经拒了它，万一漏到这儿也不拿别的后端顶替——
     // 服主写了 builtin 就是不想要另外两个后端记账。
     if (configured == Backend::Null || configured == Backend::Builtin) {
         return selection;
     }
 
-    // `auto` 与显式 `legacy_money` 走同一条候选链：服主点了名、但服务器上确实没有，
-    // 能降级到记分板总比整服停摆好（DESIGN §8.4 第 4 条），原因会打进日志。
-    // 显式 `scoreboard` 不从 legacy_money 开始：服主不想要 LegacyMoney 记账。
-    bool const wantLegacy = configured == Backend::Auto || configured == Backend::LegacyMoney;
-
-    if (wantLegacy) {
+    // **一个后端只探它自己**（2026-11-01 删除 `auto` 之后）：
+    // 写 `legacy_money` 就不看记分板，写 `scoreboard` 就不看 LegacyMoney。
+    // 探不到 → 空实现，把原因交给调用方报错。账本换家必须由服主决定，
+    // 不能因为「另一个后端刚好可用」就悄悄换一套（余额会一夜之间全变 0）。
+    switch (configured) {
+    case Backend::LegacyMoney:
         if (candidates.legacyMoney.available) {
             selection.chosen = Backend::LegacyMoney;
             return selection;
         }
         selection.skipped.emplace_back(Backend::LegacyMoney, candidates.legacyMoney.issue);
+        break;
+    case Backend::Scoreboard:
+        if (candidates.scoreboard.available) {
+            selection.chosen = Backend::Scoreboard;
+            return selection;
+        }
+        selection.skipped.emplace_back(Backend::Scoreboard, candidates.scoreboard.issue);
+        break;
+    case Backend::Builtin:
+    case Backend::Null:
+        break; // 上面已经返回
     }
 
-    if (candidates.scoreboard.available) {
-        selection.chosen = Backend::Scoreboard;
-        return selection;
-    }
-    selection.skipped.emplace_back(Backend::Scoreboard, candidates.scoreboard.issue);
-
-    // 降级到底：空实现。`builtin`（P1）在上面就返回了，走不到这儿。
     selection.chosen = Backend::Null;
     return selection;
 }

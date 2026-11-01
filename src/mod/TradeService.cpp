@@ -3,6 +3,7 @@
 #include "mod/Clock.h"
 #include "mod/ContainerFinderBds.h"
 #include "mod/EconomyService.h"
+#include "mod/DebugLog.h"
 #include "mod/Shop.h"
 #include "mod/ShopForm.h"
 #include "mod/ShopService.h"
@@ -764,6 +765,30 @@ void requestUnitsForm(
 /// 提交之后的三件事：要确认就弹确认表单、成交就记一条日志、其余情况把消息发给玩家。
 /// 买卖共用一份，免得两边各写一遍「忘了记日志」。
 void finishTrade(Player& player, Cell const& sign, TradeDirection direction, TradeResult const& result) {
+    // 唯一漏斗：两个方向的每一种终态都从这里出去，所以调试与流水将来都挂在这一处。
+    if (shopDebugEnabled()) {
+        char const* outcome = "fail";
+        if (result.done()) {
+            outcome = "ok";
+        } else if (result.needsConfirm()) {
+            outcome = "confirm";
+        } else if (result.status == TradeStatus::Broken) {
+            outcome = "frozen";
+        }
+        shopDebugEvent(
+            "trade_result",
+            {dbgField("player", player.getXuid()),
+             dbgField("pos", dbgPos(player.getDimensionBlockSource().getDimensionId(), sign.x, sign.y, sign.z)),
+             dbgField("dir", direction == TradeDirection::Buy ? "buy" : "sell"),
+             dbgField("units", (long long)result.plan.units),
+             dbgField("items", (long long)result.plan.items),
+             dbgField("total", (long long)result.plan.total),
+             dbgField("tax", (long long)result.plan.tax),
+             dbgField("outcome", outcome),
+             dbgField("reason", result.done() ? std::string_view{} : std::string_view{result.message})}
+        );
+    }
+
     if (result.needsConfirm()) {
         // 实际值与玩家看到的不一样：先把真实份数与金额摆出来，确认后才执行。
         openTradeConfirmForm(player, sign, direction, result.plan, result.message);

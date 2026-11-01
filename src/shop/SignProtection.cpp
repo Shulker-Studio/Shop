@@ -48,18 +48,6 @@ constexpr std::array<std::string_view, 16> kDyeNames{
     "yellowdye",
 };
 
-/// 斧头（除蜡）。金斧头在基岩版是 `golden_axe`；铜制工具一并列上，免得新版本漏判。
-/// 不按 `_axe` 后缀判：「pickaxe」（镐）也以 `axe` 结尾。
-constexpr std::array<std::string_view, 7> kAxeNames{
-    "woodenaxe",
-    "stoneaxe",
-    "copperaxe",
-    "goldenaxe",
-    "ironaxe",
-    "diamondaxe",
-    "netheriteaxe",
-};
-
 template <std::size_t N>
 bool contains(std::array<std::string_view, N> const& table, std::string const& name) {
     for (auto const candidate : table) {
@@ -87,14 +75,13 @@ std::string_view touchSubject(SignTouch touch) {
     case SignTouch::GlowInkSac:
         return "这块商店牌的文字样式";
     case SignTouch::HoneyComb:
-    case SignTouch::Axe:
     case SignTouch::None:
         break;
     }
     return "这块商店牌";
 }
 
-/// 要做什么（GLOSSARY 里的「上蜡 / 除蜡」原样用）。
+/// 要做什么（GLOSSARY 里的「上蜡」原样用）。
 std::string_view touchAction(SignTouch touch) {
     switch (touch) {
     case SignTouch::Dye:
@@ -103,8 +90,6 @@ std::string_view touchAction(SignTouch touch) {
         return "改";
     case SignTouch::HoneyComb:
         return "上蜡";
-    case SignTouch::Axe:
-        return "除蜡";
     case SignTouch::None:
         break;
     }
@@ -169,7 +154,13 @@ std::string ownerOnlyEditMessage(std::string const& ownerName, bool adminShop) {
     return "这块商店牌是 " + ownerName + " 的，" + std::string{kOwnerOnly} + "改";
 }
 
-std::string waxedSignEditMessage() { return "这块商店牌上了蜡，先拿斧头除蜡才能改"; }
+std::string waxedSignEditMessage() {
+    // 必须说清「原版去不掉蜡」：不然玩家会一直去试斧头（老版本的习惯），
+    // 而斧头对告示牌只当普通点击用。
+    return "这块商店牌上了蜡，牌面文字改不了了：原版的蜡不能用斧头去除，要改只能拆掉这块牌重立";
+}
+
+std::string waxedSignTouchMessage() { return "这块商店牌上了蜡：颜色、发光和再上蜡都改不了了"; }
 
 std::string shopBoxMissingMessage() { return "这家店暂时用不了（商店箱不在了），牌子还不能改"; }
 
@@ -184,9 +175,6 @@ SignTouch classifySignTouch(std::string_view itemTypeName) {
     if (contains(kDyeNames, name)) {
         return SignTouch::Dye;
     }
-    if (contains(kAxeNames, name)) {
-        return SignTouch::Axe;
-    }
     if (name == "inksac") {
         return SignTouch::InkSac;
     }
@@ -197,29 +185,23 @@ SignTouch classifySignTouch(std::string_view itemTypeName) {
         return SignTouch::HoneyComb;
     }
 
-    // 形状兜底：新版本加了颜色或材质时不至于静默放行。裸名（`dye` / `axe`）不算：
+    // 形状兜底：新版本加了颜色时不至于静默放行。裸名（`dye`）不算：
     // 要求 `size() >` 前缀，避免把「空的类别名」当成一类物品。
     auto const endsWith = [&name](std::string_view suffix) {
         return name.size() > suffix.size() && name.ends_with(suffix);
     };
-    if (endsWith("pickaxe")) {
-        return SignTouch::None; // 镐也是以 axe 结尾，但它不改牌子
-    }
     if (endsWith("dye")) {
         return SignTouch::Dye;
     }
-    if (endsWith("axe")) {
-        return SignTouch::Axe;
-    }
+    // 斧头 / 镐 / 锹 都落不到这里：原版不能用斧头给告示牌除蜡（见 `SignTouch` 的注释），
+    // 拿它们点牌就是普通点击。
     return SignTouch::None;
 }
 
 SignTouchDecision planSignTouch(SignTouchContext const& context) {
-    // 斧头对没上蜡的牌什么都不改，那一下就是一次普通点击（上蜡与否不影响商店语义）：
-    // 不把它当成「除蜡操作」，所以谁点都一样。
-    bool const plainClick = context.touch == SignTouch::None || (context.touch == SignTouch::Axe && !context.waxed);
-
-    if (plainClick) {
+    // 普通点击 = 手里没有会改牌子的东西。斧头也在这里：原版没有「斧头给告示牌除蜡」这回事，
+    // 所以拿斧头点牌与空手点牌完全一样（正面弹表单、背面放行）。
+    if (context.touch == SignTouch::None) {
         // 背面是布告板：不看内容、不改格式，原版编辑界面照弹（DESIGN §5.5）。
         if (!context.facingFront) {
             return {SignTouchAction::PassThrough, {}};
@@ -232,19 +214,23 @@ SignTouchDecision planSignTouch(SignTouchContext const& context) {
         if (!mayEditShopSignText(context.actor)) {
             return {SignTouchAction::TakeOver, {}};
         }
-        // 上蜡的牌原版也不给编辑，这里先说清原因。
+        // 上蜡的牌原版也不给编辑（而且没有反向操作），先把原因说清：连店主也只能拆牌重立。
         if (context.waxed) {
             return {SignTouchAction::Block, waxedSignEditMessage()};
         }
         return {SignTouchAction::PassThrough, {}};
     }
 
-    // 物品类操作与看哪一面无关：上蜡/除蜡改的是整块牌子，染色与墨囊也不该由外人来按。
-    // 到这里只可能是「真的有东西要改」：染料、墨囊、荧光墨囊、蜜蜡，以及上了蜡的斧头。
+    // 染料 / 墨囊 / 荧光墨囊 / 蜜蜡：改的是整块牌子，与看哪一面无关。
+    // 已经上蜡的牌，原版对这四样一律拒绝——所以先说「上了蜡」，不拿权限说事
+    // （否则店主会以为「是我没权限」，其实谁都改不了）。
+    if (context.waxed) {
+        return {SignTouchAction::Block, waxedSignTouchMessage()};
+    }
     if (!canManageShop(context.actor)) {
         return {SignTouchAction::Block, onlyOwnerMessage(context.actor, context.touch)};
     }
-    // 店主与 OP：染色、墨囊、上蜡、除蜡都交给原版处理。
+    // 店主与 OP：染色、墨囊、上蜡都交给原版处理。
     return {SignTouchAction::PassThrough, {}};
 }
 

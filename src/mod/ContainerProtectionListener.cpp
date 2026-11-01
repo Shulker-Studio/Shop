@@ -1,6 +1,8 @@
 #include "mod/ContainerProtectionListener.h"
 
+#include "mod/BlockResync.h"
 #include "mod/ContainerFinderBds.h"
+#include "mod/DebugLog.h"
 #include "mod/Shop.h"
 #include "shop/ContainerProtection.h"
 
@@ -110,10 +112,37 @@ ShopBlockDecision judge(
 }
 
 /// 拦下并把原因告诉玩家：这两件事永远一起做，别在每条路径上各写一遍。
+///
+/// `kind` 只给调试日志分类用（开箱 / 拆箱 / 拆牌 / 拆依附方块）。原因本身仍然只有
+/// `decision.message` 这一份文案——调试日志不另写一套说法。
+///
+/// `resync` 为真时把这一格的方块实体重发给动手的玩家：对着商店牌按下挖掘键时，
+/// 客户端会先把”牌子碎掉、牌面文字没了“演出来，取消事件只拦权威状态、拦不住预演
+/// （真机现象：拆不掉，但牌面文字空着，退出重进才回来）。
 template <class Event>
-void reject(Event& event, Player& player, ShopBlockDecision const& decision) {
+void reject(
+    Event&                  event,
+    Player&                 player,
+    ShopBlockDecision const& decision,
+    BlockPos const&         blockPos,
+    char const*             kind,
+    bool                    resync = false
+) {
     event.cancel();
     player.sendMessage(decision.message);
+    if (resync) {
+        resyncBlockActor(player, player.getDimensionBlockSource(), blockPos);
+    }
+    if (shopDebugEnabled()) {
+        auto const& region = player.getDimensionBlockSource();
+        shopDebugEvent(
+            "protection_block",
+            {dbgField("kind", std::string_view{kind}),
+             dbgField("player", player.getXuid()),
+             dbgField("pos", dbgPos(region.getDimensionId(), blockPos.x, blockPos.y, blockPos.z)),
+             dbgField("reason", decision.message)}
+        );
+    }
 }
 
 /// 攻击/拆除一格方块前的公共前段：先判这一格是不是商店方块，不是的话再判「这格上挂着谁的商店牌」
@@ -129,7 +158,11 @@ shopSubjectOrRejected(Event& event, BlockSource& region, BlockPos const& pos, Pl
                                          ? judge(*subject, ShopBlockTouch::BreakSign, ShopBlockTouch::BreakChest, player, config)
                                          : judgeSupportBlock(region, pos, player, config);
     if (!decision.allowed) {
-        reject(event, player, decision);
+        // 调试分类：这一格是商店牌/商店箱，还是「挂着商店牌的普通方块」（H3e）。
+        char const* kind = subject ? "break_shop" : "break_support";
+        // 拆牌/拆箱被拦下时补一次方块实体重发（见 `reject` 的 `resync` 参数）。
+        // `break_support` 那档这一格只是普通方块，没有方块实体，重发是空操作。
+        reject(event, player, decision, pos, kind, /*resync=*/true);
         return std::nullopt;
     }
     return subject;
@@ -147,7 +180,7 @@ void onOpenContainer(OpenContainerBeforeEvent& event) {
     auto const              signs    = attachedShopSignsAt(region, event.containerBlockPos(), *config);
     ShopBlockDecision const decision = judgeSigns(signs, ShopBlockTouch::OpenChest, player, *config);
     if (!decision.allowed) {
-        reject(event, player, decision);
+        reject(event, player, decision, event.containerBlockPos(), "open_chest");
     }
 }
 

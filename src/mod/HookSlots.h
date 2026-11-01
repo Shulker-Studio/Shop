@@ -14,6 +14,9 @@ struct HookSlot {
     int (*attach)();
     bool (*detach)();
     bool attached = false; ///< 已经挂过了，不重复挂、也不漏反注册（不代表「挂成功了」）
+    /// 最近一次 `attach()` 的返回值。**同样不代表成功**（见上），只给 `/shop status` 对照
+    /// 符号漂移用：同一个二进制上返回码从 0 变成非 0，就是符号或版本变了。
+    int lastReturn = 0;
 };
 
 /// 挂上表里还没挂的那几条。
@@ -25,5 +28,10 @@ void attachHooks(std::span<HookSlot> slots);
 
 /// 按注册的逆序解开已经挂上的那几条（没挂上的不动）。
 void detachHooks(std::span<HookSlot> slots);
+
+/// 两张 hook 名单，给 `/shop status` 如实列出「已尝试注册 + 返回码」。
+/// 只暴露只读视图：接线只在各自的 `register*Hooks()` 里做。
+std::span<HookSlot const> destructionHookSlots();
+std::span<HookSlot const> contentHookSlots();
 
 } // namespace ss::shop

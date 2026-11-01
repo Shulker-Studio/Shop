@@ -38,6 +38,13 @@ UnitsFormModel makeUnitsFormModel(int maxUnits);
 /// 下拉框的选项文案，顺序与 `model.choices` 一致。
 std::vector<std::string> unitsFormOptions(UnitsFormModel const& model);
 
+/// 把「选项文案」换算回下标（`unitsFormOptions` 的逆运算），找不到返回 -1。
+///
+/// 为什么要这一层：LeviLamina 的 `CustomForm` 下拉框回传的是**选中项的文案**
+/// （`Dropdown::parseResult` 返回 `mOptions[index]`），不是下标。表单回调那侧
+/// 只能拿到字符串，所以「文案 → 下标」这一步必须由建表单的人来解释。
+int choiceIndexForOption(UnitsFormModel const& model, std::string_view optionText);
+
 /// 表单正文：每份件数、价格、货还剩多少、余额，再逐档列出**总件数与总金额**。
 ///
 /// 每一档的金额都写出来，选哪一档看到的数就是最终成交的数，页面不需要实时刷新

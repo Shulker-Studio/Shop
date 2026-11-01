@@ -1,11 +1,14 @@
 #include "mod/EconomyService.h"
 
+#include "mod/DebugLog.h"
+
 #include "mod/Config.h"
 #include "mod/LegacyMoneyEconomy.h"
 #include "mod/ScoreboardEconomy.h"
 #include "mod/Shop.h"
 
 #include "ll/api/event/EventBus.h"
+#include "ll/api/event/player/PlayerJoinEvent.h"
 #include "ll/api/event/server/ServerStartedEvent.h"
 #include "ll/api/service/Bedrock.h"
 
@@ -42,23 +45,60 @@ bool gNoBackendWarned = false;
 bool gTaxWarned = false;
 bool gTaxBackendWarned = false;
 
+/// 最近一次解析出的「配置值 → 选用值」文本，与启动日志同一句。
+/// `/shop status` 直接显示它：日志不实时刷盘，这条文本不能只活在日志里。
+std::string gSelectionText;
+
 /// 世界起来后立刻探一次，把最终选择打进日志（DESIGN §8.4 第 4 条）。
 ll::event::ListenerPtr gServerStartedListener;
+/// 玩家进服时再兜一次：真机上 `ServerStartedEvent` 并不可靠（见 `initEconomyService`）。
+ll::event::ListenerPtr gPlayerJoinListener;
 
 /// 一个候选后端探测不到时的中文提示（只在「一个后端都没有」时给服主看，所以写得具体些）。
-std::string noBackendHint(ShopConfig const& config, BackendSelection const& selection) {
-    std::string hint = "没有可记账的经济后端：交易会全部失败。";
+std::string noBackendHint(
+    ShopConfig const&     config,
+    Backend               configured,
+    BackendSelection const& selection
+) {
+    std::string hint = "你写的 economy.backend = " + std::string{economy::backendName(configured)}
+                     + " 探不到可用的后端：交易会全部失败。";
     for (auto const& [backend, issue] : selection.skipped) {
         if (backend == Backend::LegacyMoney && issue == ProbeIssue::ModuleMissing) {
-            hint += " 装 LegacyMoney（或带它的 LegacyScriptEngine）后重载本模组即可自动使用它；";
+            hint += " 装 LegacyMoney（或带它的 LegacyScriptEngine）后重启即可用它；"
+                    "或者把 `economy.backend` 改成 `scoreboard`（这是另一套账本，余额不互通）；";
+        }
+        if (backend == Backend::LegacyMoney && issue == ProbeIssue::ExportsMissing) {
+            hint += " 进程里的 LegacyMoney.dll 导出不齐（多半版本不兼容），换一个配套版本；"
+                    "或者把 `economy.backend` 改成 `scoreboard`（另一套账本，余额不互通）；";
         }
         if (backend == Backend::Scoreboard && issue == ProbeIssue::ObjectiveMissing) {
             hint += " 用 `/scoreboard objectives add " + config.economy.scoreboardObjective
                   + " dummy` 建一个，或把 `economy.createObjectiveIfMissing` 设为 true；";
         }
+        if (backend == Backend::Scoreboard && issue == ProbeIssue::ObjectiveCreateFailed) {
+            hint += " 自动建记分板目标 `" + config.economy.scoreboardObjective + "` 失败了，"
+                    "手动建一次再重启；";
+        }
     }
-    hint += " 改完配置或建好目标后需要重载模组。";
+    // 把「不会自动换账本」写进日志：服主看到「没有后端」时最容易以为装个 LegacyMoney 就会
+    // 自动开始记账，而实际是要求他明确改配置——这正是删掉 `auto` 的原因。
+    hint += " 本模组不会自动改用另一个后端（账本换家必须由你在 `economy.backend` 里决定），"
+            "改完配置后需要重启服务器。";
     return hint;
+}
+
+
+/// 一次解析的收尾：记下要显示给 `/shop status` 的那句话，打一条调试事件，再标记“不再重试”。
+///
+/// 所有早退分支都必须走这里——否则 `/shop status` 会把「解析过了但没后端」错报成
+/// 「尚未解析（世界未就绪）」，那正好是 D6 要查的两件不同的事。
+void finishResolution(std::string selectionText) {
+    gSelectionText = std::move(selectionText);
+    gResolved      = true;
+    shopDebugEvent(
+        "economy_resolution",
+        {dbgField("selection", gSelectionText)}
+    );
 }
 
 /// 探测两个候选后端（只在可能用到时才探、才建目标），交给纯函数做选择。
@@ -71,7 +111,7 @@ bool resolveProvider(ShopConfig const& config) {
     auto const parsed = economy::parseBackend(config.economy.backend);
     if (!parsed) {
         logger.error("economy.backend = \"{}\" 认不出来，本次不提供经济后端", config.economy.backend);
-        gResolved = true; // 不再重试：配置错了，重试一万次也还是错
+        finishResolution("配置 " + config.economy.backend + " → 无法识别，没有经济后端");
         return true;
     }
     Backend const backend = *parsed;
@@ -79,13 +119,13 @@ bool resolveProvider(ShopConfig const& config) {
     if (backend == Backend::Builtin) {
         // 配置校验已经拒过这个取值；走到这里说明配置被绕过。
         logger.error("economy.backend = \"builtin\" 是 P1 的计划（自建账本），本次不提供经济后端");
-        gResolved = true;
+        finishResolution("配置 builtin → P1 才有，本次没有经济后端");
         return true;
     }
 
     if (backend == Backend::Null) {
         logger.warn("economy.backend = \"null\"：余额恒为 0，交易会全部失败（仅供开发）");
-        gResolved = true;
+        finishResolution("配置 null → 空实现（余额恒为 0）");
         return true;
     }
 
@@ -102,11 +142,10 @@ bool resolveProvider(ShopConfig const& config) {
         candidates.legacyMoney = {legacy != nullptr, issue};
     }
 
-    // 2. 记分板：只有「想要 legacy 但没探到」或「显式要 scoreboard」时才碰它——
-    //    前一级可用就不碰，免得白白在服务器的记分板上建一个用不到的目标。
+    // 2. 记分板：只有配置写着 `scoreboard` 才碰它（没有降级链了，不再需要看别的后端脸色）。
     //    这里才需要世界（目标在 `Level` 的记分板上），也是唯一会建目标的地方。
     std::shared_ptr<ScoreboardEconomy> scoreboard;
-    if (probes.scoreboard && !candidates.legacyMoney.available) {
+    if (probes.scoreboard) {
         auto const level = ll::service::bedrock::getLevel();
         if (!level) {
             if (!gNotReadyWarned) {
@@ -127,6 +166,7 @@ bool resolveProvider(ShopConfig const& config) {
     // 3. 选谁由纯函数决定（DESIGN §8.4 的候选顺序只在 `shop/Economy.cpp` 写一次）。
     BackendSelection const selection = economy::selectBackend(backend, candidates);
     std::string const      text      = economy::backendSelectionText(backend, selection);
+    gSelectionText                   = text;
 
     switch (selection.chosen) {
     case Backend::LegacyMoney:
@@ -136,28 +176,28 @@ bool resolveProvider(ShopConfig const& config) {
     case Backend::Scoreboard:
         gProvider = std::move(scoreboard);
         logger.info("{}（只支持在线店主）", text);
-        if (config.tax.shopTaxRate > 0.0 && !gTaxBackendWarned) {
-            // 记分板没有「付给系统」的账户，收不走的那笔税只能不收（否则账目对不上）。
-            gTaxBackendWarned = true;
-            logger.warn(
-                "tax.shopTaxRate = {} 但当前后端是记分板：它没有能把钱移出经济系统的账户，"
-                "商店税在这个后端上不生效（要收税请装 LegacyMoney）",
-                config.tax.shopTaxRate
-            );
-        }
         break;
-    case Backend::Auto:
     case Backend::Builtin:
     case Backend::Null:
         // 空实现：不留 `gProvider`，`economyBackend()` 会返回 `gNullBackend`。
         if (!gNoBackendWarned) {
             gNoBackendWarned = true;
-            logger.error("{}。{}", text, noBackendHint(config, selection));
+            logger.error("{}。{}", text, noBackendHint(config, backend, selection));
         }
         break;
     }
 
-    gResolved = true;
+    // 税要一个「能把钱移出经济系统」的动作：当前两个后端都支持（空收款方 = 只扣付款方），
+    // 留着这道判据是为了将来加后端时不用再想起来。
+    if (gProvider && config.tax.shopTaxRate > 0.0 && !gProvider->supportsMoneySink() && !gTaxBackendWarned) {
+        gTaxBackendWarned = true;
+        logger.warn(
+            "tax.shopTaxRate = {} 但当前后端不支持把当前的钱移出经济系统：商店税在这个后端上不生效",
+            config.tax.shopTaxRate
+        );
+    }
+
+    finishResolution(text);
     return true;
 }
 
@@ -192,17 +232,49 @@ void warnTaxConflict(ShopConfig const& config) {
 void initEconomyService(ShopConfig const& config) {
     warnTaxConflict(config);
 
-    if (gServerStartedListener) {
+    if (gServerStartedListener && gPlayerJoinListener) {
         return;
     }
+    auto& bus    = ll::event::EventBus::getInstance();
+    auto& logger = Shop::getInstance().getSelf().getLogger();
+
     // 世界一就绪就探一次：把最终选中的后端写进启动日志（DESIGN §8.4 第 4 条）。
     // 回调里只调 `economyBackend()`，探测逻辑与首次动钱时完全同一条。
-    gServerStartedListener = ll::event::EventBus::getInstance().emplaceListener<ll::event::server::ServerStartedEvent>(
-        [](ll::event::server::ServerStartedEvent&) { economyBackend(); }
-    );
     if (!gServerStartedListener) {
-        Shop::getInstance().getSelf().getLogger().warn("注册服务器启动监听失败：经济后端推迟到首次交易时再探测");
+        gServerStartedListener = bus.emplaceListener<ll::event::server::ServerStartedEvent>(
+            [](ll::event::server::ServerStartedEvent&) { economyBackend(); }
+        );
+        if (!gServerStartedListener) {
+            logger.warn("注册服务器启动监听失败：经济后端推迟到玩家进服或首次交易时再探测");
+        }
     }
+
+    // 真机发现（2026-11-01，LL 26.51.9）：世界已经就绪、玩家已经进服，`/shop status` 仍然显示
+    // 「尚未解析」——即 `ServerStartedEvent` 并没有在世界的就绪时刻送到。这不能算「等首次交易」
+    // 就完事：没交易过的服一整天都会显示没后端，排查时极容易误判成后端不可用。
+    //
+    // 所以再挂一条「玩家进服」：进服必然意味着世界已经在跑，比 `ServerStartedEvent` 可靠得多，
+    // 而且它正是服主第一次需要看余额的时刻。两条都留着：谁先到都只解析一次（`ensureResolved` 幂等）。
+    if (!gPlayerJoinListener) {
+        gPlayerJoinListener = bus.emplaceListener<ll::event::player::PlayerJoinEvent>(
+            [](ll::event::player::PlayerJoinEvent&) { economyBackend(); }
+        );
+        if (!gPlayerJoinListener) {
+            logger.warn("注册玩家进服监听失败：经济后端推迟到首次交易时再探测");
+        }
+    }
+}
+
+std::string const& economySelectionText() { return gSelectionText; }
+
+std::string economyUnresolvedReason() {
+    if (gResolved) {
+        return {}; // 已解析却没选型文本只可能是空实现那条路，此时文本本来就非空
+    }
+    // 「世界还没起来」和「世界起来了但解析没跑」是两件事，`/shop status` 不许把它们混成一句话。
+    return ll::service::bedrock::getLevel()
+             ? std::string{"尚未解析（世界已就绪，会在玩家进服或第一次交易时解析）"}
+             : std::string{"尚未解析（世界未就绪）"};
 }
 
 economy::EconomyProvider& economyBackend() {
@@ -234,9 +306,14 @@ bool accountsRecordable(economy::EconomyProvider& provider, std::string_view pay
 }
 
 void resetEconomy() {
+    auto& bus = ll::event::EventBus::getInstance();
     if (gServerStartedListener) {
-        ll::event::EventBus::getInstance().removeListener<ll::event::server::ServerStartedEvent>(gServerStartedListener);
+        bus.removeListener<ll::event::server::ServerStartedEvent>(gServerStartedListener);
         gServerStartedListener.reset();
+    }
+    if (gPlayerJoinListener) {
+        bus.removeListener<ll::event::player::PlayerJoinEvent>(gPlayerJoinListener);
+        gPlayerJoinListener.reset();
     }
     gProvider.reset();
     gResolved        = false;

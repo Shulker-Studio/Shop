@@ -85,7 +85,7 @@ struct ShopInteraction {
     ShopActor actor = ShopActor::Other;
     /// 表单角色，由 `canManageShop(actor)` 派生：店主与 OP 拿管理入口，其余拿买卖按钮。
     ShopFormRole role = ShopFormRole::Visitor;
-    /// 这块牌已经上蜡：连店主也要先除蜡才能改文本（DESIGN §9.2）。
+    /// 这块牌已经上蜡：原版去不掉蜡，连店主也改不了文本（DESIGN §9.2）。
     /// 上蜡只是编辑开关，不影响商店语义，交易照常。
     /// 这里是「整块牌子」的属性，与 `shop` 有没有值（能不能交易）无关。
     bool waxed = false;

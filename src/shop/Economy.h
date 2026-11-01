@@ -25,7 +25,12 @@ using Account = std::string;
 ///
 /// 名字与枚举的对应只写在 `Economy.cpp` 那张表里：配置校验、后端选择、日志文案
 /// 都从它取名，免得三个地方各写一份字符串。
-enum class Backend : std::uint8_t { Auto, LegacyMoney, Scoreboard, Builtin, Null };
+///
+/// **没有 `auto`（2026-11-01 删除）**：它原来表示「LegacyMoney 探不到就用记分板」，
+/// 等于让服主的账本可能在一夜之间换一套（余额看起来全变 0），而日志里只有一条容易被
+/// 忽略的 info。这与「配置非法就拒绝加载」的既有原则直接冲突——账本换家比配置写错严重得多。
+/// 现在后端必须**明确写出来**，探不到就报错不启用交易，由服主决定改成哪一个。
+enum class Backend : std::uint8_t { LegacyMoney, Scoreboard, Builtin, Null };
 
 /// config.json 里写的后端名 → 后端。认不出返回空（配置非法）。
 std::optional<Backend> parseBackend(std::string_view name);
@@ -62,15 +67,14 @@ struct BackendProbe {
 
 /// 这个配置需要探测哪几个候选（DESIGN §8.4）。
 ///
-/// 「探不探」与「谁先谁后」是两件事：顺序只在 `selectBackend` 里，这里只回答要不要花力气去探，
-/// 免得 mod 层再写一遍 `backend == auto || backend == legacy_money` 这种判断。
+/// **每个后端只探它自己那一个**：写 `legacy_money` 就只问 LegacyMoney，写 `scoreboard`
+/// 就只问记分板。一个都不探的只有 `null` 与 `builtin`（P1）。
 struct BackendProbes {
     bool legacyMoney = false;
     bool scoreboard  = false;
 };
 
-/// `auto` 与 `legacy_money` 都可能用到两个候选；显式 `scoreboard` 只看记分板；
-/// `null` 与 `builtin`（P1）谁都不探。
+/// 只有写哪个探哪个（见上）：不存在「顺手也探一下别的」的情况。
 BackendProbes probesFor(Backend configured);
 
 /// 探测阶段能问出来的全部事实。`NullEconomy` 永远可用，所以不在里面。
@@ -88,16 +92,17 @@ struct BackendSelection {
 
 /// 按配置与探测结果选定后端（DESIGN §8.4）。纯函数：不碰世界、不打日志、不建目标。
 ///
-/// 候选顺序由配置决定：`auto` 与 `legacy_money` 都是 `legacy_money → scoreboard → null`，
-/// `scoreboard` 是 `scoreboard → null`，`null` 直接就是它自己。
-/// **显式写了 `legacy_money` 但探测不到也降级**（§8.4 第 4 条「加载失败不 panic」），
-/// 只是降级原因会被调用方原样打进日志，不给服主留「我明明写了 legacy_money」的谜团。
+/// **不做任何隐式降级（2026-11-01）**：写 `legacy_money` 探不到就是 `null`（余额读不到、
+/// 交易全失败），不会悄悄改用记分板；写 `scoreboard` 目标建不出来同理。`skipped` 里带着
+/// 失败原因，调用方据此报错并**在文案里告诉服主可以改成哪个值**——账本换家必须由人决定。
+///
 /// `builtin` 到不了这里（配置校验就拒了），万一到了按空实现处理。
 BackendSelection selectBackend(Backend configured, BackendCandidates const& candidates);
 
 /// 选中结果的说明（中文，进日志与状态输出）。
 ///
-/// 形如 `配置 auto → 选用 scoreboard（跳过 legacy_money：进程里没有 LegacyMoney.dll）`。
+/// 形如 `配置 legacy_money → 选用 legacy_money（支持离线店主…）`，或探不到时的
+/// `配置 scoreboard → 没有可用的经济后端（记分板目标 "money" 不存在…）`。
 std::string backendSelectionText(Backend configured, BackendSelection const& selection);
 
 /// 探测失败原因 → 中文说明。
@@ -105,10 +110,10 @@ std::string probeIssueText(ProbeIssue issue);
 
 /// 店主不在线时，这一笔还能不能做（DESIGN §8.5）。
 ///
-/// 判据是**后端能力**而不是「店主此刻在不在线」：支持离线的后端（LegacyMoney）根本不看
-/// 这两个入参。`requireOwnerOnline` 只对不支持离线的后端（记分板）有意义——它是服主的
-/// 选择：默认提前拒绝，关掉就让这一笔走到动钱那一步再失败（`get` 读不到离线账户）。
-/// 无论开关怎么设，记分板都**不会**因此获得给离线玩家记账的能力。
+/// 判据是**后端能力**而不是「店主此刻在不在线」：支持离线的后端根本不看这两个入参。
+/// `requireOwnerOnline` 只对不支持离线的后端有意义——它是服主的选择：默认提前拒绝，
+/// 关掉就让这一笔走到动钱那一步再失败（`get` 读不到离线账户）。**开关不会凭空造出能力。**
+/// （2026-11-01 起两个后端都支持离线，这个开关只留给将来新加的后端。）
 bool ownerUnreachable(bool ownerOnline, bool backendSupportsOffline, bool requireOwnerOnline);
 
 /// 一次转账的结果。
@@ -152,7 +157,10 @@ public:
     /// 这个后端算不算「真的能记账」。空实现不算：它谁的余额都读不到，任何成交都会变成白送。
     virtual bool available() const { return true; }
 
-    /// 能否为离线玩家记账（DESIGN §8.5）。记分板只能写在线玩家的分。
+    /// 能否为离线玩家记账（DESIGN §8.5）。
+    ///
+    /// 两个后端现在都支持：LegacyMoney 按 XUID 记账；记分板借「身份按名字存」这一点，
+    /// 用玩家表把 XUID 换成名字再写分（LSE 的 `mc.addPlayerScore(uuid, …)` 同一条路）。
     virtual bool supportsOffline() const = 0;
 
     /// 能不能把一笔钱付给「系统」——账户键传空串（DESIGN §8.9 的税被销毁）。

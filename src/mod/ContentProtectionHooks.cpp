@@ -1,6 +1,7 @@
 #include "mod/ContentProtectionHooks.h"
 
 #include "mod/ContainerFinderBds.h"
+#include "mod/DebugLog.h"
 #include "mod/HookSlots.h"
 #include "mod/Shop.h"
 #include "shop/ContentProtection.h"
@@ -54,6 +55,14 @@ LL_TYPE_INSTANCE_HOOK(
     // `pos` 是漏斗（或漏斗矿车）自己的位置，源容器固定在它上方一格
     Cell const source = cellAbove(toCell(BlockPos(pos)));
     if (shouldSkipContentTransfer(isShopContainerAt(region, source, *config))) {
+        if (shopDebugEnabled()) {
+            shopDebugEventThrottled(
+                "content_block",
+                {dbgField("kind", "hopper_pull"),
+                 dbgField("hopper", dbgPos(region.getDimensionId(), pos.x, pos.y, pos.z)),
+                 dbgField("source", dbgPos(region.getDimensionId(), source.x, source.y, source.z))}
+            );
+        }
         // 跳过这一次抽取：商店箱里的东西原样留着，漏斗下一 tick 照常工作
         return false;
     }
@@ -84,6 +93,15 @@ LL_TYPE_INSTANCE_HOOK(
     // 方向脏到判不出来就放行——猜一个方向去拦，代价是误伤别的容器。
     if (auto const target = cellInDirection(toCell(BlockPos(position)), attachedFace)) {
         if (shouldSkipContentTransfer(isShopContainerAt(region, *target, *config))) {
+            if (shopDebugEnabled()) {
+                shopDebugEventThrottled(
+                    "content_block",
+                    {dbgField("kind", "hopper_push"),
+                     dbgField("hopper", dbgPos(region.getDimensionId(), position.x, position.y, position.z)),
+                     dbgField("target", dbgPos(region.getDimensionId(), target->x, target->y, target->z)),
+                     dbgField("face", (long long)attachedFace)}
+                );
+            }
             return false;
         }
     }
@@ -164,6 +182,15 @@ LL_TYPE_INSTANCE_HOOK(
 
     DropperBlockScope const scope{*target};
     bool const              pushed = origin(region);
+    if (shopDebugEnabled()) {
+        shopDebugEventThrottled(
+            "content_block",
+            {dbgField("kind", "dropper_push"),
+             dbgField("dropper", dbgPos(region.getDimensionId(), device.x, device.y, device.z)),
+             dbgField("target", dbgPos(region.getDimensionId(), target->x, target->y, target->z)),
+             dbgField("intercepted", gDropperGuard.reached)}
+        );
+    }
     if (!gDropperGuard.reached && !gDropperGuard.warned) {
         gDropperGuard.warned = true;
         // 「一次都没被问过」和「问了但坐标对不上」是两种失效，日志要能分开
@@ -226,6 +253,15 @@ LL_TYPE_INSTANCE_HOOK(
             Cell const cell   = toCell(*target);
             auto&      region = this->mMob.getDimensionBlockSource();
             if (shouldSkipContentTransfer(isShopContainerAt(region, cell, *config))) {
+                if (shopDebugEnabled()) {
+                    shopDebugEventThrottled(
+                        "content_block",
+                        {dbgField("kind",
+                                  event == TransportItemsGoal::Event::StartTakeInteractionWillSucceed ? "golem_take"
+                                                                                                    : "golem_place"),
+                         dbgField("target", dbgPos(region.getDimensionId(), cell.x, cell.y, cell.z))}
+                    );
+                }
                 // 只丢掉这一次「即将开始的取/放」，goal 本身照常：不碰 canUse / canContinueToUse，
                 // 铜傀儡不会因此变成站桩（DESIGN §6.2 H2c 的粒度讨论与 12 的验收项）。
                 return;
@@ -264,12 +300,14 @@ HookSlot gContentSlots[] = {
 namespace ss::shop {
 
 void registerContentProtectionHooks() {
-    // 每次挂载都从干净的守卫状态开始：否则 `/shop` 关掉再开一次时，上一次留下的
-    // 「已经报过 warn」会让这条诊断永久沉默（票面第 10 条要的就是不静默）。
+    // 每次挂载都从干净的守卫状态开始：否则上一次卸载/重载留下的「已经报过 warn」
+    // 会让这条诊断永久沉默（票面第 10 条要的就是不静默）。
     detail::gDropperGuard = {};
     attachHooks(detail::gContentSlots);
 }
 
 void unregisterContentProtectionHooks() { detachHooks(detail::gContentSlots); }
+
+std::span<HookSlot const> contentHookSlots() { return detail::gContentSlots; }
 
 } // namespace ss::shop

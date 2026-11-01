@@ -38,7 +38,10 @@ void onButton(Player& player, Cell const& sign, ShopFormAction action) {
 }
 
 /// 下拉框的回调结果读成下标；读不到就当「没选」（交给 `resolveRequestedUnits` 报错）。
-int dropdownIndex(ll::form::CustomFormResult const& result) {
+///
+/// **LeviLamina 回传的是选中项的文案，不是下标**：`Dropdown::parseResult` 里返回的是
+/// `mOptions[index]`（字符串）。旧版本/别处直接给下标的情况也一并接住，两种都认。
+int dropdownIndex(ll::form::CustomFormResult const& result, UnitsFormModel const& model) {
     if (!result) {
         return -1;
     }
@@ -48,6 +51,12 @@ int dropdownIndex(ll::form::CustomFormResult const& result) {
     }
     if (auto const* index = std::get_if<uint64>(&it->second)) {
         return static_cast<int>(*index);
+    }
+    if (auto const* index = std::get_if<double>(&it->second)) {
+        return static_cast<int>(*index);
+    }
+    if (auto const* text = std::get_if<std::string>(&it->second)) {
+        return choiceIndexForOption(model, *text);
     }
     return -1;
 }
@@ -120,7 +129,7 @@ void openTradeForm(Player& viewer, Cell const& sign, TradeDirection direction, S
         if (!result) {
             return;
         }
-        auto const requested = resolveRequestedUnits(model, dropdownIndex(result), inputText(result));
+        auto const requested = resolveRequestedUnits(model, dropdownIndex(result, model), inputText(result));
         if (!requested.units) {
             player.sendMessage(requested.error);
             return;

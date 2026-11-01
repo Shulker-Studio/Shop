@@ -13,6 +13,7 @@ void attachHooks(std::span<HookSlot> slots) {
             continue;
         }
         int const status = slot.attach();
+        slot.lastReturn = status; // 只给 `/shop status` 看，不拿来判成败
         if (status != 0) {
             Shop::getInstance().getSelf().getLogger().warn(
                 "hook 注册返回 {}（{}），若对应行为无效即为符号漂移",

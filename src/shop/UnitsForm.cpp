@@ -133,6 +133,15 @@ std::vector<std::string> unitsFormOptions(UnitsFormModel const& model) {
     return options;
 }
 
+int choiceIndexForOption(UnitsFormModel const& model, std::string_view optionText) {
+    for (std::size_t i = 0; i < model.choices.size(); ++i) {
+        if (model.choices[i].label == optionText) {
+            return static_cast<int>(i);
+        }
+    }
+    return -1;
+}
+
 std::string unitsFormContent(TradeDirection direction, ShopInfoData const& data, UnitsFormModel const& model) {
     Wording const& words = wordingOf(direction);
 

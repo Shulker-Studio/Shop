@@ -20,7 +20,7 @@
 | 创建 / 编辑 / 销毁 | 玩家写完牌子后校验，通过则规范化回写；校验失败默认提示并保留原牌（可配置为打掉） |
 | 买卖交易 | 表单选数量，校验余额/库存/背包空间，预校验 + 快照 + 双向补偿 |
 | 商店箱保护 | 非店主不能开箱、不能拆箱、不能拆牌 |
-| 牌面防护 | 非店主不能编辑、染色、上墨、上蜡/除蜡（见 9.2） |
+| 牌面防护 | 非店主不能编辑、染色、上墨、上蜡（见 9.2） |
 | 破坏防护 | 爆炸 / 活塞 / 凋灵 / 火焰不吞掉商店箱，旁边方块照常（方块级，见 6.2、ADR-0004） |
 | 经济后端 | LegacyMoney / 记分板 / 空实现，自动探测（见 8.4） |
 | 管理员商店（有容器） | 第一行 `Admin Shop` **且编辑者是 OP**；库存来自容器，资金侧是系统账户（买入销毁 / 卖出凭空记账）；无容器的无限库存模式放到 P1 |
@@ -104,8 +104,8 @@
 - 拆箱 = 连带关店（箱子没了，商店牌随之物理掉落）。
 - 空店默认**不自动删**（对齐 `REMOVE_EMPTY_SHOPS = false`）。
 - 商店数据不写盘，所以不存在"孤儿记录"。
-- **编辑、染色、荧光墨囊、墨囊、上蜡、除蜡一律要求店主或 OP**；非店主在交互阶段就拦下了（不弹编辑 UI）。**文本**在提交阶段还有一道兜底；染色/上蜡/除蜡只有交互阶段一道（引擎没有对应的提交事件可拦）。见 9.2。
-- **上蜡不改变商店语义**。它是引擎级的编辑冻结，持久化在方块实体里，玩家可选；我们只把"除蜡"纳入店主权限，防止别人一斧头解锁再改。
+- **编辑、染色、荧光墨囊、墨囊、上蜡一律要求店主或 OP**；非店主在交互阶段就拦下了（不弹编辑 UI）。**文本**在提交阶段还有一道兜底；染色/上蜡只有交互阶段一道（引擎没有对应的提交事件可拦）。见 9.2。
+- **上蜡不改变商店语义，但不可逆**。它是引擎级的编辑冻结，持久化在方块实体里，玩家可选；**原版去不掉告示牌的蜡**（斧头只对铜块有效，Mojira MC-261313 判 Works As Intended），所以「上蜡」也归店主权限——别人刷一下蜜蜡就等于把这块牌的文本永久冻住，店主只能拆牌重立（或将来的管理表单，P1）。
 - 背面的任何书写都不影响商店，见 5.5。
 
 ---
@@ -122,6 +122,16 @@
 | 4 | 商品显示名 | 显示 | 权威是绑定容器里**第一个非空槽位**的物品类型；规范化时用该物品的展示名覆盖。玩家写 `?`、留空或写别的名字都可以 |
 
 即：**第 2、3 行是玩家说了算的，第 1、4 行是服务器说了算的**。
+
+### 5.1.2 名字：过长与改名
+
+**归属的真相源是 XUID（ADR-0005），第 1 行只是显示**。由此推出三条口径：
+
+- **玩家改名不影响任何权限**：店主改 Xbox 名之后仍然是店主——能开箱、能改牌、能收款，“不能跟自己交易”的判据也不受影响。
+- **牌面第 1 行会停在旧名**，直到有人（店主或 OP）重新编辑这块牌：编辑时第 1 行会按 XUID 查到的**当前名字**重写（`keepsPreviousOwner` 只保归属，不保旧文本）。
+- **表单、提示、日志里一律是实时查到的名字**（`PlayerInfo::fromXuid`），所以改名后会看到“表里是新名、牌上是旧名”的不一致——这是故意的：牌子即数据源，不写盘、没有后台任务去扫牌改名。
+
+**第 1 行不截断**，哪怕名字比一行宽。三个理由：① 管理员店的判据是“第 1 行整串等于 `adminShopName`”，截断会把判据变成前缀匹配；② XUID 查不到 `PlayerInfo` 时，第 1 行是显示名的退路（见 `ShopOwner`），截断会把这个退路弄碎；③ 牌面 NBT 里存全名、渲染交给客户端（能不能放下由客户端按行宽缩放或裁切），与第 4 行商品名同一个口径。真机看到的实际表现记在 12 的验收结果里。
 
 ### 5.1.1 什么才算「商店牌」（关键）
 
@@ -205,7 +215,7 @@ PlayerEditSignBeforeEvent
 
 一块告示牌最多是一个商店。
 
-> 背面的例外只限**文字**：空手或普通物品点背面，原版编辑界面照弹；但染色、墨囊、上蜡、除蜡是**整块牌子**（或整个牌子实体）的事，不能靠站在背面绕过——刷个蜜蜡就把店主的编辑权限冻住了。所以这些操作的权限判定不看玩家站在哪一面（§9.2）。
+> 背面的例外只限**文字**：空手或普通物品点背面，原版编辑界面照弹；但染色、墨囊、上蜡是**整块牌子**（或整个牌子实体）的事，不能靠站在背面绕过——刷个蜜蜡就把店主的编辑权限冻住了。所以这些操作的权限判定不看玩家站在哪一面（§9.2）。
 
 ---
 
@@ -230,7 +240,6 @@ PlayerEditSignBeforeEvent
 | 编号 | 目标 | 用途 | 风险 |
 | --- | --- | --- | --- |
 | H2a | `Hopper::_tryPullInItemsFromAboveContainer(BlockSource&, Container&, Vec3 const&)`、`Hopper::_pushOutItems(BlockSource&, Container&, Vec3 const&, int)` | 漏斗**方块与漏斗矿车**从商店箱抽货 / 往商店箱塞货（两者共用 `Hopper` actor 的抽取逻辑，hook 一次覆盖两者）；命中商店箱就跳过这一次搬运 | 中（iListenAttentively 无漏斗事件；ChestLock 已验证写法） |
-
 | H2c | `TransportItemsGoal::_executeEvent(TransportItemsGoal::Event) const`（`v1_21_100` 的新 AI goal，经 `ChestBlockActor::ChestCloser` 开箱取放） | 铜傀儡从商店箱取货 / 往商店箱放货：丢掉「即将开始的取 / 放」这一个事件，**不取消 goal**（`canUse` / `canContinueToUse` / `tick` 一个都不碰，所以不会因为 goal 被取消而失去运输行为） | 中（goal 级取消会影响该傀儡的所有运输、也可能误伤同样用这个 goal 的生物，所以不走那条路；代价是「这个事件是不是搬运闸门」只能真机确认，见下方落地口径与 §14） |
 | H2d | `DropperBlockActor::pushOutItems(BlockSource&)` + `DropperBlockActor::getContainerAt(BlockSource&, Vec3 const&)` | 投掷器往商店箱塞货：只在这一次搬运的作用域里让容器查找交不出商店箱，原版因此把物品喷到地上，而不是把整个投掷器停掉 | 中（多压一层「`pushOutItems` 会先查目标容器」的假设；查不到就失效，`pushOutItems` 会留一条 warn 兜底） |
 | H3a | `ExplosionStartedEvent::mBlocks`（`TypedStorage<8,64,std::unordered_set<BlockPos>>`），由 `BlockEventCoordinator::sendEvent` 拦截 | 爆炸时把商店方块从方块列表里**剔除**，而不是取消整场爆炸 | 中（同 ChestLock 已验证） |
@@ -254,7 +263,7 @@ PlayerEditSignBeforeEvent
 
 | 事件 | 用途 | 可取消 |
 | --- | --- | --- |
-| `ila::mc::world::actor::player::PlayerEditSignBeforeEvent` | 告示牌提交：创建/编辑商店、校验、规范化回写；**同时是提交阶段的兜底闸**（非店主 / 上蜡的牌一律丢弃这个包，见 9.2） | 是（丢弃包） |
+| `ila::mc::world::actor::player::PlayerEditSignBeforeEvent` | 告示牌提交：创建/编辑商店、校验、规范化回写；**同时是提交阶段的兜底闸**（非店主 / 上蜡的牌一律不让这次编辑生效，见 9.2） | 是（把原文本写回去） |
 | `ila::mc::world::actor::player::PlayerEditSignAfterEvent` | 牌子已更新后的通知：按 Before 阶段定下的归属写回 ownerID（DESIGN §5.4） | 否 |
 | `ila::mc::world::actor::player::PlayerOpenContainerBeforeEvent` | 阻止非店主开商店箱；`pos` / `containerType` / `containerActorId` 齐全 | 是 |
 | `ila::mc::world::actor::player::PlayerAttackBlockBeforeEvent` | 左键点方块（可做"左键=卖"，也用于提前拦截拆牌） | 是 |
@@ -272,6 +281,15 @@ PlayerEditSignBeforeEvent
 - 编译期：`add_requires("ilistenattentively")` + `add_packages("ilistenattentively")`。xmake-repo 已收录该包（`packages/i/ilistenattentively/xmake.lua`），当前 `open` 最高版本为 **0.17.0**（要求 LL `26.51.*`），安装时会从源码编译并安装头文件 + 导入库。
 - 运行时：`ILAPI` 展开为 `LL_SHARED_IMPORT`，即链接其 DLL 的导入表。**iListenAttentively 未安装时不是"功能缺失"，而是进程加载器直接失败**（Shop 整个 mod 起不来）。
 - 因此必须在 `tooth.json` 声明运行时依赖 `github.com/LiteLDev/iListenAttentively`，并在文档/安装说明里写清楚。
+- **还要在 `manifest.json` 的 `dependencies` 里写一行 `{"name": "iListenAttentively"}`**（与 LegacyScriptEngine 声明 `LegacyMoney` / `LegacyRemoteCall` 同一个机制）。
+  这不是装饰：LeviLamina 按依赖图决定加载顺序，只把**正在加载的那个**模组的目录前插到 `PATH`。
+  没有这行时按目录名字母序加载，`Shop`（`S`）排在 `iListenAttentively`（`i`）之前，
+  `LoadLibrary(Shop.dll)` 解析导入表时 iListenAttentively 还没进进程 →
+  `C++ Exception: std::system_error … [0x0000007E:system] The specified module could not be found.`（真机已复现）。
+  依赖图里排在前面就会先加载它，之后同名 DLL 由加载器直接复用。
+- **版本刻意不写**：`ll::mod::Dependency` 的 `version` 校验是「主版本相等且不低于声明值」，
+  而本地/自编译的 iListenAttentively 的 `manifest.json` 常是占位版本（`0.0.0`），写死 `0.17.0` 会把这类安装直接判成
+  「Missing dependency」，把一个能跑的组合挡在门外。版本下限交给 `tooth.json`（`>=0.17.0`）在安装期把关。
 - 版本口径：**实际构建基线为 iListenAttentively `0.17.0` + LeviLamina `26.51.8`**（`xmake f` 解析结果）；运行时不低于 0.17.0。0.17.2 起其 `tooth.json` 要求 LL `>= 26.51.7`，发行声明按此写。
 - 不复制其源码（LGPL-3.0）；只 `#include` 其头文件并链接其导出符号。
 - 不做"未安装则降级"——因为链接方式决定了根本降级不了，只能要求安装。
@@ -376,15 +394,17 @@ Java 版的 `uBlock.findConnectedContainer` 是「墙牌先看背面，然后按
 >
 > 另外有两个能力协商方法，都是「能不能动系统账户（空账户键）」，但**用途不同、故意不合并**：
 >
-> * `supportsMoneySink()`（默认 `false`）：能不能把一笔钱付给系统。只有 LegacyMoney 支持
->   （`LLMoney_Trans(from, "", n)` = 从 `from` 扣掉、谁都不加），商店税的「销毁」就落在这上面（见 8.9）。
->   记分板没有这种账户，所以那个后端上商店税整笔不算（不是「少一条流水」：钱还在买家身上，账目对不上）。
+> * `supportsMoneySink()`（默认 `false`）：能不能把一笔钱付给系统。商店税的「销毁」就落在这上面（见 8.9）。
+>   LegacyMoney 用 `LLMoney_Trans(from, "", n)`（从 `from` 扣掉、谁都不加）；记分板用「只 `reduce` 付款方、
+>   谁都不加」，效果完全一样。**2026-11-01 之前记分板声明 `false`**（理由写的是「没有这种账户」），
+>   站不住：税本来就不需要对手方，需要的只是「能不能单边扣钱」。现在两个后端都支持，服主换后端
+>   不会突然开始或停止收税。
 > * `supportsSystemAccount()`（默认 `false`）：能不能把系统账户当**交易对手**——两个方向都要会：
 >   付给它（销毁）与从它付款（凭空记账）。管理员店的资金侧靠它（见 7.4）。LegacyMoney 两个方向都能
 >   （`Trans(to="")` / `LLMoney_Add`），记分板靠 `reduce` / `add` 也能（只能动在线玩家，而交易的那一头
 >   本来就在线）。
 >
-> 合并成一个能力会让记分板突然开始收税，所以它们是两项：一项是商店税的政策，一项是管理员店的资金端。
+> 它们仍然是两项：一项是商店税的政策，一项是管理员店的资金端，将来加的后端可能只会其中一件。
 
 ```cpp
 namespace ss::shop::economy {
@@ -434,7 +454,8 @@ public:
 - **金额上限**：记分板后端内部是 `int`（32 位），超过 `INT32_MAX` 会溢出成负数。所有后端统一按 `int64` 处理，但记分板实现在写入前必须检查范围并拒绝，不能静默截断。
 - 服务器账户：P0 的落点是**空账户键的系统账户**（不是 P1 的「全 0 UUID 真实账户」）：
   后端用 `supportsSystemAccount()` 声明能不能把系统账户当对手方。管理员店的资金侧用它（7.4），
-  税用的是另一个能力 `supportsMoneySink()`（8.9）——两者故意分开：合并会让记分板突然开始收税。
+  税用的是另一个能力 `supportsMoneySink()`（8.9）——两者仍然分开：它们是两件不同的事（一项是商店税政策，
+  一项是管理员店的资金端），将来加的后端完全可能只会其中一件。
 
 ### 8.3 参考实现与取舍
 
@@ -442,7 +463,7 @@ public:
 | --- | --- | --- | --- |
 | 接口 | `get/set/add/reduce/transfer` | C 导出 `LLMoney_*`（XUID 为键） | 同 EconomyBridge 形状（UUID 为键） |
 | 存储 | 无（薄适配） | SQLite `economy.db`，`money` + `mtrans` | 由后端决定 |
-| 离线玩家 | 记分板后端不支持；LegacyMoney 后端支持 | **支持**（按 XUID 记账，与是否在线无关） | 由 `supportsOffline()` 声明 |
+| 离线玩家 | 两个后端都支持 | **支持**（LegacyMoney 按 XUID 记账；记分板按「XUID → 名字 → 身份」写分） | 由 `supportsOffline()` 声明 |
 | 原子转账 | 自己补偿 | **SQLite 事务**（begin/commit/rollback） | 交给后端，接口只保证"失败不变更" |
 | 税率 | 无 | `pay_tax`（转账时扣） | 不重复收税（见 8.7） |
 | 事件 | 无 | `LLMoney_ListenBeforeEvent/AfterEvent`（可拦截） | 不依赖，但需容忍被别人拦截 |
@@ -450,42 +471,63 @@ public:
 
 借鉴的是接口形状与调用方式，**不复制源码**（EconomyBridge 为 LGPL-3.0，LegacyMoney 的许可证需按其仓库为准；本工程 AGPL-3.0）。
 
-### 8.4 后端探测顺序
+### 8.4 后端选择（**没有自动降级**）
 
-> **P0 现状（10 落地后）**：第 1、2 条已按下面的顺序完整实现，`createObjectiveIfMissing`
-> 与 `requireOwnerOnline` 都已生效。
+> **P0 现状（10 落地后，2026-11-01 改过一轮）**：`createObjectiveIfMissing` 与
+> `requireOwnerOnline` 都已生效，`/shop status` 会打出「配置值 → 实际选用值」。
 >
-> - `auto` 的探测结论只由纯函数 `economy::selectBackend` 决定（`src/shop/Economy.cpp`），
->   候选顺序（`legacy_money → scoreboard → null`）只有那一处定义，BDS 侧只负责探测两个候选
->   并把事实填进去。
-> - 每一级降级都把原因带进日志，最终结论一行形如
->   `配置 auto → 选用 scoreboard（跳过 legacy_money：进程里没有 LegacyMoney.dll）`。
-> - **显式写 `legacy_money` 也沿同一条链降级**（第 4 条「加载失败不 panic」）：服主点了名、
->   但服务器上确实没装，能降级到记分板总比整服停摆好——降级原因会原样打在日志里。
->   显式 `scoreboard` 不从 `legacy_money` 开始（服主不想要它记账），`builtin` 仍是配置错误（P1），
->   非法值拒绝加载并列出全部合法取值。
+> **`auto` 已被删除。** 它原来表示「LegacyMoney 探不到就用记分板」，默认值又恰好是它。
+> 后果是服主的 LegacyMoney 一旦因版本不兼容没加载（导出缺失），本模组会**默默换一套账本**：
+> 玩家余额一夜之间变成记分板上的 0，而日志里只有一条容易被忽略的 info。这与「配置非法就
+> 拒绝加载」的既有原则自相矛盾——账本换家比配置写错严重得多。现在：
+>
+> - 合法取值只有 `legacy_money` / `scoreboard` / `null`（`builtin` 是 P1，写它会拒绝加载）；
+>   **默认 `legacy_money`**。老配置里写 `auto` 会拒绝加载，并给出专门的迁移提示
+>   （不是「拼写错误」那种泛泛的列表）。
+> - **一个后端只探它自己**：写 `legacy_money` 就不看记分板，写 `scoreboard` 就不看 LegacyMoney。
+>   探不到 → `NullEconomy`（余额读不到、交易全失败）+ **error 日志**说明探不到的原因、
+>   以及「改成另一个值就能用」的具体建议。`selectBackend`（`src/shop/Economy.cpp`）里
+>   没有任何跨后端的分支，探测计划同理（`probesFor` 只返回配置写着的那一个）。
+> - 日志形如 `配置 legacy_money → 选用 legacy_money（支持离线店主，每笔交易一次原子转账）`；
+>   探不到时 `配置 legacy_money → 选用 null（跳过 legacy_money：进程里没有 LegacyMoney.dll）`
+>   再加一句「本模组不会自动改用另一个后端（账本换家必须由你在 `economy.backend` 里决定）」。
 > - 探测结果**会缓存，包括「一个后端都没有」**：否则每次动钱都要重探、重刷日志。
->   装好 LegacyMoney 或建好记分板目标之后需要重载模组才会重探。
-> - 探测时机：`Shop::enable()` 时世界往往还没起来，所以挂一个 `ServerStartedEvent` 监听在世界
->   就绪后立刻探一次（结果进启动日志），首次真正要用钱时还会再兜一次。
-> - `/shop economy` 这类状态命令属于 P1（P0 没有命令基础设施），目前状态输出就是那条日志；
->   表单里仍只显示余额，不显示后端名。
+>   装好 LegacyMoney 或建好记分板目标之后需要重启（或重载模组）才会重探。
+> - 探测时机：`Shop::enable()` 时世界往往还没起来，所以挂 `ServerStartedEvent` **与
+>   `PlayerJoinEvent`** 两个监听（真机首测发现前者在本服上没触发，见 §19.3），首次真正要用钱时
+>   还有兜底。
+> - 表单里仍只显示余额，不显示后端名；要看后端用 `/shop status`（§19.1）。
 
-1. 配置文件显式指定 `economy.backend`：`auto` / `legacy_money` / `scoreboard` / `builtin` / `null`。
-2. `auto` 的判定顺序：
-   1. `GetModuleHandle(L"LegacyMoney.dll")` 非空且 `LLMoney_*` 导出符号齐全 → `LegacyMoneyEconomy`（**首选**，支持离线、事务、税率、事件）。
-   2. 否则若记分板目标存在 → `ScoreboardEconomy`（仅在线）。
-   3. 否则 → `NullEconomy` 并打警告（仅开发用；生产环境应视为配置错误）。
-3. `builtin`（自建 SQLite 账本）作为 P1，给不装 LegacyMoney 的服务器用；接口相同，`supportsOffline()` 返回 true。
-4. 加载失败不 panic：降级到下一个候选，并把最终选择写进日志（`/shop economy` 状态命令留到 P1）。
+1. 配置文件显式指定 `economy.backend`：`legacy_money` / `scoreboard` / `null`（`builtin` 是 P1）。
+2. `legacy_money` 的探测：`GetModuleHandle(L"LegacyMoney.dll")` 非空且 `LLMoney_*` 导出符号齐全
+   → `LegacyMoneyEconomy`（**默认值**，支持离线、事务、税率、事件）。
+3. `scoreboard` 的探测：记分板目标存在（或按 `createObjectiveIfMissing` 用 `dummy` 判据建出来）
+   → `ScoreboardEconomy`（仅在线，且不能收税）。
+4. `null` 直接就是空实现（余额恒为 0，交易全失败；只给开发用）。
+5. `builtin`（自建 SQLite 账本）作为 P1，给不装 LegacyMoney 的服务器用；接口相同，`supportsOffline()` 返回 true。
+6. **探测失败不 panic，但也不换账本**：落到 `NullEconomy` 并把原因与「怎么改配置」写进 error 日志。
 
-> 生态事实：LegacyScriptEngine 的 `tooth.json` 依赖 `LegacyMoney`，所以**装了 LSE 的服务器一定有 LegacyMoney.dll**。`auto` 在多数生产服会直接命中它。
+> 生态事实：`LegacyMoney` 是 **LegacyScriptEngine 的硬前置**——LSE 的 `tooth.json` 把它声明成依赖，
+> 缺它 LSE 根本起不来，所以**装了 LSE 的服务器必然有 LegacyMoney.dll**。这也是把默认值定为
+> `legacy_money` 的理由：绝大多数生产服都跑 LSE，`legacy_money` 开箱即用；`scoreboard`
+> 是给「不跑 LSE、只用原版记分板经济」的服务器的显式选项。
+
+> **两档后端的差异（选之前要知道）**：
+>
+> | | `legacy_money` | `scoreboard` |
+> | --- | --- | --- |
+> | 余额存在哪 | `plugins/LegacyMoney/economy.db`（SQLite，`money` + `mtrans`） | 世界的记分板目标（默认 `money`） |
+> | 离线店主 | 支持（余额按 XUID 记，不看在线） | 支持（**有身份**的离线玩家：借玩家表把 XUID 换成名字再写分） |
+> | 金额范围 | `int64` | `int32`（超范围拒绝，不截断） |
+> | 商店税 | 支持（钱付给空账户 = 销毁） | 支持（只扣付款方、谁都不加，同样是销毁） |
+> | 管理员店 | 支持（`LLMoney_Add` / `Trans(to="")`） | 支持（`add` / `reduce` 在线玩家） |
+> | 换档成本 | 余额不互通，两边各记各的 | 同左 |
 
 ### 8.5 离线店主策略
 
 判断依据是后端的 `supportsOffline()`，不是"店主此刻是否在线"。
 
-| 情况 | 支持离线的后端（LegacyMoney / builtin） | 不支持离线的后端（Scoreboard） |
+| 情况 | 支持离线的后端（LegacyMoney / Scoreboard / builtin） | 不支持离线的后端（留给将来的新后端） |
 | --- | --- | --- |
 | 买入（钱付给店主） | 正常成交 | **禁止成交**，提示「店主不在线」 |
 | 卖出（店主付钱给买家） | 正常成交 | **禁止成交**，提示「店主不在线」 |
@@ -500,7 +542,27 @@ public:
   而不是「先扣款再退款」（§10.2 原则里的「第 5 步开始之前」）。
   不再在点牌阶段因此禁用按钮：读不到的只是账户，与这家店能不能收钱无关。
   管理员店的系统账户不是可读账户：这一道检查会跳过空的那一头（能力已在预校验里判过）。
-- 配置 `economy.requireOwnerOnline` 只影响 `Scoreboard` 分支；对支持离线的后端无意义，对管理员店也无意义。
+- 配置 `economy.requireOwnerOnline` 只影响「后端不支持离线」这一支；对支持离线的后端无意义，对管理员店也无意义。
+  （2026-11-01 起 `scoreboard` 也支持离线，这个开关在当前两个后端上都已是空转，保留是给将来新后端。）
+
+> **记分板离线记账怎么落地（2026-11-01）**：记分板身份的内部键是 `PlayerScoreboardId`
+> （= 玩家的 `ActorUniqueID`），而这个 ID **存在玩家自己的存档里**，所以人不在线也拿得到。
+> 照着 LSE `mc.addPlayerScore(uuid, 目标, 值)`（「可修改离线玩家计分板」）的实现
+> （`LegacyScriptEngine/src/legacy/api/PlayerAPI.cpp`）走一遍：
+>
+> ```
+> XUID → 玩家表拿 uuid → DBStorage 的 player_<uuid> → 它的 ServerId → 存档里的 UniqueID
+>      → scoreboard.getId(PlayerScoreboardId(uniqueId)) → modifyPlayerScore
+> ```
+>
+> **用 ID 而不是名字**（一度想用「XUID → 名字 → 身份」，被这条实现否掉）：改名、重名都不影响，
+> 也不会把分数记到同名的假玩家身份上。
+>
+> 任何一步拿不到就**安全失败**（`get` 返回空 = 读不到余额，交易被拒，绝不猜）：玩家表里没有这个 XUID
+> （从没登录过本服）、存档里没有 `player_<uuid>` / `ServerId` / `UniqueID`、
+> 或者 `getId` 返回 `INVALID`（这个人在本世界还没有过记分板身份）。
+>
+> **已真机验证（2026-11-01）**：店主完全下线时买家照常成交，钱写进店主的分值。
 
 ### 8.6 P0 的实现清单
 
@@ -577,9 +639,10 @@ public:
 - 把收税挪到最后，任何失败点都只涉及已经移动过的金额（买入 `T - X`、卖出 `T`），
   补偿永远是精确的；补偿本身失败才升级为 `Broken`。
 - 代价只有一个：物品已成交、税还没收到的那一小段时间里崩服，丢的是税而不是玩家的钱。
-- 后端没有系统账户（记分板）时，**整笔税都不算**（`EconomyProvider::supportsMoneySink()` 为 false 时
-  调用方直接把税率置 0）：税收不走，硬算下去只会让店主少收、买家少付，而没有任何地方记着这笔税，
-  账对不上也查不到。启动日志会明确写「商店税在这个后端上不生效，要收税请装 LegacyMoney」。
+- 后端**不能单边扣钱**时（`EconomyProvider::supportsMoneySink()` 为 false），**整笔税都不算**：
+  调用方直接把税率当 0，并打一条启动 warn。硬算下去只会让店主少收、买家少付，而没有任何地方记着
+  这笔税，账对不上也查不到。当前两个后端都能单边扣钱（LegacyMoney 的 `Trans(to="")`、记分板的
+  「只 `reduce` 付款方」），所以这道判据留着是给将来新后端的。
 - 卖出方向的份数上限按**含税成本**算（`affordableUnitsWithTax`），否则会多卖一份、到收税那一步才失败。
 
 **前提约束（P0 硬性要求）**：启用 `shopTaxRate > 0` 的前提是服主**手动把 LegacyMoney 的 `pay_tax` 设为 0**。
@@ -603,11 +666,10 @@ public:
 | 行为 | 非店主 | 店主 | OP | 实现依据 |
 | --- | --- | --- | --- | --- |
 | 右键点商店牌 | 打开交易表单（取消原版编辑） | 打开店主表单 | 同店主 | `PlayerInteractBlockEvent` |
-| 潜行 + 右键点商店牌 | 打开交易表单（潜行**不是**后门） | 进原版编辑界面（上蜡时拦下并提示先除蜡） | 同店主 | 同上；判定在 `src/shop/SignProtection.*` |
+| 潜行 + 右键点商店牌 | 打开交易表单（潜行**不是**后门） | 进原版编辑界面（上蜡时拦下并说清只能拆牌重立） | 同店主 | 同上；判定在 `src/shop/SignProtection.*` |
 | 编辑商店牌文本 | **取消**（交互阶段就不弹 UI） | 允许 | 允许 | `PlayerInteractBlockEvent` + `PlayerEditSignBeforeEvent` 兜底（非店主提交也取消，见下） |
 | 染色 / 荧光墨囊 / 墨囊 | **取消** + 提示 | 允许（交回原版处理） | 允许 | `PlayerInteractBlockEvent`（对照 `SignBlock::SignInteractionResult::UseDye` 等分支） |
 | 上蜡 | **取消** + 提示 | 允许（交回原版处理） | 允许 | 同上（`UseHoneyComb`） |
-| 除蜡（斧头） | **取消** + 提示（已上蜡时；没上蜡那一下什么都不改，当普通点击弹表单） | 允许（只在牌子真的上了蜡时；没上蜡也当普通点击） | 允许 | 同上 + `SignBlock::_canUseHoneyComb` 语义 |
 | 右键点商店箱 | 取消（不能开箱） | 允许（可配 `allowOwnerOpenChest`，默认 true） | 允许 | `PlayerOpenContainerBeforeEvent` |
 | 拆商店牌 | 取消 | 允许（拆除即关店） | 允许 | `PlayerAttackBlockBeforeEvent` + `PlayerDestroyBlockEvent` |
 | 拆商店箱 | 取消 | 允许（连带关店） | 允许 | 同上 |
@@ -642,7 +704,18 @@ public:
 - 配置缺失时一律放行（与 08 同一条兜底）：模组没启用时这几条 hook 对普通容器毫无影响。
 - 铜傀儡这一条的拦截只认 goal 记下的目标容器坐标（`mTargetContainerPosition`），粒度与可靠性都不如漏斗那两条；它是否真的挡住、会不会让 goal 卡在交互中，都以 12 的验收结果为准（§14 有两行对应风险）。
 
-「编辑商店牌文本」有两道闸：交互阶段取消 `PlayerInteractBlockEvent`（非店主连编辑界面都弹不出来），提交阶段在 `PlayerEditSignBeforeEvent` 里再判一次（非店主提交一律丢弃这个包）。后者是防绕过：别的模组、取消语义失效、以后从管理表单进编辑，都不该让改牌生效。
+「编辑商店牌文本」有两道闸：交互阶段取消 `PlayerInteractBlockEvent`（非店主连编辑界面都弹不出来），提交阶段在 `PlayerEditSignBeforeEvent` 里再判一次（非店主提交不让生效）。后者是防绕过：别的模组、取消语义失效、以后从管理表单进编辑，都不该让改牌生效。
+
+> **提交阶段不 cancel，改成「把原文本写回去」（2026-11-01 真机修正）**。用 `event.cancel()` 拦下时，
+> 客户端那次编辑没有正常收尾：之后对这块牌子右键**再也不弹原版编辑界面**，必须退出重进才行
+> （「新牌子被判非法后显示空白」与「改完还是原样」两种都中，后者与是否被拦无关的程度被真机确认）。
+> 现在的做法是把 `event.text()` 设成**改之前那几行**，让原版完整走完一次编辑——玩家看到的还是原内容，
+> 客户端也不会留下半截状态。副作用只有一个：写文本会让引擎把 `mLastEditXuid` 记成这次编辑者
+> （§6.5 第 3 条），所以改之前是商店牌时必须像规范化那次一样**把归属保住**（同样的
+> `SignOwnerHandoff`，`previousOwnerXuid` 填改之前的店主），否则 OP 代改一次非法文本就把店抢走了。
+>
+> 这条替代了更早的「cancel + 重发方块实体」写法：那个写法能让牌面立刻显示正确，
+> 但会留下打不开编辑界面的问题，得不偿失。
 
 有一个例外：**牌还在、但店停摆了**（附着格不再是可用容器，或牌面已经不严格合法）。这时没有表单可弹：能进原版编辑界面的判据与提交阶段相同（`mayEditShopSignText`），其余人被拦下并被告知停摆的原因（「商店箱不在了」/「写法现在不算有效商店」）——不能把编辑界面递给非店主，哪怕提交阶段还会兜底。
 
@@ -652,7 +725,7 @@ public:
 
 - **只看文本，不看容器**：判据是「改之前的正面文本像不像商店牌」+ 牌子上记的 XUID，而不是「现在有没有可用容器」。商店箱被拆了、被换掉了、或改了 `shopContainers` 配置，牌面也不该因此变成人人可改——否则一个便宜动作就绕开了保护。
 - **用「像商店」而不是「现在严格合法」**：`looksLikeShopSign`（第 3 行有 B/S 且第 1 行非空，即 `ok()` 或错误不是「不像商店牌」），不是 `ok()`。把 `maxShopAmount` 调小、把 `adminShopName` 改名、或者牌子是外部工具写的脏数据，都不应该让保护整体失效。
-- **两道闸，不是一道**：非店主不放（`mayEditShopSignText`），上了蜡的牌连店主与 OP 也不放（“先除蜡”）。上蜡是一道对所有人的闸，因此与“你是谁”分开算。
+- **两道闸，不是一道**：非店主不放（`mayEditShopSignText`），上了蜡的牌连店主与 OP 也不放。上蜡是一道对所有人的闸，因此与“你是谁”分开算。**蜡没有反向操作**：原版不能除蜡，所以这道闸的实际意思是「连店主也改不了，只能拆牌重立」。
 
 判定只看店主 XUID 这一个真相源（ADR-0005），OP 放行。**记录不到店主 XUID 时四处口径不同，故意如此**：
 
@@ -660,14 +733,62 @@ public:
 | --- | --- | --- |
 | 改牌面文本 | 放行（fail-open） | 记录缺失的牌不该因此永久锁死；代价是被第一个改它的人接手（§5.4） |
 | 表单管理入口 | 不给（fail-closed） | 一个查不到主人的店不该把「管理商店」按钮发给路过的每个人 |
-| 染色 / 墨囊 / 上蜡 / 除蜡 | 只给 OP | 这些改的是牌子本身，不是归属；没有必要为异常牌开一个装饰口 |
+| 染色 / 墨囊 / 上蜡 | 只给 OP | 这些改的是牌子本身，不是归属；没有必要为异常牌开一个装饰口 |
 | 开箱 / 拆箱 / 拆牌 | 只给 OP（fail-closed） | 动的是库存与方块本身；查不到主人不该等于「谁都能搬」 |
 
-物品类操作（染色 / 墨囊 / 上蜡 / 除蜡）**与玩家站在哪一面无关**：上蜡改的是整块牌子，站在背面刷一下就能把店主的编辑权限冻住，所以判定只看「这一格是不是商店牌」。文字则不同，背面仍是布告板（§5.5）。
+物品类操作（染色 / 墨囊 / 上蜡）**与玩家站在哪一面无关**：上蜡改的是整块牌子，站在背面刷一下就能把店主的编辑权限冻住，所以判定只看「这一格是不是商店牌」。文字则不同，背面仍是布告板（§5.5）。
 
 物品类操作的判据也因此不要求附着容器可用：「是不是商店牌」只看正面文本与记录的店主，容器只决定「现在能不能交易」。商店箱被拆掉时交易停摆，但牌子仍然属于它的主人。
 
-上蜡只是**编辑开关**，不改变商店语义（D29）：上了蜡的牌交易照常，连店主也要先拿斧头除蜡才能改文本。
+**H3e 的可达性（真机第二报的更正）**：默认配置下的**合法商店**触发不到「拆依附方块」——商店牌永远贴着
+它自己的那个容器，所以「拆依附方块」与「拆商店箱」是同一格，已被 `BreakChest` 那一档覆盖。这一条
+**不是死代码**，它在下面这类状态里才是唯一生效的保护：
+
+- 配置改了、容器不再合法（例如把 `minecraft:chest` 从 `shopContainers` 里删掉）→ `containerAt` 返回空
+  → 这一格不再是「商店箱」，但牌面**仍然像**商店牌 → 走 H3e，非店主拆箱子还是被拦并提示
+  「这块方块上挂着 X 的商店牌…」；
+- 双箱配对状态异常、存档被外部工具改过等脏数据。
+
+判据因此刻意分成两层：`isShopBlockAt`（商店牌 || 合法容器上绑着商店牌）判「这是不是商店方块」，
+`shopSignsWithAttachedCell` + `looksLikeShopSign` 判「拆了这一格会不会让商店消失」。前者失配时后者兜底，
+**改配置不该让已有的商店失去保护**（DESIGN §9.2 / §14 的既定退路）。
+
+**客户端预演（真机首测踩到）**：染色 / 墨囊 / 荧光墨囊 / 上蜡这四样在客户端是**本地预演**的——玩家右键那一刻，客户端先把牌子画成“已经改过”的样子，服务端 `cancel()` 只能挡住改动真的写进去，挡不住这一页预演。不处理的话玩家看到的就是“改成功了”，退出重进才发现没改（而“没改”才是对的）。所以拦下之后必须把这一格牌子的真实数据再发一遍：`BlockActor::_getUpdatePacket`（原版改牌文本用的就是这个 `BlockActorDataPacket`），拿不到就按 `SaveUseCase::SendOverNetwork` 存一份 NBT 自己组包。只发给动手的那个玩家，不用广播。以后新增“拦下但客户端会预演”的交互（箱子上蜡、告示牌锁定等）都要补这一下。
+
+> **同一类问题的第二处（2026-11-01 真机第二报）**：**拆**也会预演。对着商店牌或商店箱按下挖掘键时，
+> 客户端先把「牌子碎掉、牌面文字没了」演出来；`PlayerDestroyBlockEvent` / 攻击事件被 `cancel()` 之后，
+> 方块本身会回到服务端状态，**但方块实体（牌面文字）没回来**——现象是「拆不掉，但牌子空了，
+> 退出重进才显示出来」。所以 `ContainerProtectionListener::reject(...)` 带一个 `resync` 开关，
+> 拆牌/拆箱被拦下时也重发这一格的方块实体。
+>
+> **第三处（真机 D1 全量验收时发现）**：**改牌被拒绝**也是预演出来的——玩家敲完字点确定的那一刻，
+> 客户端已经把这段文字写进本地那份牌子里了，`event.cancel()` 只挡住服务端写入，于是牌子看着「写进去了」，
+> 退出重进才发现是空的。同理，**规范化成功的编辑**也有半个错位：客户端显示玩家敲的原文（大小写、空格、
+> 缺省一侧都可能不一样），服务端存的是规范化后的文本。两者都靠同一招解决：
+> - 拒绝 → `Before` 阶段 `cancel()` 之后立刻重发这一格；
+> - 规范化 → `After` 阶段（文本已真写进去、归属也补完了）再重发这一格。
+>
+> **重发的实现约束（真机第四报换来的）**：**不许自己拼 NBT** 再发 `BlockActorDataPacket`。
+> 早先的退路是 `save(tag, SaveContext{SendOverNetwork})` 自己组包，用来兜「`_getUpdatePacket`
+> 返回空」的情形，真机后果很严重：牌子显示空白、**打不开编辑界面**、连点几次客户端直接掉线——
+> 因为原版那个包依赖的不只是 `save` 出来的字段（刚放下、还没写过字的牌子尤其危险）。
+> 现在的做法是**只让原版生成**：先问 `_getUpdatePacket`，为空就调告示牌自己的 `onChanged(region)`
+> 把它标脏再问一次，还要不到就**放弃**——宁可让客户端多显示一次旧内容，也不发拼出来的包。
+> 同一玩家对同一格的重发另有 250ms 节流（连点不该变成一串包，那是掉线的另一半原因）。
+>
+> 这几处共用同一份实现：`src/mod/BlockResync.h` 的 `resyncBlockActor(player, region, pos)`
+> （首选 `BlockActor::_getUpdatePacket`，拿不到就按 `SendOverNetwork` 自己组包；只发给动手的人）。
+> **规则**：任何 `event.cancel()` 拦下的、客户端做过的动作，都要问一句「客户端现在看到的东西还对吗」，
+> 不对就补一次重同步——这已经不是个别用例，而是一条通用约束。
+
+上蜡只是**编辑开关**，不改变商店语义（D29）：上了蜡的牌交易照常，文本谁都改不了。
+
+**上蜡不可逆（2026-11-01 修正）**：早期版本以为「斧头能除蜡、店主要先除蜡才能改」——**这是错的**。原版告示牌的蜡没有任何去除手段（斧头只对铜块有效；Mojira MC-261313「Wax cannot be removed from a sign using an axe」的结论是 Works As Intended；Wiki 也写「若要修改则需破坏后重新放置告示牌」）。因此：
+
+- 斧头在牌面防护里就是**普通物品**：拿它点牌与空手点牌完全一样（正面弹表单、背面放行），不存在「除蜡」这个操作；
+- 上过蜡的牌，牌面文字对**所有人**（含店主与 OP）都是只读；
+- 要改只有两条路：拆掉这块牌重立（等于关店重新开），或将来的管理表单（`P1`，见 `.scratch/p1-shop-management/`）——表单走的是服务端写牌，不受蜡约束；
+- 上过蜡的牌再做染色 / 改发光 / 再上蜡也一律不生效（原版拒绝），提示直接说「上了蜡」。
 
 创建失败打掉牌子时（仅当 `removeInvalidShopSign = true`），按 Java 版 `breakNaturally` 语义**有掉落**（可配 `dropSignOnCreationFailure`，默认 true）。
 
@@ -709,7 +830,13 @@ public:
 > 与同一套确认表单，差别只在「谁的货、谁收货、谁付钱」与几个词（买入价/卖出价、扣款/收入）。
 > 商店箱为空时**不能卖给它**：商品权威是容器第一个非空槽位（5.3），空了就没人知道这家店收什么。
 
-> **P0 现状（06 落地后）**：店主的「改牌面」入口是**潜行 + 右键**。两种手势的差别只有这一处：普通右键弹表单，潜行右键不进表单、原版编辑界面照弹（上蜡时拦下并提示先除蜡）。非店主潜行右键仍然弹表单——潜行不该成为绕过保护的通道。管理表单还没接，所以潜行右键是 P0 里唯一能改价的路；`管理商店` 按钮将来接上之后（P1）仍可以只做开箱/关店。
+> **坑（真机首测踩到）**：`CustomForm` 的下拉框回调**回传的是选中项的文案，不是下标**——
+> `ll::form::CustomForm` 里 `Dropdown::parseResult` 返回的是 `mOptions[index]`（`std::string`），
+> 只有当传入的不是整数下标时才是空串。按下标（`uint64`）读会永远拿不到值，全部档位都报「份数选择不对」。
+> 所以 `src/shop/UnitsForm` 提供 `choiceIndexForOption`（`unitsFormOptions` 的逆运算）把文案换算回下标，
+> `src/mod/ShopForm` 两种回传形式都接住。以后新增任何下拉框都要走这条换算。
+
+> **P0 现状（06 落地后）**：店主的「改牌面」入口是**潜行 + 右键**。两种手势的差别只有这一处：普通右键弹表单，潜行右键不进表单、原版编辑界面照弹（上蜡时拦下并说清只能拆牌重立）。非店主潜行右键仍然弹表单——潜行不该成为绕过保护的通道。管理表单还没接，所以潜行右键是 P0 里唯一能改价的路；`管理商店` 按钮将来接上之后（P1）仍可以只做开箱/关店。
 
 > **P0 现状（11 落地后）**：管理员店与普通店走同一张表单、同一套算法，差别只在三处：
 > 资金对手方是系统账户（买卖两边的钱靠销毁 / 凭空记账，7.4）、不抽商店税、不吃离线策略。
@@ -770,6 +897,20 @@ public:
   买入时是「商店箱里的货 / 你的余额 / 背包」，卖出时是「你手里的货 / 店主的余额 / 商店箱」。
   （`planTrade` 一份实现里就分好了「哪条上限挡住了」，只有文案按方向换说法。）
 
+> **真机发现（2026-11-01）：正常路径下请求不到超额份数。** 份数表单的上限不是「单次上限」一个数，
+> 而是**四者取最小**（`maxTradeUnits`：`maxShopAmount`、货量、能收下的份数、付得起的份数，
+> 卖出方向的付得起含税）。箱里只剩 5 份时输入 8，得到的是份数表单自己的输入校验
+> 「自定义份数要在 1 到 5 之间」——因为上限已经把货量算进去了，走不到交易阶段。
+>
+> 所以「部分成交 + 先确认」这条路径**只在表单打开期间状态变了**才成立：你开着份数表单，
+> 另一个玩家把货买走 / 补了货 / 塞满了箱子，或者你的余额、背包在那段时间里变了 → 服务端重新规划
+> 后发现实际能成交的份数与所选不同 → `NeedsConfirm` 弹确认并说明哪一项变了（份数 / 件数 / 总额），
+> 确认后按**新的实际值**成交；关掉 `allowPartialTransactions` 时同样重新规划，但**不夹份数**，
+> 整笔拒绝并说清哪一条不够。
+>
+> 这条设计的意义：正常玩家永远不会在不知情的情况下被部分成交（上限先挡住），并发改动必须经过
+> 一次显式确认——两种风险各自被最合适的那一层挡住。
+
 ### 10.4 反刷保护
 
 - 同一玩家 250ms 内重复提交 → 忽略（对齐 `SHOP_INTERACTION_INTERVAL`）。
@@ -784,7 +925,7 @@ public:
 | 角色 | 判定 | 能力 |
 | --- | --- | --- |
 | 游客 | 其他玩家 | 买卖、查看商店信息 |
-| 店主 | **正面记录的编辑者 XUID == 玩家 XUID**（ADR-0005） | 编辑牌面、染色、上蜡/除蜡、开箱、拆店、管理商店 |
+| 店主 | **正面记录的编辑者 XUID == 玩家 XUID**（ADR-0005） | 编辑牌面、染色、上蜡、开箱、拆店、管理商店 |
 | OP | `Player::isOperator()` | 全部，包括创建/管理管理员商店；在管理员店里也是买家（对手方是系统账户，7.4） |
 | 管理员商店 | 第 1 行写 `adminShopName` **且创建者是 OP** | P0：库存来自容器，资金侧是系统账户；管理（改牌、开箱、拆箱）只给 OP |
 
@@ -811,7 +952,7 @@ public:
 3. `ContainerFinder`：墙牌背面优先 + 六面顺序 + 双箱合并 + "一个容器只能被一个牌绑定"校验。
 4. `ShopService`：创建/编辑/销毁、多商店规则、保护判定、上蜡状态查询。
 5. H1：监听 `PlayerEditSignBeforeEvent` → 创建/编辑（改 `text()` 完成规范化），并作提交阶段的兜底闸（非店主 / 上蜡的牌丢弃包，见 9.2）。
-6. 交互与编辑拦截：`PlayerInteractBlockEvent` → 表单（`SimpleForm` + `CustomForm`），并拦下非店主的编辑/染色/墨囊/上蜡/除蜡；店主与 OP 潜行右键进原版编辑界面（10.1 的 P0 现状）。
+6. 交互与编辑拦截：`PlayerInteractBlockEvent` → 表单（`SimpleForm` + `CustomForm`），并拦下非店主的编辑/染色/墨囊/上蜡；店主与 OP 潜行右键进原版编辑界面（10.1 的 P0 现状）。
 7. 交易：预校验 + 快照 + 转账 + 搬物品 + 补偿 + 刷新；份数制计价（10.1）。
 8. 保护：开箱、拆牌、拆箱、H2 漏斗、H3 方块级爆炸/活塞/凋灵/火焰。
 9. 经济后端：`LegacyMoneyEconomy` + `ScoreboardEconomy` + `NullEconomy` + 探测与回退（第 8 节，**不是内存桩**）。
@@ -861,9 +1002,9 @@ public:
 17. 非店主手持蜜蜡 → 拒绝，牌子不上蜡。
 18. 非店主手持斧头点已上蜡的商店牌 → 拒绝，除不了蜡。
 19. 店主执行 14~18 → 全部允许（改文本用**潜行 + 右键**，见 10.1 的 P0 现状）。
-20. 上蜡后的商店 → 店主自己也改不了，必须先除蜡；商店功能照常可交易。
+20. 上蜡后的商店 → **谁都改不了**（原版去不掉蜡），商店功能照常可交易；要改只能拆牌重立。
 20a. 非店主**潜行 + 右键**点商店牌 → 仍然只弹表单，不弹原版编辑界面（潜行不是后门）。
-20b. 上蜡后店主潜行 + 右键 → 被拦下并提示「先拿斧头除蜡才能改」；除蜡后再潜行右键，原版编辑界面照弹且能保存。
+20b. 上蜡后店主潜行 + 右键 → 被拦下并提示「上了蜡，要改只能拆掉这块牌重立」；拿斧头点牌只是普通点击（弹表单），不会除蜡；店主也改不了蜡（原版无此操作）。
 20c. 非店主站在商店牌**背面**拿蜜蜡点牌 → 牌子不上蜡（上蜡是整块牌子的事，不看玩家站哪一面）。
 20d. OP 改一次别人商店的牌面（走正规路径）→ 牌还是原店主的，第 1 行显示的名字与归属都不变。
 20e. A 先在一块牌上写普通公告，B 再把它改成合法商店 → 店主是 **B**（归属写给把它变成商店的人）。
@@ -930,7 +1071,9 @@ public:
 | 基岩版单行字符数 | 待实测 | 商品名可能被截断，全名在表单里显示；不影响交易（商品来自容器） |
 | 双箱配对时机 | 待实测 | 配对失败按单箱处理 |
 | 经济后端 | 已落地（10） | LegacyMoney 优先、记分板兜底、空实现垫底；离线店主按 8.5 处理。真实行为待 12 验收 |
-| 管理员店的系统账户（生 / 灭钱） | 已落地（11），**待真机** | 判据是 `supportsSystemAccount()`：LegacyMoney 走 `LLMoney_Add` / `Trans(to="")`，记分板走 `add` / `reduce`。这两个导出在真机上是否真的允许「凭空记账 / 销毁」只能实测；若 `LLMoney_Add` 拒绝了不存在的账户，退回方案是给系统账户预建一行（P1 的真实账户） |
+| 管理员店的系统账户（生 / 灭钱） | **已真机验证（2026-11-01）** | 判据是 `supportsSystemAccount()`。真机结果：买入 `mtrans` 是 `玩家 → System 金额`（钱销毁，店主余额不动），卖出是 `→ 玩家 金额（add N）`（钱凭空生，无付款方），两个方向都没有出现「系统账户付款失败」 |
+| `LLMoney_Add` 对从未上账的 XUID | **源码证伪风险（2026-11-01）** | `LLMoney_Add(xuid, n)` 走 `LLMoney_Trans("", xuid, n)`，空付款方分支先 `LLMoney_Get(to)`——而 `Get` 查不到行时会 `insert` 一行 `def_money`——再加钱。所以从未上账的 XUID **能加**，不需要给系统账户预建行。依据：LegacyMoney `src/API.cpp` |
+| 后端静默降级导致账本换家 | **已移除（2026-11-01）** | 老默认值 `auto` = 「LegacyMoney 探不到就用记分板」，会让账本一夜之间换一套（余额看起来全变 0）且只在日志留一条 info。现在后端必须显式选、一个只探一个、探不到就报错不启用交易（§8.4） |
 | LeviLamina 目标版本 | 已定 `26.51.8`（兼容 `>=26.51.7 <26.60.0`） | iListenAttentively 0.17.0、行为以实际头文件为准 |
 | 商店税与 `pay_tax` 双重扣税 | 已知，**无法程序化检测** | `shopTaxRate > 0` 时无条件 WARN 要求设 `pay_tax = 0`；不关就接受「店主被抽两次、补偿漂移」，P0 不自动禁用商店税（见 8.9） |
 | `LLMoney_Get` 的失败通道 | 已核实（LegacyMoney `src/API.cpp`） | 空 XUID 或数据库异常返回 `-1`，本模组据此返回「读不到」；从未上账的 XUID 会被它插入一行 `def_money` 再返回，所以「新账户」读到的是默认金额而不是「读不到」 |
@@ -978,9 +1121,9 @@ public:
   "removeInvalidShopSign": false,
   "dropSignOnCreationFailure": true,
   "economy": {
-    "backend": "auto",
+    "backend": "legacy_money",
     "scoreboardObjective": "money",
-    "createObjectiveIfMissing": false,
+    "createObjectiveIfMissing": true,
     "requireOwnerOnline": true,
     "currencySymbol": "$"
   },
@@ -998,12 +1141,19 @@ public:
 >
 > 已生效的键：`adminShopName`、`shopContainers`、`maxShopAmount`、`allowPartialTransactions`、
 > `blockSellPriceHigherThanBuy`、`allowOwnerOpenChest`、`shopInteractionCooldownMs`、`ignoreCreativeMode`、
-> `economy.backend`（`auto` / `legacy_money` / `scoreboard` / `null`；`builtin` 是 P1，写它会拒绝加载）、
+> `economy.backend`（`legacy_money` / `scoreboard` / `null`；`builtin` 是 P1，写它会拒绝加载；
+> **`auto` 已删除**，老配置写它会被拒绝并提示改成哪个）、
 > `economy.scoreboardObjective`、`economy.createObjectiveIfMissing`、`economy.requireOwnerOnline`、
 > `economy.currencySymbol`、`tax.shopTaxRate`。
 >
-> 两条配套约束：`economy.createObjectiveIfMissing` 会真的在服务器的记分板上建一个目标（默认 `false`）；
+> 两条配套约束：`economy.createObjectiveIfMissing` 会真的在服务器的记分板上建一个目标（默认 `true`，
+> 选了 `scoreboard` 就是想要记分板记账，为了一个 `dummy` 目标再让服主手打命令没有收益）；
 > `tax.shopTaxRate > 0` 要求服主同时把 LegacyMoney 的 `pay_tax` 设为 0（本模组读不到那个值，只能启动时 WARN）。
+>
+> **文件生成与迁移**：`config.json` 不存在时 `ll::config::loadConfig` 会先写一份带 `version` 的全默认文件再读回来。
+> 手写一份只填几个键的文件是可以的，但**必须带 `"version": 1`**：缺这个键时 `loadConfig`
+> 会拿默认值合并进内存并返回 `false`（不是读失败），本模组会打一条 warn、把补齐后的完整文件回写一次，
+> 然后照常启动。改配置后一律重启服务器，配置只在模组 `load` 阶段读一次。
 
 ---
 
@@ -1114,6 +1264,64 @@ public:
 | D26 | 店主 = 正面记录的编辑者 XUID，第 1 行只做显示 | 玩家名可改，XUID 稳定；避免外部 name→XUID 映射表（见 ADR-0005） |
 | D27 | 商品权威是容器第一个非空槽位，牌面第 4 行只做显示 | 基岩没有稳定的物品 ID 文本；避免本地化名反查与同名不同物（见 5.3） |
 | D28 | 一块告示牌一个商店，只用正面；背面是布告板 | 规则一句话说完；避免"第 5 行在背面"的反直觉拼接（见 ADR-0006） |
-| D29 | 编辑/染色/墨囊/上蜡/除蜡一律要求店主或 OP（无主牌例外：文本 fail-open，见 9.2）；上蜡不改变商店语义 | 引擎的上蜡是编辑冻结，不是权限；我们只把"除蜡"纳入店主权限（见 9.2） |
-| D30 | P0 管理员店的资金端 = **系统账户生 / 灭钱**（空账户键）：买入销毁、卖出凭空记账 | GLOSSARY「资金侧不设上限」的字面实现，也是「无容器模式放到 P1」之外唯一能在 P0 让两个方向都成立的方案。判据是后端能力 `supportsSystemAccount()`（不是 `supportsMoneySink()`，后者只关系商店税，合并会让记分板突然开始收税）；管理员店不收商店税 |
+| D29 | 编辑/染色/墨囊/上蜡一律要求店主或 OP（无主牌例外：文本 fail-open，见 9.2）；上蜡不改变商店语义，且**不可逆** | 引擎的上蜡是编辑冻结，不是权限；原版不能除蜡（Mojira MC-261313 判 WAI），所以上蜡本身也必须归店主权限，否则路人刷一下就把店主的牌永久锁死 |
+| D30 | P0 管理员店的资金端 = **系统账户生 / 灭钱**（空账户键）：买入销毁、卖出凭空记账 | GLOSSARY「资金侧不设上限」的字面实现，也是「无容器模式放到 P1」之外唯一能在 P0 让两个方向都成立的方案。判据是后端能力 `supportsSystemAccount()`（不是 `supportsMoneySink()`，后者只关系商店税）；管理员店不收商店税 |
 | D31 | 管理员店对所有人开放买卖，**包括 OP**（表单角色一律访客）；「不能跟自己交易」不适用 | 对手方是系统账户，店主不是交易的一侧；管理能力仍由 `shopActorOf` / `canManageShop` 判，与表单按钮解耦（见 10.1 / 11） |
+
+## 19. 诊断与状态（P0.1）
+
+手工验收最难的部分不是"做操作"，而是"判断这次操作到底发生了什么"：`latest.log` 不实时刷盘、
+hook 注册只在失败时 warn 一次、经济后端的选择只在启动那一刻打一行。所以补一个只观测、不改行为的观测包。
+
+### 19.1 `/shop status`
+
+OP 权限（`GameDirectors`）随时可查：模组版本、iListenAttentively 版本、配置关键 8 项、
+经济后端的「配置值 → 选用值」（与启动日志同一句 `backendSelectionText`）、10 条 hook 的
+**已尝试注册 + attach 返回码**、调试开关状态。
+
+两处措辞必须守住：
+
+- hook 只写「已尝试注册，attach 返回 N」。`HookSlot::attached` 只代表"挂过了"，
+  `attachHooks` 的注释也写明返回值不判成败——**行为是否生效只能手测**，这条命令不许把它说成"挂载成功"。
+- 世界未就绪时后端写「尚未解析（世界未就绪）」，不编值、不报错。
+
+配置非法导致模组没加载时这条命令不存在（模组没加载就没有命令），别误判成"命令坏了"。
+
+### 19.2 `/shop debug on|off`
+
+不持久化、不做成配置项（配置要重启才生效，而调试的价值是"现在就想看"），模组关闭时归零。
+
+只在**结果点**打一行 `[shop/dbg] <kind> k=v ...`，五类事件：
+
+| kind | 时机 |
+| --- | --- |
+| `sign_decision` | 牌面点击判定完，**每个最终分支只记一次**（`TakeOver` / `PassThrough` / `Block` / `NotAShopSign`；冷却期连点带 `cooldown=true`） |
+| `protection_block` | 保护拦下之后：`open_chest` / `break_shop` / `break_support` / `sign_color` / `sign_style` / `sign_wax`，带完整坐标，原因复用 `decision.message` |
+| `sign_edit` | 告示牌提交阶段的判定结果：`outcome=NotAShopSign|Rejected|Normalized` + `pos` + `reason`。加它是因为编辑路径原本**一行日志都没有**，真机上「写进去了没」「为什么被拒」只能靠猜（2026-11-01 吃过这个亏） |
+| `trade_result` | `finishTrade` 拿到结果时（`ok` / `fail` / `confirm` / `frozen`） |
+| `content_block` | 漏斗拉/推、投掷器、铜傀儡被拦下的那一次 |
+| `economy_resolution` | 后端解析后（含「认不出配置 / builtin / null」这些早退分支） |
+
+刻意**不**逐步记录 `moveMoney` / `undoAndRefund` 的中间步骤：补偿路径的中间态会误导人
+（"钱扣了"不代表最终扣了）。每 tick 会走到的位置（漏斗、投掷器、铜傀儡）用节流版，
+连续相同的行 1 秒内只出一条，否则红石时钟一秒能刷 20 行。
+
+### 19.3 解析时机（真机修正）
+
+`ServerStartedEvent` **不可靠**：真机（LL 26.51.9）世界已就绪、玩家已进服，`/shop status` 仍显示
+「尚未解析」，即这个事件没有在世界的就绪时刻送达；启动日志里也从来没有出现过那句选型行。
+原来的设计依赖「世界一就绪就探一次」，实际会退化成「等第一次交易」——没交易过的服一整天都显示没后端，
+排查时极易误判成「后端不可用」。
+
+因此解析由三处驱动，谁先到都只解析一次（`ensureResolved` 幂等）：
+
+1. `ServerStartedEvent`（留着，能到就到）；
+2. `PlayerJoinEvent`（**主要依靠这一条**：进服必然意味着世界在跑，而且这正是服主第一次要看余额的时刻）；
+3. 第一次动钱（懒解析，本来就有）。
+
+`/shop status` 仍是**只读**：它不触发解析，也不会因为敲一条查询就在记分板上建目标。
+
+### 19.4 运行时重载不是切配置的捷径
+
+`/ll reload Shop`（LeviLamina `ModManage` 的 `unload` + `load`）会卸载/重载 native DLL、
+事件监听与 detour hook。**切配置档仍以停服重启为准**；重载只当可选鲁棒性试验（可能留下旧监听或重复 hook）。

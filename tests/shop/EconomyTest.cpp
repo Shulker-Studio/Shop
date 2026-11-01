@@ -177,7 +177,6 @@ TEST_CASE("转账：退款也失败时报告 Broken，不当普通失败处理")
 
 TEST_CASE("后端名与枚举一一对应：配置里写的名字只有一张表") {
     for (auto backend : {
-             Backend::Auto,
              Backend::LegacyMoney,
              Backend::Scoreboard,
              Backend::Builtin,
@@ -191,13 +190,18 @@ TEST_CASE("后端名与枚举一一对应：配置里写的名字只有一张表
     CHECK_FALSE(parseBackend("").has_value());
     CHECK_FALSE(parseBackend("legacy-money").has_value());
     CHECK_FALSE(parseBackend("AUTO").has_value());
+    // `auto` 曾经是默认值，现在被删掉了（它等于「探不到就偷偷换账本」）。
+    // 配置校验拿不到枚举值，才能按「是不是这个废弃的名字」给出专门的迁移提示。
+    CHECK_FALSE(parseBackend("auto").has_value());
 }
 
 TEST_CASE("后端名清单文本用于错配置提示") {
     auto const text = backendNamesText(" / ");
-    CHECK(text == "auto / legacy_money / scoreboard / builtin / null");
+    CHECK(text == "legacy_money / scoreboard / builtin / null");
     // 配置校验只该列「现在能写」的取值：builtin 是 P1，写它会单独报错
-    CHECK(legalBackendNamesText(" / ") == "auto / legacy_money / scoreboard / null");
+    CHECK(legalBackendNamesText(" / ") == "legacy_money / scoreboard / null");
+    // 删掉的 `auto` 不许再出现在任何提示里，否则服主会照着提示写一个非法值
+    CHECK(text.find("auto") == std::string::npos);
 }
 
 namespace {
@@ -208,42 +212,28 @@ BackendProbe missing(ProbeIssue issue) { return BackendProbe{false, issue}; }
 
 } // namespace
 
-TEST_CASE("auto 探测顺序：LegacyMoney 优先，其次记分板，最后空实现") {
-    // 两家都在：LegacyMoney 胜出，连跳过的理由都不该有
-    auto selection = selectBackend(Backend::Auto, {usable(), usable()});
-    CHECK(selection.chosen == Backend::LegacyMoney);
-    CHECK(selection.skipped.empty());
-
-    // 没有 LegacyMoney：降级到记分板，原因带上
-    selection = selectBackend(Backend::Auto, {missing(ProbeIssue::ModuleMissing), usable()});
-    CHECK(selection.chosen == Backend::Scoreboard);
+TEST_CASE("写了哪个后端就只认哪个：探不到也不许换成另一个账本") {
+    // legacy_money 探不到、记分板恰好可用 —— 这是删掉 `auto` 的核心场景：
+    // 绝不能因为「记分板刚好在」就悄悄换一套账本，必须落到空实现并把原因交出去。
+    auto selection = selectBackend(Backend::LegacyMoney, {missing(ProbeIssue::ModuleMissing), usable()});
+    CHECK(selection.chosen == Backend::Null);
     REQUIRE(selection.skipped.size() == 1);
     CHECK(selection.skipped[0].first == Backend::LegacyMoney);
     CHECK(selection.skipped[0].second == ProbeIssue::ModuleMissing);
 
-    // 导出不全也算 LegacyMoney 不可用（版本不兼容）
-    selection = selectBackend(Backend::Auto, {missing(ProbeIssue::ExportsMissing), usable()});
-    CHECK(selection.chosen == Backend::Scoreboard);
-    CHECK(selection.skipped[0].second == ProbeIssue::ExportsMissing);
-
-    // 两家都没有：空实现，两个跳过原因都留下
-    selection = selectBackend(Backend::Auto, {missing(ProbeIssue::ModuleMissing), missing(ProbeIssue::ObjectiveMissing)});
+    // 反过来：记分板目标没建，LegacyMoney 可用，也不许顶上去
+    selection = selectBackend(Backend::Scoreboard, {usable(), missing(ProbeIssue::ObjectiveMissing)});
     CHECK(selection.chosen == Backend::Null);
-    REQUIRE(selection.skipped.size() == 2);
-    CHECK(selection.skipped[0].first == Backend::LegacyMoney);
-    CHECK(selection.skipped[1].first == Backend::Scoreboard);
+    REQUIRE(selection.skipped.size() == 1);
+    CHECK(selection.skipped[0].first == Backend::Scoreboard);
 }
 
-TEST_CASE("显式后端：点了名但探测不到就降级，不整服停摆") {
-    // legacy_money：优先它，失败才往下走
+TEST_CASE("显式后端：可用就选它，其余情况一律空实现") {
     auto selection = selectBackend(Backend::LegacyMoney, {usable(), usable()});
     CHECK(selection.chosen == Backend::LegacyMoney);
+    CHECK(selection.skipped.empty());
 
-    selection = selectBackend(Backend::LegacyMoney, {missing(ProbeIssue::ModuleMissing), usable()});
-    CHECK(selection.chosen == Backend::Scoreboard);
-    CHECK(selection.skipped[0].first == Backend::LegacyMoney);
-
-    // scoreboard：不从 LegacyMoney 开始（服主不想要它记账）
+    // scoreboard：不看 LegacyMoney（服主不想要它记账）
     selection = selectBackend(Backend::Scoreboard, {usable(), usable()});
     CHECK(selection.chosen == Backend::Scoreboard);
     CHECK(selection.skipped.empty());
@@ -264,15 +254,11 @@ TEST_CASE("显式后端：点了名但探测不到就降级，不整服停摆") 
     CHECK(selection.skipped.empty());
 }
 
-TEST_CASE("探测计划：哪些候选值得探，只由配置决定") {
-    auto const autoProbes = probesFor(Backend::Auto);
-    CHECK(autoProbes.legacyMoney);
-    CHECK(autoProbes.scoreboard);
-
-    // 显式 legacy_money 也要探记分板（它是降级候选）
+TEST_CASE("探测计划：只探配置里写的那一个") {
+    // 只探自己：不再有「顺手也探一下别的后端」这回事（没有降级了，探了也没用）
     auto const legacyProbes = probesFor(Backend::LegacyMoney);
     CHECK(legacyProbes.legacyMoney);
-    CHECK(legacyProbes.scoreboard);
+    CHECK_FALSE(legacyProbes.scoreboard);
 
     // 显式 scoreboard 不去碰 LegacyMoney
     auto const scoreboardProbes = probesFor(Backend::Scoreboard);
@@ -287,15 +273,15 @@ TEST_CASE("探测计划：哪些候选值得探，只由配置决定") {
     }
 }
 
-TEST_CASE("探测结果文案：说清选中了谁、跳过了谁") {
-    CHECK(backendSelectionText(Backend::Auto, selectBackend(Backend::Auto, {usable(), usable()}))
-          == "配置 auto → 选用 legacy_money");
+TEST_CASE("探测结果文案：说清选中了谁、为什么没用成") {
+    CHECK(backendSelectionText(Backend::LegacyMoney, selectBackend(Backend::LegacyMoney, {usable(), usable()}))
+          == "配置 legacy_money → 选用 legacy_money");
 
     auto const text = backendSelectionText(
-        Backend::Auto,
-        selectBackend(Backend::Auto, {missing(ProbeIssue::ModuleMissing), usable()})
+        Backend::LegacyMoney,
+        selectBackend(Backend::LegacyMoney, {missing(ProbeIssue::ModuleMissing), usable()})
     );
-    CHECK(text.find("选用 scoreboard") != std::string::npos);
+    CHECK(text.find("选用 null") != std::string::npos);
     CHECK(text.find("legacy_money") != std::string::npos);
     CHECK(text.find(probeIssueText(ProbeIssue::ModuleMissing)) != std::string::npos);
 

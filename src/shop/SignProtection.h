@@ -74,8 +74,11 @@ signTextEditRejection(ShopActor actor, bool waxed, std::string const& ownerName,
 /// 非店主想改别人的商店牌时的提示。管理员商店单独一句：它的管理权只给 OP（§11）。
 std::string ownerOnlyEditMessage(std::string const& ownerName, bool adminShop);
 
-/// 牌子上了蜡、改不动时的提示：连店主也要先除蜡（DESIGN §9.2）。
+/// 牌子上了蜡、改不动时的提示：连店主也改不了，只能拆掉重立（DESIGN §9.2）。
 std::string waxedSignEditMessage();
+
+/// 已经上蜡的牌还要染色 / 改发光 / 再上蜡时的提示：原版对这一切都拒绝。
+std::string waxedSignTouchMessage();
 
 /// 商店牌还在、但附着格不是可用容器时点牌：没有表单可弹，也别把编辑界面递给非店主。
 std::string shopBoxMissingMessage();
@@ -85,16 +88,20 @@ std::string shopInvalidMessage();
 
 /// 手持物品对告示牌会做的事（DESIGN §9.2 的「牌面防护」那一组）。
 ///
-/// 前四支对应引擎 `SignBlock::SignInteractionResult::Result` 里的 `UseDye` /
-/// `UseInkSac` / `UseGlowInkSac` / `UseHoneyComb`；`Axe`（除蜡）不在那个枚举里——
-/// 斧头是物品自己的 `useOn` 分支，`FailWaxedSign` 只表示「上蜡的牌不给编辑」。
+/// 四支正好对应引擎 `SignBlock::SignInteractionResult::Result` 里的 `UseDye` /
+/// `UseInkSac` / `UseGlowInkSac` / `UseHoneyComb`。
+///
+/// **没有「除蜡」**：原版告示牌的蜡是去不掉的——斧头只对铜块有效，
+/// Mojira MC-261313「Wax cannot be removed from a sign using an axe」的结论是
+/// Works As Intended，Wiki 也写明「若要修改则需破坏后重新放置告示牌」。
+/// 所以斧头在这张表里就是**普通物品**：拿着它点牌等于空手点牌（弹表单）。
+/// 要改一块上过蜡的牌只有两条路：拆掉重立，或者将来的管理表单（P1）。
 enum class SignTouch : std::uint8_t {
-    None,       ///< 不会改牌子：空手、普通物品
+    None,       ///< 不会改牌子：空手、斧头、任何普通物品
     Dye,        ///< 染料：改文字颜色
     InkSac,     ///< 墨囊：取消发光字
     GlowInkSac, ///< 荧光墨囊：发光字
-    HoneyComb,  ///< 蜜蜡：上蜡（冻结编辑）
-    Axe,        ///< 斧头：除蜡
+    HoneyComb,  ///< 蜜蜡：上蜡（冻结编辑，且**不可逆**）
 };
 
 /// 从物品类型名判 `SignTouch`。
@@ -102,10 +109,12 @@ enum class SignTouch : std::uint8_t {
 /// 归一化（小写、去命名空间前缀、只留字母与数字）让判定不依赖引擎给的是
 /// `minecraft:red_dye` 还是展示名——两种写法都会落到同一个键。
 ///
-/// 先查白名单（16 种染料 + 7 种斧头 + 墨囊/荧光墨囊/蜜蜡），再按形状兜底：
-/// 以 `dye` 结尾的一律算染料，以 `axe` 结尾且不是 `pickaxe` 的算斧头。兜底是为了
-/// 新版本加了颜色或材质时不至于**静默放行**——这类漏判在正面只会多弹一次表单，
+/// 先查白名单（16 种染料 + 墨囊/荧光墨囊/蜜蜡），再按形状兜底：以 `dye` 结尾的一律算染料。
+/// 兜底是为了新版本加了颜色时不至于**静默放行**——这类漏判在正面只会多弹一次表单，
 /// 在背面就等于没保护（背面本来就归原版处理）。
+///
+/// 斧头**故意不在表里**（原版不能除蜡，见 `SignTouch`），所以 `*_axe` 一律回落 `None`；
+/// 「拿斧头点牌」就是普通点击。
 ///
 /// 认不出的仍然回落 `None`，那时当作普通物品：正面弹表单、背面放行（§5.5）。
 SignTouch classifySignTouch(std::string_view itemTypeName);
@@ -113,7 +122,7 @@ SignTouch classifySignTouch(std::string_view itemTypeName);
 /// 一次点击该做什么。
 enum class SignTouchAction : std::uint8_t {
     TakeOver,    ///< 取消原版交互，弹商店表单
-    PassThrough, ///< 不拦截：交给原版的染色 / 墨囊 / 上蜡 / 除蜡 / 编辑界面
+    PassThrough, ///< 不拦截：交给原版的染色 / 墨囊 / 上蜡 / 编辑界面
     Block,       ///< 取消原版交互，并把原因告诉玩家
 };
 
@@ -137,12 +146,12 @@ struct SignTouchContext {
 /// 调用方已经确认过「这一格是商店牌」（正面文本像商店牌，§5.1.1）。规则：
 ///
 /// - 空手/普通物品 + 看背面 → 放行：背面是布告板，原版编辑界面照弹（§5.5）。
-/// - 空手/普通物品 + 看正面 → 弹表单；**潜行**右键则放行原版编辑界面，这是 P0 里
+/// - 空手/斧头/普通物品 + 看正面 → 弹表单；**潜行**右键则放行原版编辑界面，这是 P0 里
 ///   唯一能改牌面的入口（§10.1 的 P0 现状）。谁能这样进，问的是
-///   `mayEditShopSignText`——与提交阶段同一个判据。上蜡时改不了，直接拦下并提示先除蜡。
-/// - 染料 / 墨囊 / 荧光墨囊 / 蜜蜡 / 斧头 → 与看哪一面无关：上蜡改的是整块牌子，
+///   `mayEditShopSignText`——与提交阶段同一个判据。上蜡的牌改不了，直接拦下并说清原因。
+/// - 染料 / 墨囊 / 荧光墨囊 / 蜜蜡 → 与看哪一面无关：上蜡改的是整块牌子，
 ///   染色与墨囊也只该由店主来按。店主与 OP 放行，其余拦下。
-/// - 斧头只在牌子真的上了蜡时才是「除蜡操作」；没上蜡时那一下什么都不改，当作普通点击。
+/// - 已经上蜡的牌对上面四样一律不认（原版也拒绝）：谁都改不了颜色、发光，也再上不了蜡。
 SignTouchDecision planSignTouch(SignTouchContext const& context);
 
 } // namespace ss::shop

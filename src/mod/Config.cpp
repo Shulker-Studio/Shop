@@ -1,5 +1,4 @@
 #include "mod/Config.h"
-
 #include "ll/api/Config.h"
 #include "ll/api/io/Logger.h"
 
@@ -40,6 +39,17 @@ bool validate(ShopConfig const& config, ll::io::Logger& logger) {
     }
     auto const backend = economy::parseBackend(config.economy.backend);
     if (!backend) {
+        // `auto` 单独报：它是老默认值，删掉它的理由（会偷偷换账本）与「写错字」完全不同，
+        // 只回一句「只能是 A / B / C」会让服主把老配置当成拼写错误去猜。
+        if (config.economy.backend == "auto") {
+            logger.error(
+                "config.json 非法：economy.backend = \"auto\" 已被移除——它会让本模组在探不到 "
+                "LegacyMoney 时悄悄改用记分板，账本换家必须由你决定。请明确写成 {} 之一后重启"
+                "（用 LegacyMoney 就写 legacy_money；用记分板先建好目标再写 scoreboard）",
+                economy::legalBackendNamesText(" / ")
+            );
+            return false;
+        }
         logger.error(
             "config.json 非法：economy.backend 只能是 {}（当前 \"{}\"；builtin 是 P1，暂不可用）",
             economy::legalBackendNamesText(" / "),
@@ -48,11 +58,11 @@ bool validate(ShopConfig const& config, ll::io::Logger& logger) {
         return false;
     }
     if (*backend == economy::Backend::Builtin) {
-        // `builtin`（自建账本）是 P1。明确拒，而不是悄悄当 auto 用：服主写了 builtin 就是
+        // `builtin`（自建账本）是 P1。明确拒，而不是拿别的后端顶替：服主写了 builtin 就是
         // 不想要 LegacyMoney 与记分板，拿它们顶替会把余额落到一个他没在看的地方。
         logger.error(
             "config.json 非法：economy.backend = \"builtin\"（自建账本）是 P1 的计划，"
-            "P0 请用 auto / legacy_money / scoreboard / null"
+            "P0 请用 legacy_money / scoreboard / null"
         );
         return false;
     }
@@ -77,9 +87,18 @@ bool validate(ShopConfig const& config, ll::io::Logger& logger) {
 std::optional<ShopConfig> loadShopConfig(std::filesystem::path const& path, ll::io::Logger& logger) {
     ShopConfig config;
     try {
+        // loadConfig 返回 false 的含义是「文件缺 version 或内容为空，已经用默认值补齐到内存」，
+        // 不是读失败：它只在抛出异常/JSON 语法错时算失败。手写一份只填几个键的 config.json
+        // 属于前者（缺 version），不能因此判配置非法。
         if (!ll::config::loadConfig(config, path)) {
-            logger.error("config.json 解析失败：{}", path.string());
-            return std::nullopt;
+            logger.warn(
+                "config.json 缺少 version 或为空，已按默认值补齐（本次按补齐后的配置运行）：{}",
+                path.string()
+            );
+            // 回写一份补上 version 的完整文件，避免每次启动都重跑迁移。
+            if (!ll::config::saveConfig(config, path)) {
+                logger.warn("config.json 回写失败，下次启动仍会重新迁移默认值：{}", path.string());
+            }
         }
     } catch (std::exception const& e) {
         logger.error("config.json 读取失败：{}（{}）", path.string(), e.what());

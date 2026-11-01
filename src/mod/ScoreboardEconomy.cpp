@@ -3,14 +3,19 @@
 #include "mod/EconomyService.h"
 
 #include "ll/api/service/Bedrock.h"
+#include "ll/api/service/PlayerInfo.h"
 
+#include "mc/deps/nbt/CompoundTag.h"
 #include "mc/world/actor/player/Player.h"
 #include "mc/world/level/Level.h"
+#include "mc/world/level/storage/DBStorage.h"
+#include "mc/world/level/storage/db_helpers/Category.h"
 #include "mc/world/scores/Objective.h"
 #include "mc/world/scores/ObjectiveCriteria.h"
 #include "mc/world/scores/PlayerScoreSetFunction.h"
 #include "mc/world/scores/ScoreInfo.h"
 #include "mc/world/scores/Scoreboard.h"
+#include "mc/world/scores/PlayerScoreboardId.h"
 #include "mc/world/scores/ScoreboardId.h"
 #include "mc/world/scores/ScoreboardOperationResult.h"
 
@@ -42,10 +47,56 @@ std::optional<ScoreTarget> resolveTarget(std::string const& objectiveName, econo
         return std::nullopt;
     }
     Player* player = onlinePlayer(account);
-    if (player == nullptr) {
+    if (player != nullptr) {
+        // 从来没有在这个目标上留过分值的玩家**可能连记分板身份都没有**（真机 2026-11-01：
+        // 这种玩家一交易就报读不到余额）。原版 `/scoreboard players set <玩家> <目标> 0` 自己
+        // 就是现场建身份，所以这里照做：没有身份就用 `createScoreboardId` 建一个，
+        // 于是新玩家的余额是 0 而不是「读不到」。这也是其它记分板经济实现的通行做法。
+        ScoreboardId const* id = &scoreboard.getScoreboardId(*player);
+        if (*id == ScoreboardId::INVALID()) {
+            id = &scoreboard.createScoreboardId(*player);
+        }
+        if (*id == ScoreboardId::INVALID()) {
+            return std::nullopt;
+        }
+        return ScoreTarget{&scoreboard, objective, id};
+    }
+
+    // 离线账户（店主不在线时买卖要照常记账）。记分板身份的内部键是
+    // `PlayerScoreboardId`（= 玩家的 `ActorUniqueID`），而这个 ID **存在玩家自己的存档里**，
+    // 所以人不在线也能拿到：照着 LSE `mc.addPlayerScore(uuid, …)` 的做法
+    // （LegacyScriptEngine/src/legacy/api/PlayerAPI.cpp）走一遍——
+    //
+    //   XUID → 玩家表拿 uuid → DBStorage 的 `player_<uuid>` → `ServerId` → 存档里的 `UniqueID`
+    //        → `scoreboard.getId(PlayerScoreboardId(uniqueId))` → 写分
+    //
+    // 用 ID 而不是名字：改名、重名都不影响，也不会把分数记到同名的假玩家身份上。
+    // 任何一步拿不到就返回空（= 读不到余额，交易被拒），绝不猜。
+    auto const entry = ll::service::PlayerInfo::getInstance().fromXuid(account);
+    if (!entry) {
         return std::nullopt;
     }
-    ScoreboardId const& id = scoreboard.getScoreboardId(*player);
+    auto storage = ll::service::getDBStorage();
+    if (!storage) {
+        return std::nullopt;
+    }
+    auto const playerKey = "player_" + entry->uuid.asString();
+    if (!storage->hasKey(playerKey, DBHelpers::Category::Player)) {
+        return std::nullopt;
+    }
+    auto playerTag = storage->getCompoundTag(playerKey, DBHelpers::Category::Player);
+    if (!playerTag || !playerTag->contains("ServerId", Tag::String)) {
+        return std::nullopt;
+    }
+    std::string const serverId = (*playerTag)["ServerId"].get<StringTag>();
+    if (serverId.empty() || !storage->hasKey(serverId, DBHelpers::Category::Player)) {
+        return std::nullopt;
+    }
+    auto serverTag = storage->getCompoundTag(serverId, DBHelpers::Category::Player);
+    if (!serverTag || !serverTag->contains("UniqueID")) {
+        return std::nullopt;
+    }
+    ScoreboardId const& id = scoreboard.getId(PlayerScoreboardId(static_cast<int64>((*serverTag)["UniqueID"])));
     if (id == ScoreboardId::INVALID()) {
         return std::nullopt;
     }

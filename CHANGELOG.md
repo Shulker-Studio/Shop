@@ -9,6 +9,11 @@
 
 ### 新增
 
+- `/shop status` 与 `/shop debug on|off`（P0.1 观测包）：前者随时输出配置快照、经济后端
+  「配置值 → 实际值」、10 条 hook 的「已尝试注册 + attach 返回码」、模组与 iListenAttentively 版本；
+  后者打开后在五个**结果点**各打一行 `[shop/dbg]`（`sign_decision` / `protection_block` /
+  `trade_result` / `content_block` / `economy_resolution`），供手工验收时对照测试单条目。
+  两者都只观测、不改任何交易/保护/经济判断；`debug` 不持久化，模组关闭即归零。
 - 基于 LeviLamina 模组模板初始化工程：target `Shop`，命名空间 `ss::shop`，类 `Shop`。
 - 依赖 LeviLamina `26.51.8` 与 iListenAttentively `0.17.0`（事件层）。
 - `DESIGN.md`：完整设计文档（数据模型、事件与 hook、交易流程、商店箱保护、经济契约、决策记录）。
@@ -34,7 +39,7 @@
 - 卖出交易（`src/mod/TradeService.*`）：`sellUnits` 把货从玩家背包搬进商店箱、店主付钱给玩家；预校验、快照、确认表单、补偿与冻结全部复用买入那一套，只有「谁付钱、谁收货、钱进钱出哪个方向」反过来。卖出容量算的是商店箱还能装几份（双箱按合并顺序，实际放货以 `Container::addItem` 剩余的件数为真值），放不下就按快照回写并退款。
 - 买卖共用一份份数算法（`src/shop/TradePlan.*` 的 `TradeRequest` / `planTrade`）：买入与卖出只差「货在哪、谁收货、谁付钱」，三个上限与部分成交开关、拒绝原因的优先级都只写一遍；拒绝原因按方向换说法（「商店的货不够」/「你手里没有这么多」、「你的钱不够」/「店主的钱不够」）。
 - 经济后端能区分「读不到余额」与「余额为 0」（`EconomyProvider::get` 返回 `optional`）：卖出时不会再对着一个有钱的店主报「资金不足」；动钱之前先确认两边账户都能记账（`EconomyService::accountsRecordable`），读不到就整笔拒绝、两边余额未动。
-- 牌面防护（`src/shop/SignProtection.*`、`SignInteractListener.*`、`ShopService::planSignEdit`）：染料、墨囊、荧光墨囊、蜜蜡、斧头这些会改牌子外观的物品，只有店主与 OP 放行（交回原版处理），其余人一律在交互阶段取消并提示；**看背面也一样**（上蜡改的是整块牌子）。店主/OP **潜行 + 右键**才进原版编辑界面（背面照旧人人都能写），上蜡后连店主也被拦下并提示先除蜡；提交阶段还有一道兜底（非店主、以及上了蜡的牌，正面编辑包直接丢弃）。上蜡不改变商店语义，交易照常（DESIGN §9.2 / §10.1 / §11）。
+- 牌面防护（`src/shop/SignProtection.*`、`SignInteractListener.*`、`ShopService::planSignEdit`）：染料、墨囊、荧光墨囊、蜜蜡这些会改牌子的物品，只有店主与 OP 放行（交回原版处理），其余人一律在交互阶段取消并提示；**看背面也一样**（上蜡改的是整块牌子）。店主/OP **潜行 + 右键**才进原版编辑界面（背面照旧人人都能写），上蜡后连店主也被拦下（蜡不可逆，只能拆牌重立）；提交阶段还有一道兜底（非店主、以及上了蜡的牌，正面编辑包直接丢弃）。上蜡不改变商店语义，交易照常（DESIGN §9.2 / §10.1 / §11）。
 - 「谁是店主」收成一个纯函数 `shopActorOf`（`src/shop/SignProtection.*`），交互阶段的表单角色与提交阶段的编辑权限共用它，不再各写一份 XUID 比较；`ShopInteraction` 新增 `actor` / `waxed` / `facingFront`（身份、上蜡与朝向各只读一次，都与「能不能交易」解耦）。
 - 归属交接（`SignOwnerHandoff`，纯逻辑在 `shop/SignProtection.h`）：`planSignEdit` 在 Before 阶段判出「改之前是不是商店 / 是不是管理员店 / 原 XUID」，「该不该保住原店主」只由 `keepsPreviousOwner` 判，第 1 行写谁与归属写谁共用它。
 - 物品分类按形状兜底：白名单（16 染料 + 7 斧头 + 墨囊/荧光墨囊/蜜蜡）之外，`*_dye` 与 `*_axe`（排除镐）也认，免得新版本加颜色/材质时静默放行。
@@ -60,9 +65,9 @@
 - `src/shop/ContentProtection.*`（新，纯逻辑）：`cellInDirection`（`facing_direction` 0 下 / 1 上 / 2 北 / 3 南 / 4 西 / 5 东 → 目标格，与 `neighboursOf` 共用同一张偏移表）、`cellAbove`、`shouldSkipContentTransfer`。方向几何与「跳不跳」都有 doctest 覆盖（`tests/shop/ContentProtectionTest.cpp`，5 个中文用例）。
 - `src/mod/ContainerFinderBds.*` 新增 `facingDirectionAt`：投掷器的朝向只能从方块状态读，状态名的命名空间差异复用既有的 `readIntState`，不另写一份查表。
 - `src/mod/HookSlots.*`（新）：把「一张 `HookSlot{name, attach, detach, attached}` 表 + 挂上 / 逆序解开」收成一份实现，08 的破坏防护与 09 的内容防偷共用；`currentShopConfig()` 也提到 `Shop.h`，两条保护路径的「配置缺失就放行」只有一处定义。
-- 经济后端探测（`src/shop/Economy.*`、`src/mod/EconomyService.*`）：`auto` 按 `legacy_money → scoreboard → null` 的完整顺序探测，每一级降级都带原因进日志（`配置 auto → 选用 scoreboard（跳过 legacy_money：进程里没有 LegacyMoney.dll）`）；候选顺序与「给定各候选可用性选中谁」是纯函数 `selectBackend`，有单测覆盖。`ServerStartedEvent` 监听在世界就绪后立刻探一次，首次动钱时还有兜底；结论（含「一个后端都没有」）会缓存，换环境后需重载模组。
+- 经济后端探测（`src/shop/Economy.*`、`src/mod/EconomyService.*`）：`auto` 按 `legacy_money → scoreboard → null` 的完整顺序探测（**`auto` 已于 2026-11-01 删除，见「变更」**），每一级降级都带原因进日志（`配置 auto → 选用 scoreboard（跳过 legacy_money：进程里没有 LegacyMoney.dll）`）；候选顺序与「给定各候选可用性选中谁」是纯函数 `selectBackend`，有单测覆盖。`ServerStartedEvent` 监听在世界就绪后立刻探一次，首次动钱时还有兜底；结论（含「一个后端都没有」）会缓存，换环境后需重载模组。
 - LegacyMoney 后端（`src/mod/LegacyMoneyEconomy.*`）：用 `GetModuleHandleW(L"LegacyMoney.dll")` + `GetProcAddress` 解析 `LLMoney_Get/Set/Add/Reduce/Trans`，**不链接、不 include 它的 `LLMoney.h`**（那会在 `Shop.dll` 里留导入项，没装 LegacyMoney 的服务器直接加载失败；构建后已确认导入表里没有它）。每笔交易只走一次 `LLMoney_Trans`（SQLite 事务，天然原子，`pay_tax` 与第三方拦截都在它内部处理），`to` 为空 = 付给系统（销毁）。`LLMoney_Get` 的 `-1`（空 XUID / 数据库异常）按「读不到」处理；DLL 运行期被卸载时按「读不到 / 拒绝」处理并报一次 error，不去调悬空的函数指针。
-- 记分板目标可自动创建（`ScoreboardEconomy::create(name, createIfMissing, issue)`）：`economy.createObjectiveIfMissing`（默认 `false`）打开时用引擎自己的 `dummy` 判据（`Scoreboard::getCriteria` + `addObjective`）建目标，建不出来就打 `ObjectiveCreateFailed` 并降级。
+- 记分板目标可自动创建（`ScoreboardEconomy::create(name, createIfMissing, issue)`）：`economy.createObjectiveIfMissing`（默认值 2026-11-01 改为 `true`）打开时用引擎自己的 `dummy` 判据（`Scoreboard::getCriteria` + `addObjective`）建目标，建不出来就打 `ObjectiveCreateFailed` 并降级。
 - 离线店主按后端能力判定（`economy::ownerUnreachable`，纯函数）：点牌时藏按钮、`prepareSell`、`planTrade` 三处共用同一个判据；`economy.requireOwnerOnline`（默认 `true`）只对不支持离线的记分板有意义，关掉并不会让记分板获得给离线玩家记账的能力。
 - 商店税（`tax.shopTaxRate`，默认 `0`）：店主承担，`总额 × 税率` 向下取整，税为 0 完全跳过第二笔。买入时从店主收入里扣（买家支出不变），卖出时店主另付一笔；收税排在物品那一步之后，所以任何失败点的补偿都精确，补偿再失败才升级为 `Broken`。税率只在能「把钱付给系统（销毁）」的后端上收得走（目前只有 LegacyMoney），记分板上不生效并在启动日志里说明。`shopTaxRate > 0` 时启动无条件 WARN 要求把 LegacyMoney 的 `pay_tax` 设为 0（那个值没有任何导出能读，只能提醒）。卖出方向的份数上限按含税成本算（`affordableUnitsWithTax`）。
 - `tests/shop/EconomyTest.cpp` / `TradePricingTest.cpp` / `TradePlanTest.cpp` 补 17 个中文用例：探测顺序与降级原因文案、探测计划、离线判据矩阵、转账参数校验、税率舍入与边界（含 NaN）、含税份数上限、成交方案里的税额与「税压在谁身上」的两种形状。
@@ -84,3 +89,87 @@
 - `xmake.lua`：移除 server/client 双目标，固定为服务端模组；版本号由 `modpacker` 显式指定为 `0.1.0`。
 - `manifest.json`：移除未被替换的 `platform` 占位符。
 - CI：`build.yml` / `release.yml` 只构建服务端产物。
+
+### 变更
+
+- **删掉 `economy.backend = "auto"`，默认值改为 `legacy_money`，并取消所有跨后端自动降级。**
+  `auto` 的含义是「LegacyMoney 探不到就用记分板」，而它又是默认值：服主的 LegacyMoney 一旦因版本
+  不兼容没加载（导出缺失），本模组会**默默换一套账本**，玩家余额看起来全变 0，日志里只有一条
+  info。现在合法取值只有 `legacy_money` / `scoreboard` / `null`，一个后端只探它自己，探不到就
+  落到空实现并打 error（含「改成哪个值能解决」的建议）。老配置写 `auto` 会拒绝加载并给出专门的
+  迁移提示。`economy.createObjectiveIfMissing` 默认值同时从 `false` 改为 `true`（选了记分板就是想要
+  记分板记账，不必为一个 `dummy` 目标再手打命令）。
+- 顺带清掉 `SignInteractListener.cpp` 里 `sign_decision` 重构后遗留的未用函数 `actionName`。
+
+### 修复
+
+- **告示牌没有「除蜡」这回事**：早期把 Java 版铜块的规则套到了告示牌上，判出「斧头 = 除蜡」并在提示里教玩家「先拿斧头除蜡才能改」。实际原版告示牌上蜡后没有任何去除手段（Mojira MC-261313 判 Works As Intended；Wiki 写「若要修改则需破坏后重新放置」），
+  所以那条 `SignTouch::Axe` 分支在基岩版永远不会被原版触发，提示也是错的。现在斧头就是**普通物品**（点牌等于空手点牌），
+  上蜡的牌对所有人只读，改价只能拆牌重立或走将来的管理表单（`DESIGN §9.2` 的「上蜡不可逆」）。
+- `/shop status` 之前把「世界还没起来」和「解析没跑」写成同一句「尚未解析（世界未就绪）」，
+  真机上世界明明已就绪也是这句。现在两种情况分开写，并且经济后端改为**玩家进服时**也解析一次：
+  `ServerStartedEvent` 在 LL 26.51.9 上并没有在就绪时刻送达（实测世界已就绪、玩家已进服仍显示未解析），
+  只靠它等于等到第一次交易（`DESIGN §19.3`）。
+- `/shop debug` 的枚举类字段（`plan` / `kind` / `dir` / `outcome`）打成了 `true`/`false`：
+  `char const*` 唯一的隐式转换目标是 `bool`，`dbgField(key, "TakeOver")` 会静默选中 `bool` 重载。
+  根因修法是给 `dbgField` 补一个 `char const*` 的**精确匹配**重载（精确匹配胜过布尔转换），
+  所有传 C 字符串的地方自动正确，不必再逐处写 `std::string_view{...}`。
+- **记分板后端支持离线店主**：以前记分板只能给在线玩家写分，店主要下线就没人能买。现在照 LSE
+  `mc.addPlayerScore(uuid, …)`（文档写着「可修改离线玩家计分板」）的实现写分：
+  `XUID → 玩家表 uuid → DBStorage 的 player_<uuid> → ServerId → 存档里的 UniqueID →
+  scoreboard.getId(PlayerScoreboardId)`。用 ID 而不是名字，改名与重名都不受影响。
+  `supportsOffline()` 改成 `true`，于是 `economy.requireOwnerOnline` 在当前两个后端上都已成空转开关
+  （保留给将来的新后端）。边界：`getId` 返回 `INVALID`（这个人本世界还没有过记分板身份）时安全失败，
+  按「读不到余额」拒，不硬建假玩家身份。
+- **记分板后端现在也收商店税**（此前整笔跳过）。税本来就只需要「单边扣钱」——从买家扣掉、
+  谁都不加就是销毁，不需要任何对手方账户；旧实现把它误判成「记分板没有系统账户」，于是
+  在记分板上 `tax.shopTaxRate` 静默失效。现在两个后端在税上行为一致，换后端不会突然开始/停止收税。
+- **记分板后端：从来没有分值记录的玩家不再被判成「读不到余额」**。老玩家可能连记分板身份都没有
+  （`getScoreboardId` 返回 `INVALID`），旧实现直接当账户不可记账拒绝交易；现在照原版
+  `/scoreboard players set` 的做法现场 `createScoreboardId`，新玩家的余额就是 0。
+- **改牌被拒之后，这块牌子再也打不开原版编辑界面**（真机确认：「显示空白」与「改完还是原样」两种都中，
+  必须退出重进）。根因是用 `event.cancel()` 拦下时客户端那次编辑没有正常收尾。现在**不再 cancel**，
+  改成把 `event.text()` 设回**改之前那几行**——原版完整走完一次编辑，只是写回去的还是原内容；
+  改之前是商店牌时同时把归属保住（`SignOwnerHandoff`），免得引擎把 `mLastEditXuid` 记成编辑者后
+  OP 代改一次就把店抢走。
+- **撤掉「编辑被拒后重同步」这一步**（真机 2026-11-01）：它在 20:00 那一版引入，之后真机报出
+  「新放的牌子显示空白、打不开原版编辑界面、连点几次客户端掉线」。日志显示服务端把那块牌子判成
+  `NotAShopSign`（我们既没拦也没 cancel），说明问题就在这次多发出去的包上，所以先退回上一版行为
+  （牌面文字会留到重进为止），把这一段彻底改动留到有日志证据之后再做。
+- **编辑路径补上日志**：`PlayerEditSignBeforeEvent` 的判定结果此前**一行日志都没有**，真机排查时只能猜。
+  现在每次编辑打一行 `[shop/dbg] sign_edit outcome=NotAShopSign|Rejected|Normalized reason=…`。
+- **重同步包不该自己拼 NBT**（真机第四报，比缺陷本身更严重）。`_getUpdatePacket` 在方块实体没标脏时
+  返回空（刚放下、还没写过字的牌子就是这种），早先的退路是用 `save(..., SendOverNetwork)` 自己组
+  `BlockActorDataPacket`——真机后果是：新牌子显示空白、**打不开原版编辑界面**、连点几次**客户端掉线**。
+  现在只让原版生成包：`_getUpdatePacket` 为空就调告示牌的 `onChanged(region)` 标脏再问一次，
+  还要不到就放弃；并对「同一玩家 + 同一格」加 250ms 节流，避免连点变成一串包。
+- **建店失败（或改牌被拒）后，客户端仍显示“写进去了”**（真机 D1 全量验收发现）。玩家点确定的瞬间，
+  客户端已经把这段文字写进本地那份牌子，`event.cancel()` 只挡住服务端写入，所以牌子看着有字、
+  退出重进才发现是空的（正确的那个才是空的）。现在拒绝路径取消后立刻重发这一格；
+  **规范化成功的编辑**也在 `After` 阶段补一次重发——否则客户端显示的是玩家敲的原文，
+  而服务端存的是规范化文本（两者本来就不一样）。
+- **拆商店牌 / 商店箱被拦下后，牌面文字在客户端消失了**（真机第二报）。`BREAK` 动作同样是本地预演的：
+  客户端先把「牌子碎掉、文字没了」演出来，`event.cancel()` 只拦住权威状态，方块实体不会自动回来，
+  于是出现「拆不掉，但牌子空了，退出重进才显示」。现在破坏路径的拦截也补一次方块实体重发。
+  两处共用 `src/mod/BlockResync` 的 `resyncBlockActor(player, region, pos)`（首选
+  `BlockActor::_getUpdatePacket`，拿不到就按 `SendOverNetwork` 自己组包，只发给动手的人），
+  并把「任何 `cancel()` 拦下的、客户端做过的动作都要问一句客户端还对不对」写进 `DESIGN §9.2`。
+- **拦下染色 / 墨囊 / 荧光墨囊 / 上蜡后，客户端仍显示“已经改过”的样子**（真机首测）。
+  这五样在客户端是本地预演的，`event.cancel()` 只挡住了服务端写入，拦不住预演，所以玩家看到变色、
+  退出重进才发现没生效。修法：拦下后把这一格牌子的真实数据再发一遍（
+  `BlockActor::_getUpdatePacket`，拿不到则按 `SaveUseCase::SendOverNetwork` 存 NBT 自己组 `BlockActorDataPacket`），
+  只发给动手的那个玩家。
+- **份数表单选什么档都报「份数选择不对」**（真机首测碰到，整条买入链路卡死）。原因：LeviLamina 的 `CustomForm`
+  下接框回传的**不是下标，而是选中项的文案**（`Dropdown::parseResult` 返回 `mOptions[index]` 字符串），
+  而表单回调那侧只读 `uint64` 下标，永远读不到 → `choiceIndex` 恒为 -1 → `resolveRequestedUnits` 报错。
+  修法：`src/shop/UnitsForm` 新增 `choiceIndexForOption`（`unitsFormOptions` 的逆运算，纯逻辑，有 doctest），
+  `src/mod/ShopForm` 的下接框读取改成「下标（`uint64` / `double`）优先，否则按文案换算」，两种回传形式都认。
+
+- `manifest.json` 补上 `dependencies: [{"name": "iListenAttentively"}]`（并写明 `"platform": "server"`）：
+  以前只靠 `tooth.json` 声明依赖，模组目录里那一份没有，于是 LeviLamina 按目录名字母序先加载 `Shop`、
+  后加载 `iListenAttentively`，`LoadLibrary(Shop.dll)` 解析导入表时找不到 `iListenAttentively.dll`，
+  整个模组在真机上加载失败（`std::system_error` / `0x0000007E:system`）。依赖写进 manifest 后加载顺序由依赖图决定，
+  与 LegacyScriptEngine 声明 `LegacyMoney` / `LegacyRemoteCall` 同一个机制。版本故意不写死（见 `DESIGN §6.4`）。
+- `config.json` 缺 `version` 不再被当成“解析失败”：`ll::config::loadConfig` 返回 `false` 的语义是
+  “已用默认值补齐/Rewrite”，不是读失败。以前手写一份只填几个键的配置会直接让模组拒绝启用（报“config.json 解析失败”），
+  现在改为打 warn、用补齐后的配置继续，并把带 `version` 的完整文件回写一次。

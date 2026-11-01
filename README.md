@@ -46,12 +46,20 @@ OP 把第 1 行写成 `adminShopName`（默认 `Admin Shop`）就是管理员商
 
 ### 经济后端
 
-按 `LegacyMoney → 记分板 → 空实现` 的顺序自动探测，最终选择了哪个会写进启动日志，见 `DESIGN.md` 第 8 节。
+**必须明确选一个，不会自动切换**（`economy.backend`，默认 `legacy_money`），见 `DESIGN.md` 第 8 节。
 
-- 装了 `LegacyMoney.dll`（装了 LegacyScriptEngine 的服务器会自带）就用它：支持离线店主，每笔交易一次原子转账。
-- 否则用记分板：余额是玩家在 `economy.scoreboardObjective`（默认 `money`）上的分值，**只支持在线店主**。
-  目标不存在时默认不会自动创建；想让模组自己建就把 `economy.createObjectiveIfMissing` 设为 `true`。
-- 两家都没有时会明确报「没有可用的经济后端」，交易按钮不出现。
+| 取值 | 用的是什么 | 要点 |
+| --- | --- | --- |
+| `legacy_money`（默认） | `LegacyMoney.dll`（装 LegacyScriptEngine 的服务器自带） | 支持离线店主，每笔交易一次原子转账，能收商店税 |
+| `scoreboard` | 玩家在 `economy.scoreboardObjective`（默认 `money`）上的分值 | 支持离线店主（玩家在本服留过分值即可），金额上限 `int32`，能收商店税 |
+| `null` | 空实现 | 余额恒为 0、交易全失败，只给开发用 |
+
+写 `scoreboard` 时目标默认由模组自动建（`economy.createObjectiveIfMissing` 默认 `true`，用 `dummy` 判据）；
+想自己建就先 `/scoreboard objectives add money dummy` 再把那个开关设为 `false`。
+
+选中的后端用 `/shop status` 或启动日志看。**探不到就报错并不启用交易**（余额读不到，表单里不编造数字），
+提示会说明改哪个值能解决——本模组不会因为另一个后端恰好可用就悄悄换一套账本（余额会一夜之间全变 0）。
+老配置里写 `auto` 会被拒绝加载，请改成上面三个值之一。
 
 ### 商店税（可选，默认关闭）
 
@@ -61,14 +69,15 @@ OP 把第 1 行写成 `adminShopName`（默认 `Admin Shop`）就是管理员商
 > getter），只能启动时打一条 WARN 提醒；若 `pay_tax` 仍大于 0，每笔转账的收款方都会被再扣一次税，
 > 店主会被抽两次，退款补偿也会与实际到账不一致。
 >
-> 商店税只在**能把钱移出经济系统**的后端上生效（目前只有 LegacyMoney）。记分板没有这种账户，
-> 所以在记分板上 `tax.shopTaxRate` 不生效，启动日志会写明这一条。
+> 商店税需要后端支持「单边扣钱」（从买家扣掉、谁都不加 = 销毁）。`legacy_money` 与 `scoreboard`
+> 都支持：前者是 `LLMoney_Trans(from, "", n)`，后者是只 `reduce` 买家。将来出现不支持的后端时，
+> `tax.shopTaxRate` 在那个后端上会整笔不生效，启动日志会写明这一条。
 
 ### 配置项（P0 已生效）
 
 `adminShopName`、`shopContainers`、`maxShopAmount`、`allowPartialTransactions`、`blockSellPriceHigherThanBuy`、
-`allowOwnerOpenChest`、`shopInteractionCooldownMs`、`ignoreCreativeMode`、`economy.backend`（`auto` /
-`legacy_money` / `scoreboard` / `null`）、`economy.scoreboardObjective`、`economy.createObjectiveIfMissing`、
+`allowOwnerOpenChest`、`shopInteractionCooldownMs`、`ignoreCreativeMode`、`economy.backend`（`legacy_money` /
+`scoreboard` / `null`；`auto` 已删除）、`economy.scoreboardObjective`、`economy.createObjectiveIfMissing`、
 `economy.requireOwnerOnline`、`economy.currencySymbol`、`tax.shopTaxRate`。
 （`tax.taxDestination` 等仍留待 P1，见 `DESIGN.md` 第 15 节。）
 

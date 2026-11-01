@@ -18,14 +18,19 @@ namespace ss::shop {
 struct EconomyConfig {
     /// 后端名，取值见 `economy::Backend`。写成字符串而不是枚举：config.json 里的字面量
     /// 就是这些名字，解析与校验统一走 `economy::parseBackend`。
-    std::string backend = "auto";
+    ///
+    /// 默认 `legacy_money`（2026-11-01 起），**不再有 `auto`**：老默认是「LegacyMoney 探不到
+    /// 就换记分板」，等于让账本可能一夜之间换一套而服主不知道。现在必须明确写出来，
+    /// 探不到就报错不启用交易（`DESIGN §8.4`）。
+    std::string backend = "legacy_money";
     /// 存余额的记分板目标名。
     std::string scoreboardObjective = "money";
-    /// 记分板目标不存在时自动建一个（DESIGN §8.4）。默认关：建目标会改变服务器的记分板，
-    /// 不该在服主不知情的时候发生。
-    bool createObjectiveIfMissing = false;
-    /// 店主不在线时是否提前拒绝。**只对不支持离线记账的后端（记分板）有意义**：
-    /// 关掉只是不再提前拦，并不会让记分板获得给离线玩家记账的能力（DESIGN §8.5）。
+    /// 记分板目标不存在时自动建一个（DESIGN §8.4）。默认开：选了 `scoreboard` 就是想要记分板
+    /// 记账，让服主为了一个 `dummy` 目标再手打一条命令没有收益。
+    bool createObjectiveIfMissing = true;
+    /// 店主不在线时是否提前拒绝。**只对不支持离线记账的后端有意义**（2026-11-01 起
+    /// legacy_money 与 scoreboard 都支持离线，所以这个开关实际只剩为将来新后端准备的作用）：
+    /// 关掉只是不再提前拦，并不会让后端获得给离线玩家记账的能力（DESIGN §8.5）。
     bool requireOwnerOnline = true;
     /// 货币符号，只在这里定义一次（表单与消息都从它取名）。
     std::string currencySymbol = "$";

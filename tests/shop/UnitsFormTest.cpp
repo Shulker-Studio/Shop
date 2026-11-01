@@ -170,6 +170,35 @@ TEST_CASE("解析份数：下拉框下标越界时报错而不是崩") {
     CHECK_FALSE(resolveRequestedUnits(model, 99, "").units.has_value());
 }
 
+TEST_CASE("下拉框回传的是选项文案：文案能换算回下标") {
+    auto const model = makeUnitsFormModel(4);
+    auto const options = unitsFormOptions(model);
+
+    // 真机上 LeviLamina 的 Dropdown::parseResult 返回的就是这些文案
+    CHECK(choiceIndexForOption(model, options[0]) == 0);
+    CHECK(choiceIndexForOption(model, "1 份") == 0);
+    CHECK(choiceIndexForOption(model, "2 份") == 1);
+    CHECK(choiceIndexForOption(model, "4 份") == 2);
+    CHECK(choiceIndexForOption(model, "自定义份数") == 3);
+
+    // 换算回来之后走的是同一套解析：预设档直接成交，自定义档读输入框
+    CHECK(resolveRequestedUnits(model, choiceIndexForOption(model, "4 份"), "").units == std::optional<int>{4});
+    CHECK(
+        resolveRequestedUnits(model, choiceIndexForOption(model, "自定义份数"), "3").units == std::optional<int>{3}
+    );
+}
+
+TEST_CASE("下拉框文案：上限压低了也能换算，认不出的文案返回 -1") {
+    auto const narrow = makeUnitsFormModel(2);
+
+    CHECK(choiceIndexForOption(narrow, "2 份") == 1);
+    // 这一档在上限 2 的表单里根本不存在
+    CHECK(choiceIndexForOption(narrow, "4 份") == -1);
+    CHECK(choiceIndexForOption(narrow, "") == -1);
+    CHECK(choiceIndexForOption(narrow, "3") == -1);
+    CHECK_FALSE(resolveRequestedUnits(narrow, choiceIndexForOption(narrow, "4 份"), "").units.has_value());
+}
+
 TEST_CASE("部分成交的确认正文写的是重算后的真实份数、件数与金额") {
     auto const content =
         unitsConfirmContent(TradeDirection::Buy, sampleShop(), TradePlan{2, 128, 20}, ChangeReason::Units);

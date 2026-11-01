@@ -2,5 +2,12 @@
     "name": "${modName}",
     "entry": "${modFile}",
     "version": "${modVersion}",
-    "type": "native"
+    "type": "native",
+    "platform": "server",
+    "description": "基岩版告示牌箱子商店：牌子定义商品与价格，箱子存放货物，支持买卖、双箱、管理员商店与商店箱保护",
+    "dependencies": [
+        {
+            "name": "iListenAttentively"
+        }
+    ]
 }
