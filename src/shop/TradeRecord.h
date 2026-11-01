@@ -58,28 +58,29 @@ struct TradeRecord {
         std::string name;
     };
 
-    std::string    ts;                ///< 服务器本地时间，ISO-8601 带时区偏移
+    std::string    ts; ///< 服务器本地时间，ISO-8601 带时区偏移
     TradeLogResult result = TradeLogResult::Ok;
     /// `result != ok` 时的机器可读原因（`no_money` / `no_stock` / …），**不是中文文案**。
-    /// `ok` 时为空串：键集合固定，`duckdb` 的列推断与 `jq` 都省事。
+    /// `ok` 时为空串，而序列化时**直接省掉这个键**（spec：`ok` 不带 `reason`）——
+    /// `jq 'has("reason")'` 因此就能分出成交与失败的行。
     std::string    reason;
     TradeDirection dir = TradeDirection::Buy; ///< 从**玩家**视角：`buy` / `sell`
     ShopCoord      shop;
-    Party          owner;        ///< 管理员店：`xuid` 空串、`name` 是 `adminShopName`
+    Party          owner; ///< 管理员店：`xuid` 空串、`name` 是 `adminShopName`
     bool           admin = false;
-    std::string    backend;      ///< 当时生效的经济后端名（`legacy_money` / `scoreboard` / `null`）
+    std::string    backend; ///< 当时生效的经济后端名（`legacy_money` / `scoreboard` / `null`）
     Party          player;
     Item           item;
     int            units     = 0; ///< 成交份数
     int            items     = 0; ///< 总件数 = units × 每份件数
     std::int64_t   unitPrice = 0; ///< 一份的牌面价
-    /// 牌面成交额 = `unitPrice × units`（税之前）。
-    /// 与 `total` 相等：商店税由**店主**承担（DESIGN §8.9），玩家付/收的仍是牌面额。
-    /// 两个字段都留着是 spec 字段表的要求，而且将来若税改成压在玩家身上，它们就会分叉。
-    std::int64_t   gross = 0;
-    std::int64_t   tax   = 0; ///< 本笔商店税；管理员店恒为 0
-    /// 玩家实际付出（买入）/ 收到（卖出）的金额。见 `gross` 上关于两者相等的说明。
-    std::int64_t   total = 0;
+    /// **主交易金额**：钱真正在玩家与店那一侧之间移动的那一笔（`Payment::main`）。
+    /// 买入方向带商店税时它是 `total - tax`（税是另一笔付给系统账户的，由店主承担的经济效果
+    /// 落在店主实收上）；卖出方向就是 `total`。所以它**不是** `total` 的别名。
+    std::int64_t gross = 0;
+    std::int64_t tax   = 0; ///< 本笔商店税；管理员店恒为 0
+    /// 玩家实际付出（买入）/ 收到（卖出）的总额。与 `gross` 的差别见上。
+    std::int64_t total = 0;
 };
 
 /// 交易事实：流水里「谁、在哪家店、买了什么、多少钱一份」那一半。
@@ -90,20 +91,22 @@ struct TradeRecord {
 ///
 /// 份数与金额**不在这里**：唯一真相是 `TradePlan`，写流水时从它抄一次，不维护第二份。
 struct TradeFacts {
-    TradeDirection dir = TradeDirection::Buy;
+    TradeDirection dir         = TradeDirection::Buy;
     int            dimensionId = 0;
-    Cell           shop;      ///< 商店牌坐标（不是容器坐标）
+    Cell           shop; ///< 商店牌坐标（不是容器坐标）
     /// 牌上记的店主 XUID。管理员店照原样传进来即可——`composeTradeRecord` 会清掉它。
-    std::string    ownerXuid;
-    std::string    ownerName; ///< 管理员店是 `adminShopName`
-    bool           admin = false;
-    std::string    backend;
-    std::string    playerXuid;
-    std::string    playerName;
-    std::string    itemId;
-    int            itemAux = 0;
-    std::string    itemName;
-    std::int64_t   unitPrice = 0;
+    std::string  ownerXuid;
+    std::string  ownerName; ///< 管理员店是 `adminShopName`
+    bool         admin = false;
+    std::string  backend;
+    std::string  playerXuid;
+    std::string  playerName;
+    std::string  itemId;
+    int          itemAux = 0;
+    std::string  itemName;
+    std::int64_t unitPrice = 0;
+    /// 主交易金额（`Payment::main`）。只有真的动了钱才有意义；退款/拒绝的路径保持 0。
+    std::int64_t gross = 0;
 };
 
 /// 把「事实 + 成交方案 + 结论」拼成一条完整的流水。
@@ -114,11 +117,11 @@ struct TradeFacts {
 /// （DESIGN §7.4），它没有可收钱的店主账户，也没有可抽的成交额。放这里而不是指望每个调用点
 /// 都记得——一条写着「店主收到钱」的管理员店流水会让人去追一个不存在的账户。
 TradeRecord composeTradeRecord(
-    TradeFacts const&  facts,
-    TradePlan const&   plan,
-    TradeLogResult     result,
-    std::string_view   reason,
-    std::string        ts
+    TradeFacts const& facts,
+    TradePlan const&  plan,
+    TradeLogResult    result,
+    std::string_view  reason,
+    std::string       ts
 );
 
 /// 一行 JSON（NDJSON：键序固定、末尾一个 `\n`），键序见 spec 的字段表：

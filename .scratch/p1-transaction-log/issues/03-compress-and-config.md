@@ -111,3 +111,66 @@
 `p1-admin-unlimited-stock` 票 02 记下的两条已知缺口——「按天轮转 + 7 天后 gzip」与
 「`transactionLog.enabled = false` 时两个文件一起停」——本票落地。两条都落在
 `LogFile::appendLogLines` 这一个入口上，所以 `discarded` 不需要第二份实现。
+
+### 代码审查后的修改（Standards / Spec 两轴并行审 `git diff d46a960...HEAD`）
+
+两轴各交回一份报告，下面逐条落处理（**改了的**说改了什么，**保留的**说为什么）。
+
+**改掉的**
+
+1. **`ok` 的行还写着 `"reason":""`**（Spec 轴，票 01 留下的偏离）：票面写的是「`ok` 不带 `reason`」，
+   空串会让 `jq 'has("reason")'` 分不出成交与失败。现在 `ok` 的行**省掉这个键**；
+   票 01 那条 `ok` 快照断言随之更新（**本分支自己写的断言**，不是既有断言，见下「动过的断言」）。
+2. **`gross` 抄了 `total`，两个字段失去区分度**（Standards + Spec 都提）：spec 的 `gross` 是
+   **主交易金额**（钱真正在玩家与店那一侧之间移动的那一笔 = `Payment::main`）。买入带税时
+   `gross = total - tax`（税是另一笔付给系统账户的），卖出时两者才相等。现在 `TradeFacts::gross`
+   由 `buyUnits`/`sellUnits` 在算出 `payment` 之后填，`tradeRecordProblem` 多一条
+   「`gross` 不能大于 `total`」的校验。
+3. **早失败的行 `backend` 是空串**（Spec 轴，最硬的一条）：spec 只允许
+   `legacy_money` / `scoreboard` / `null`，而「牌没了」「冻结名单」这些早失败恰恰最需要看后端。
+   `basicTradeFacts` 现在填一次 `economyBackend().name()`——它自己缓存解析结果（只真解析一次），
+   而这一笔是**真的在尝试交易**，不是 `/shop status` 那种纯查询（后者才需要避免顺手建记分块目标）。
+   `fillTradeFacts` 仍按同一份配置覆盖一次，两个值不会打架。
+4. **轮转「一天只扫一次」破坏「下一轮重试」**（Spec 轴）：节流会把**压缩失败**的文件拖到第二天。
+   去掉节流，每一轮写完日志都真扫一遍目录（最多几十个文件）；压缩失败的原文件下一次就会被重试。
+5. **术语**（Standards 轴）：`GLOSSARY` 的「销毁留档」把「流水」列为 `_Avoid_`，而共享的落盘函数
+   对 `discarded` 也说「流水」。`LogFile` 里的提示文案统一改成中性的「日志 / 日志文件」，
+   「流水」只留给 `transactions-*`。
+6. **`fail` / `frozen` 只有子串断言**（Spec 轴，票 01 要求「三种记录的快照字符串」）：
+   补成两条完整字符串快照（键序、转义、`reason` 的位置都锁住）。
+7. **三处重复**（Standards 轴）：`shop{}` / `party{}` / `item{}` 三个 JSON 子对象抽到
+   `JsonLine.h`（`jsonShop` / `jsonParty` / `jsonItem`），业务流水与销毁留档共用；
+   「`ts` 前 10 位就是日期」抽成 `isoDateOf`（两个 writer 不再各 `substr(0, 10)`）；
+   `finishTrade` 的调试 `outcome` 改成复用 `tradeLogResultOf` + `tradeLogResultName`，
+   不再自己写一遍三态映射（调试输出与流水不能对同一笔交易说两种结论）。
+
+**留着的（有理由）**
+
+- **mod 侧的 `RejectReason` 是第二张短名表**（两轴都提）。保留的理由：它与
+  `TradeRejection` **互不重叠**——后者只描述「由数字判定」的原因（份数、余额、货、箱空间、税），
+  前者只补「世界状态」（牌没了、后端没起来、创造模式、冻结名单……），`planTrade` 看不到后者，
+  也不该看到。**加一个新的 `TradeRejection` 只改一处**（`tradeRejectionReasonName`），
+  不存在「两处维护」；这一点已写进那张表的注释。把世界状态也塞进 `TradeRejection`
+  会破坏它「只放数字判定」的既有边界，代价更大。
+- **`shop{dim,x,y,z}` 这个 clump 在两个 record 里各写一份**：`TradeRecord` 用嵌套
+  `ShopCoord`、`DiscardRecord` 用平铺字段（上一票的形状，改它要动它的既有断言，
+  而两个 struct 的字段来源本来就不同）。JSON 那一层的形状已经由 `jsonShop` 统一。
+- `gross` 与 `total` 在**卖出**方向恒相等：这是税由店主承担的语义决定的，不是冗余实现
+  （买入方向两者不等），见上面第 2 条。
+
+### 动过的断言（本分支自己写的，逐条点名）
+
+- `tests/shop/TradeRecordTest.cpp` 的 `ok` 快照：去掉 `"reason":""`（第 1 条）；
+  `fail` / `frozen` 从子串断言换成完整快照（第 6 条）；管理员店与免费店两条用例补 `facts.gross`
+  （第 2 条）；「文件名按日期生成」里那条「从 `ts` 取日期」的断言移到 `LogRotationTest`
+  的 `isoDateOf` 用例（第 7 条）。
+- **仓库里在他票之前就存在的断言一条未改**：`DiscardRecordTest`、`TradePlanTest`、
+  `TradePricingTest`、`UnitsFormTest` 等全部原样（`git diff d46a960...HEAD -- tests/` 只有两个新文件
+  与上面这一个文件的改动）。
+
+### 审查后的测试
+
+- `xmake build Shop`：ok（无 warning）；`xmake build ShopTests`：ok；`xmake test`：passed
+- `./build/windows/x64/release/ShopTests.exe`：**312 cases / 3464 assertions，全绿**
+  （审查前 311 / 3464：新增 `isoDateOf` 用例 +1 case；断言数因为 `fail`/`frozen` 换成完整快照、
+  去掉 `reason` 键后的结构调整而变化）

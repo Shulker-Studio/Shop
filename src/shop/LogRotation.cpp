@@ -44,6 +44,11 @@ std::optional<std::chrono::sys_days> parseDate(std::string_view text) {
 
 } // namespace
 
+std::string_view isoDateOf(std::string_view ts) {
+    constexpr std::size_t kIsoDateLength = 10; // `YYYY-MM-DD`
+    return ts.size() < kIsoDateLength ? ts : ts.substr(0, kIsoDateLength);
+}
+
 std::optional<std::string> logFileDate(std::string_view fileName) {
     if (!fileName.ends_with(kLogExtension)) {
         return std::nullopt;

@@ -121,31 +121,27 @@ void compressLogFile(std::filesystem::path const& dir, std::string const& fileNa
         // 补上这一步，而不是永远留着两份——否则「压缩省磁盘」就成了空话。
         std::filesystem::remove(source, ec);
         if (ec) {
-            warnOnce("compress", "旧流水删不掉（" + source.string() + "）：" + ec.message() + "；已压好的 .gz 保留");
+            warnOnce("compress", "旧日志删不掉（" + source.string() + "）：" + ec.message() + "；已压好的 .gz 保留");
         }
         return;
     }
 
     if (!gzipFile(source, target)) {
-        warnOnce("compress", "流水压缩失败（" + source.string() + "）；原文件保留，下一轮会再试");
+        // 失败不删原文件（`gzipFile` 保证），下一次写日志时还会扫到它，重试是幂等的。
+        warnOnce("compress", "日志压缩失败（" + source.string() + "）；原文件保留，下一轮会再试");
     }
 }
 
-/// 每一天只查一次目录（见头文件里关于「不额外开线程」的说明）。
-/// 键是「目录 + 日期」：换了目录或跨了天就该再查一遍。
-std::string gLastScan;
-
 /// 把 `dir` 里过期的 `.jsonl` 压掉（`transactions-*` 与 `discarded-*` 一视同仁——
 /// 它们共用 `logFileDate` 的命名规则，spec D5 要求同一套轮转）。
+///
+/// 每一轮都真的扫一遍目录，不做「一天只扫一次」的节流：节流会让**压缩失败**的文件一直等到
+/// 第二天才重试，而 spec 要的是「下一轮再试」。目录里最多几十个文件，写一次日志扫一遍的代价
+/// 可以忽略。
 void compressOldLogs(std::filesystem::path const& dir, std::string const& today, int compressAfterDays) {
     if (compressAfterDays <= 0) {
         return; // 0 = 永不压缩：连目录都不必看
     }
-    auto const scanKey = dir.string() + "|" + today;
-    if (scanKey == gLastScan) {
-        return;
-    }
-    gLastScan = scanKey;
 
     std::error_code                     ec;
     std::filesystem::directory_iterator it(dir, ec);
@@ -154,7 +150,7 @@ void compressOldLogs(std::filesystem::path const& dir, std::string const& today,
     }
     for (auto const& entry : it) {
         if (entry.is_directory(ec) || ec) {
-            continue; // 只认自己的流水文件；子目录不碰
+            continue; // 只认自己的日志文件；子目录不碰
         }
         auto const name = entry.path().filename().string();
         auto const date = logFileDate(name);
@@ -181,14 +177,14 @@ bool appendLogLines(
     auto const* config = currentShopConfig();
     if (config == nullptr || !config->transactionLog.enabled) {
         // 总开关：两个文件一起停（业务流水与 `discarded` 都从这一个函数出去）。
-        // 配置读不到（模组没启用）也当作关着——没有配置的时候没有「流水策略」可言。
+        // 配置读不到（模组没启用）也当作关着——没有配置的时候没有「日志策略」可言。
         return false;
     }
 
     std::error_code ec;
     std::filesystem::create_directories(dir, ec);
     if (ec) {
-        warnOnce("create_directories", "流水的目录建不出来（" + dir.string() + "）：" + ec.message() + "；这一行丢了");
+        warnOnce("create_directories", "日志目录建不出来（" + dir.string() + "）：" + ec.message() + "；这一行丢了");
         return false;
     }
 
@@ -197,7 +193,7 @@ bool appendLogLines(
     // `binary`：NDJSON 要求 `\n` 结尾，不能让文本模式把它翻成 `\r\n`。
     std::ofstream out(path, std::ios::binary | std::ios::app);
     if (!out) {
-        warnOnce("open", "流水文件打不开（" + path.string() + "）；这一行丢了");
+        warnOnce("open", "日志文件打不开（" + path.string() + "）；这一行丢了");
         return false;
     }
     for (auto const& line : lines) {
@@ -207,7 +203,7 @@ bool appendLogLines(
     out.flush();
     if (!out) {
         // 磁盘满、盘被拔掉都会走到这里。留一句痕迹，但**不**回头改交易结论。
-        warnOnce("write", "流水写入失败（" + path.string() + "）；这一行可能不完整");
+        warnOnce("write", "日志写入失败（" + path.string() + "）；这一行可能不完整");
         return false;
     }
 

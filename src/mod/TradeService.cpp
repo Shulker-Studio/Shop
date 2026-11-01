@@ -497,6 +497,11 @@ TradeFacts basicTradeFacts(TradeDirection direction, Player& trader, Cell const&
     facts.shop        = sign;
     facts.playerXuid  = trader.getXuid();
     facts.playerName  = trader.getNameTag();
+    // `backend` 也要填：spec 只允许 `legacy_money` / `scoreboard` / `null`，空串会让
+    // 「这个后端上的失败率」没法算，而「牌没了」「冻结名单」这些早失败正是最需要看后端的时候。
+    // 这里问一次 `economyBackend()`：它自己缓存解析结果（只真解析一次），而这一笔是**真的在尝试
+    // 交易**，不是 `/shop status` 那种纯查询——后者才需要避免顺手去建记分板目标。
+    facts.backend = std::string{economyBackend().name()};
     return facts;
 }
 
@@ -1017,14 +1022,10 @@ std::optional<TradeLogResult> tradeLogResultOf(TradeStatus status) {
 void finishTrade(Player& player, Cell const& sign, TradeDirection direction, TradeResult const& result) {
     // 唯一漏斗：两个方向的每一种终态都从这里出去，所以调试与流水将来都挂在这一处。
     if (shopDebugEnabled()) {
-        char const* outcome = "fail";
-        if (result.done()) {
-            outcome = "ok";
-        } else if (result.needsConfirm()) {
-            outcome = "confirm";
-        } else if (result.status == TradeStatus::Broken) {
-            outcome = "frozen";
-        }
+        // 终态的名字只从 `tradeLogResultOf` 取：调试输出与流水不能对同一笔交易说两种结论。
+        // `NeedsConfirm` 不在三态里（它没有流水），调试这边叫 `confirm`。
+        auto const       logged  = tradeLogResultOf(result.status);
+        std::string_view outcome = logged ? tradeLogResultName(*logged) : std::string_view{"confirm"};
         shopDebugEvent(
             "trade_result",
             {dbgField("player", player.getXuid()),
@@ -1144,6 +1145,9 @@ TradeResult buyUnits(
     std::string const freeze  = freezeKey(buyer.getXuid(), sign);
 
     // 第 4 步：快照。物品与余额不在同一个事务里，失败时只能靠它反向写回。
+    // 主交易金额 = 玩家与店那一侧之间真正移动的那一笔（买入带税时是 `总额 - 税`）。
+    facts.gross = payment.main;
+
     TradeFrame frame{
         region,
         buyer,
@@ -1269,6 +1273,9 @@ TradeResult sellUnits(
     // 商店税同样由店那一侧承担：玩家收到的仍是牌面金额 `total`，店主另付一笔 `tax`（§8.9）。
     Payment const     payment = paymentFor(TradeDirection::Sell, info, context->shop.ownerXuid, seller.getXuid(), plan);
     std::string const freeze  = freezeKey(seller.getXuid(), sign);
+
+    // 主交易金额：卖出方向玩家收到的就是牌面额（税是店主另付的），所以它等于 `总额`。
+    facts.gross = payment.main;
 
     TradeFrame frame{
         region,

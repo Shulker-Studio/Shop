@@ -2,6 +2,7 @@
 
 #include "mod/LogFile.h"
 #include "mod/Shop.h"
+#include "shop/LogRotation.h"
 
 #include <string>
 #include <vector>
@@ -22,7 +23,7 @@ void writeTradeRecord(TradeRecord const& record) {
 
     // 文件名由 `ts` 推出来（`transactions-YYYY-MM-DD.jsonl`）：跨天自动换文件，
     // 所以不缓存「当前文件」。
-    appendLogLines(logDirectory(), transactionLogFileName(record.ts.substr(0, 10)), {tradeRecordJson(record)});
+    appendLogLines(logDirectory(), transactionLogFileName(isoDateOf(record.ts)), {tradeRecordJson(record)});
 }
 
 } // namespace ss::shop

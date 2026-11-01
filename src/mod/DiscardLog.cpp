@@ -2,10 +2,11 @@
 
 #include "mod/LogFile.h"
 #include "mod/Shop.h"
+#include "shop/LogRotation.h"
 
 #include "mc/deps/nbt/CompoundTag.h"
-#include "mc/world/item/SaveContext.h"
 #include "mc/world/actor/player/Player.h"
+#include "mc/world/item/SaveContext.h"
 
 #include <string>
 #include <utility>
@@ -62,7 +63,7 @@ void writeDiscardRecords(std::vector<DiscardRecord> const& records) {
     for (auto const& record : records) {
         lines.push_back(discardRecordJson(record));
     }
-    appendLogLines(logDirectory(), discardLogFileName(records.front().ts.substr(0, 10)), lines);
+    appendLogLines(logDirectory(), discardLogFileName(isoDateOf(records.front().ts)), lines);
 }
 
 } // namespace ss::shop

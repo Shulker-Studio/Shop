@@ -72,10 +72,11 @@
   `Shop` 与 `ShopTests` 都 `add_packages("nlohmann_json")`——纯逻辑层与测试同源编译，少一处就编不过。
   确认过本机缓存是 `nlohmann_json v3.12.0`（header-only，没有新增链接产物）。
 
-**一处对 spec 字面的选择**：`reason` 键**恒存在**，`ok` 时为空串（不是省掉这个键）。
-spec 的字段表写的是「键按下面顺序写出」并列出了 `reason`，键集合固定对 `duckdb` 的列推断与
-`jq -c` 都省事；「`ok` 不带 reason」由 `tradeRecordProblem` 按「非空即矛盾」执行。
-如果服主要的是「`ok` 时没有这个键」，改 `tradeRecordJson` 一行即可。
+**一处对 spec 字面的选择**（**票 02 复查后改掉了**）：当时把 `reason` 键写成恒存在（`ok` 时为空串），
+理由是想让键集合固定。两轴审查指出票面写的是「`ok` 不带 `reason`」，而空串又会让
+`jq 'has("reason")'` 分不出成交与失败的行——那正是这个字段存在的理由。现在 `ok` 的行
+**不写这个键**；票 01 那条 `ok` 快照断言因此更新（是本分支自己写的断言，不是既有断言，
+改动已在票 03 的审查小节点名）。
 
 ### 测试
 
@@ -111,8 +112,10 @@ spec 的字段表写的是「键按下面顺序写出」并列出了 `reason`，
 ### 留到后面两票的（明确不做）
 
 - `Rejected → fail`、`Broken → frozen`、`frozen_pair`、免费店仍记一行 `ok`：票 02。
-  本票的 `TradeLogResult` / `composeTradeRecord` / `tradeRecordProblem` 已经为它们留好位置，
-  票 02 只需要在 `buyUnits` / `sellUnits` 的拒绝路径上填 `tradeLog`，`finishTrade` 那一行不用改。
+  本票的 `TradeLogResult` / `composeTradeRecord` / `tradeRecordProblem` 已经为它们留好位置。
+  （实际落地时票 02 把 `TradeResult` 从「造好的 `TradeRecord`」改成了 `logFacts` + `logReason`、
+  由 `finishTrade` 统一组装：原因短名与「三态映射」两件事都得在漏斗那里收口，
+  「造好的记录」里没有地方放原因。见票 02 的 Answer。）
 - `TradeRejection → 机器短名`（`no_money` / `no_stock` / …）：票 02，放纯逻辑层。
 - `discarded` 与业务流水**共用一套**「目录/追加/warn 一次」策略：本票把这条策略落在
   `src/mod/LogFile`，但**没有**改 `DiscardLog`（票面不许在本票动它）。票 02 把

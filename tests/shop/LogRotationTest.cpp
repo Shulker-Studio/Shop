@@ -65,3 +65,12 @@ TEST_CASE("流水轮转：压缩后的文件名就是加 .gz，且幂等") {
     // 已经是 .gz 就原样返回：重试压缩时不会变成 .gz.gz
     CHECK(compressedLogFileName("transactions-2026-11-01.jsonl.gz") == "transactions-2026-11-01.jsonl.gz");
 }
+
+TEST_CASE("流水轮转：文件名里的日期来自 ts 的前 10 个字符") {
+    // 「ts 前 10 位就是日期」这条约定只写在 isoDateOf 一处：业务流水与销毁留档都靠它推文件名。
+    CHECK(std::string{isoDateOf("2026-11-01T13:23:12+08:00")} == "2026-11-01");
+    CHECK(std::string{isoDateOf("2026-12-31T00:00:00-05:00")} == "2026-12-31");
+    // 短到没有日期原样返回（这种记录会被 tradeRecordProblem 拦住，不该走到写文件）
+    CHECK(std::string{isoDateOf("2026")} == "2026");
+    CHECK(std::string{isoDateOf("")} == "");
+}
