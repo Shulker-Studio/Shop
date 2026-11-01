@@ -41,12 +41,16 @@ struct TradeResult {
     /// `finishTrade` 做：留档失败只 warn，绝不能把一笔已经成交的生意判成失败
     /// （`p1-transaction-log` spec D5）。普通店与买入方向留空。
     std::vector<DiscardRecord> discarded;
-    /// 这一笔的成交流水（`p1-transaction-log` 票 01）。
+    /// 流水用的**交易事实**（`p1-transaction-log`）：谁、在哪家店、买了什么、多少钱一份。
     ///
-    /// 在 `buyUnits` / `sellUnits` 里**成交那一刻**造好（`ts` 与交易事实都是这一笔的样子，
-    /// 之后箱子、牌子、店主名都可能被改），`finishTrade` 只负责落盘。
-    /// 空 = 这一笔不写流水（票 01 只有 `Done` 会填；拒绝与冻结在票 02 补）。
-    std::optional<TradeRecord> tradeLog;
+    /// `buyUnits` / `sellUnits` 一拿到商店快照就填，**失败路径上也带着**（牌没了的时候至少还有
+    /// 交易者与坐标）；商店没解析出来时 `owner` / `item` 是空的，但仍然能定位到哪个人哪块牌。
+    /// 结论（`ok` / `fail` / `frozen`）与 `ts` 由 `finishTrade` 补——它才是知道终态的地方。
+    std::optional<TradeFacts> logFacts;
+    /// 失败/冻结的**机器可读原因**（`no_money` / `frozen_pair` / `compensation_failed` …）。
+    /// `Done` 时为空。两份短名表：`tradeRejectionReasonName`（由数字判定的原因）与 mod 侧的
+    /// `RejectReason`（世界状态），两边产出同一种东西。
+    std::string_view          logReason;
 
     [[nodiscard]] bool done() const { return status == TradeStatus::Done; }
     [[nodiscard]] bool needsConfirm() const { return status == TradeStatus::NeedsConfirm; }

@@ -20,6 +20,13 @@ enum class TradeLogResult : std::uint8_t { Ok, Fail, Frozen };
 /// 三态 → 文件里那三个词：`ok` / `fail` / `frozen`。
 std::string_view tradeLogResultName(TradeLogResult result);
 
+/// 拒绝原因 → **机器可读短名**（`shop_closed` / `no_money` / `no_stock` / `no_space` / …）。
+///
+/// spec 明确要求 `reason` 写这个而不是中文文案：文案会变、会被玩家引用、也会被改写，
+/// 而短名是查询键（`jq 'select(.reason=="no_money")'`），历史流水不能跟着文案变。
+/// 每加一个 `TradeRejection` 值都要同步加到这里（spec 明令）。`None` 不是拒绝，返回空串。
+std::string_view tradeRejectionReasonName(TradeRejection rejection);
+
 /// 一条成交流水（`p1-transaction-log` spec 的字段表）。
 ///
 /// 一行一个 JSON 对象（NDJSON）：键序固定、`\n` 结尾、UTF-8 无 BOM、中文不转义。

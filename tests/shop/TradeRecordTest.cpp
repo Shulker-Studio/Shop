@@ -143,3 +143,42 @@ TEST_CASE("交易流水：三态的名字就是文件里那三个词") {
     CHECK(std::string{tradeLogResultName(TradeLogResult::Fail)} == "fail");
     CHECK(std::string{tradeLogResultName(TradeLogResult::Frozen)} == "frozen");
 }
+
+TEST_CASE("交易流水：拒绝原因 → 机器可读短名（不把中文文案写进 reason）") {
+    // spec：`reason` 用短名，文案会变而短名是查询键。每加一个 `TradeRejection` 都要同步加进这张表。
+    CHECK(std::string{tradeRejectionReasonName(TradeRejection::ShopClosed)} == "shop_closed");
+    CHECK(std::string{tradeRejectionReasonName(TradeRejection::OwnerOffline)} == "owner_offline");
+    CHECK(std::string{tradeRejectionReasonName(TradeRejection::NotEnoughGoods)} == "no_stock");
+    CHECK(std::string{tradeRejectionReasonName(TradeRejection::NotEnoughFunds)} == "no_money");
+    CHECK(std::string{tradeRejectionReasonName(TradeRejection::NoRoomToReceive)} == "no_space");
+    CHECK(std::string{tradeRejectionReasonName(TradeRejection::OverUnitLimit)} == "over_limit");
+    CHECK(std::string{tradeRejectionReasonName(TradeRejection::InvalidRequest)} == "invalid_request");
+    // `None` 不是「拒绝」：它没有短名，`ok` 那一行的 reason 就是它
+    CHECK(tradeRejectionReasonName(TradeRejection::None).empty());
+}
+
+TEST_CASE("交易流水：frozen_pair 记的是「这一对已被冻结」，不是又一条 frozen") {
+    // 同一对「玩家 + 商店」在补偿失败之后被钉住，后续提交是被拒（fail）而不是又坏了一次（frozen）：
+    // 记成 frozen 会让服主以为事故发生了两次。
+    auto const json =
+        tradeRecordJson(composeTradeRecord(buyFacts(), TradePlan{}, TradeLogResult::Fail, "frozen_pair", kTs));
+    CHECK(json.find(R"("result":"fail")") != std::string::npos);
+    CHECK(json.find(R"("reason":"frozen_pair")") != std::string::npos);
+    CHECK(json.find(R"("reason":"compensation_failed")") == std::string::npos);
+    CHECK(tradeRecordProblem(composeTradeRecord(buyFacts(), TradePlan{}, TradeLogResult::Fail, "frozen_pair", kTs)).empty());
+}
+
+TEST_CASE("交易流水：免费店（0 元成交）照样是一行 ok") {
+    // 「0 元的成交」是有意义的历史：它证明那次交接发生过（管理员店的期限价、免费领取）。
+    auto const record = composeTradeRecord(
+        buyFacts(),
+        TradePlan{.units = 2, .items = 128, .total = 0, .tax = 0},
+        TradeLogResult::Ok,
+        "",
+        kTs
+    );
+    CHECK(record.gross == 0);
+    CHECK(record.total == 0);
+    CHECK(tradeRecordProblem(record).empty());
+    CHECK(tradeRecordJson(record).find(R"("gross":0,"tax":0,"total":0)") != std::string::npos);
+}

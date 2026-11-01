@@ -1,17 +1,15 @@
 #include "mod/DiscardLog.h"
 
+#include "mod/LogFile.h"
 #include "mod/Shop.h"
-
-#include "ll/api/io/Logger.h"
 
 #include "mc/deps/nbt/CompoundTag.h"
 #include "mc/world/item/SaveContext.h"
 #include "mc/world/actor/player/Player.h"
 
-#include <filesystem>
-#include <fstream>
-#include <system_error>
+#include <string>
 #include <utility>
+#include <vector>
 
 namespace ss::shop {
 
@@ -55,32 +53,16 @@ void writeDiscardRecords(std::vector<DiscardRecord> const& records) {
         return; // 普通店的卖出、两个方向的买入都不会产生留档：没有东西被销毁
     }
 
-    auto& logger = Shop::getInstance().getSelf().getLogger();
-    auto  dir    = Shop::getInstance().getSelf().getConfigDir() / "logs";
-
-    std::error_code ec;
-    std::filesystem::create_directories(dir, ec);
-    if (ec) {
-        logger.warn("销毁留档的目录建不出来（{}）：{}；交易已成交，这些记录丢了", dir.string(), ec.message());
-        return;
-    }
-
-    auto const path = dir / discardLogFileName(records.front().ts.substr(0, 10));
-
-    // `binary`：NDJSON 要求 `\n` 结尾，不能让文本模式把它翻成 `\r\n`。
-    std::ofstream out(path, std::ios::binary | std::ios::app);
-    if (!out) {
-        logger.warn("销毁留档打不开（{}）；交易已成交，这些记录丢了", path.string());
-        return;
-    }
+    // 与业务流水共用 `appendLogLines`（建目录 / 追加 / flush / 关 / 失败只 warn 一次）：
+    // 两个文件的落盘策略只能是**一套**，否则「交易照常成功」这条保证会在其中一个上失守。
+    // 文件名取第一条的日期——同一批记录共用同一个 `ts`，横跨零点的那几毫秒不值得
+    // 为此引入一个 map。
+    std::vector<std::string> lines;
+    lines.reserve(records.size());
     for (auto const& record : records) {
-        out << discardRecordJson(record);
+        lines.push_back(discardRecordJson(record));
     }
-    out.flush();
-    if (!out) {
-        // 磁盘满、盘被拔掉都会走到这里。留一条痕迹，但**不**回头改交易结论。
-        logger.warn("销毁留档写入失败（{}）；交易已成交，这些记录可能不完整", path.string());
-    }
+    appendLogLines(logDirectory(), discardLogFileName(records.front().ts.substr(0, 10)), lines);
 }
 
 } // namespace ss::shop

@@ -2,9 +2,9 @@
 
 #include "mod/Clock.h"
 #include "mod/ContainerFinderBds.h"
+#include "mod/DebugLog.h"
 #include "mod/DiscardLog.h"
 #include "mod/EconomyService.h"
-#include "mod/DebugLog.h"
 #include "mod/Shop.h"
 #include "mod/ShopForm.h"
 #include "mod/ShopService.h"
@@ -114,7 +114,98 @@ struct TradeSnapshots {
     }
 };
 
-TradeResult reject(std::string message) { return {.status = TradeStatus::Rejected, .message = std::move(message)}; }
+/// 世界状态导致的拒绝原因（流水 `reason` 列里「不是 `TradeRejection` 那几类」的部分）。
+///
+/// 为什么不全用 `TradeRejection`：那个枚举只描述**由数字判定**的原因（份数、余额、货、箱空间、税），
+/// 而这里这些是**世界状态**（牌没了、后端没起来、创造模式、冻结名单…）——`planTrade` 看不到它们，
+/// 也不该看到。但流水需要一个稳定的键，所以这些也得有短名，不能把中文文案写进 `reason`。
+///
+/// 两份表的分工："由数字判定的" 走 `tradeRejectionReasonName`（`src/shop`），
+/// 这里只补前者表达不了的部分。两边产出同一种东西（一个英文小写下划线短名）。
+enum class RejectReason : std::uint8_t {
+    ShopMissing,        ///< 牌没了 / 已经不是一个可交易的商店
+    ShopUnavailable,    ///< 这个方向不做这门生意（牌上只写了另一侧的价格）
+    OwnerUnknown,       ///< 读不到店主（没人能收款 / 没人能付款）
+    SelfTrade,          ///< 不能跟自己交易
+    FrozenPair,         ///< 这一对「玩家 + 商店」已被冻结（上一次补偿失败的后续提交）
+    CreativeMode,       ///< 创造模式不参与经济
+    NoBackend,          ///< 没有可用的经济后端
+    NoSystemAccount,    ///< 后端当不了管理员店的系统账户
+    BoxMissing,         ///< 商店的箱子不见了
+    NoProduct,          ///< 箱子里没有商品（卖光了 / 还没设商品）
+    ItemMismatch,       ///< 玩家手里有同类物品，但不是严格同种（附魔/耐久/自定义名对不上）
+    PlayerFundsUnknown, ///< 读不到玩家余额（不是「余额是 0」）
+    OwnerFundsUnknown,  ///< 读不到店主余额
+    PaymentFailed,      ///< 付款那一步失败（不是后端坏了，是这一笔没成）
+    TaxFailed,          ///< 商店税没收到
+    /// 补偿失败 → `frozen`。与 fatal 日志**成对出现**：冻结必须有上游事故，
+    /// 单独一条 `frozen` 找不到对应的事故说明它根本不是补偿失败。
+    CompensationFailed,
+};
+
+std::string_view rejectReasonName(RejectReason reason) {
+    switch (reason) {
+    case RejectReason::ShopMissing:
+        return "shop_missing";
+    case RejectReason::ShopUnavailable:
+        return "shop_unavailable";
+    case RejectReason::OwnerUnknown:
+        return "owner_unknown";
+    case RejectReason::SelfTrade:
+        return "self_trade";
+    case RejectReason::FrozenPair:
+        return "frozen_pair";
+    case RejectReason::CreativeMode:
+        return "creative_mode";
+    case RejectReason::NoBackend:
+        return "no_backend";
+    case RejectReason::NoSystemAccount:
+        return "no_system_account";
+    case RejectReason::BoxMissing:
+        return "box_missing";
+    case RejectReason::NoProduct:
+        return "no_product";
+    case RejectReason::ItemMismatch:
+        return "item_mismatch";
+    case RejectReason::PlayerFundsUnknown:
+        return "player_funds_unknown";
+    case RejectReason::OwnerFundsUnknown:
+        return "owner_funds_unknown";
+    case RejectReason::PaymentFailed:
+        return "payment_failed";
+    case RejectReason::TaxFailed:
+        return "tax_failed";
+    case RejectReason::CompensationFailed:
+        return "compensation_failed";
+    }
+    return {};
+}
+
+/// 拒绝：`message` 是给玩家看的中文，`logReason` 是给流水看的关键字。两件事必须分开——
+/// 文案随时会改，历史流水的 `reason` 不能跟着改。
+TradeResult reject(std::string message, RejectReason reason) {
+    return {.status = TradeStatus::Rejected, .message = std::move(message), .logReason = rejectReasonName(reason)};
+}
+
+/// 同上，但原因是 `planTrade` 判出来的（`TradeRejection` 那一套）。
+TradeResult reject(std::string message, TradeRejection rejection) {
+    return {
+        .status    = TradeStatus::Rejected,
+        .message   = std::move(message),
+        .logReason = tradeRejectionReasonName(rejection),
+    };
+}
+
+/// 同上，但原因已经是短名（`undoAndRefund` 这类把上游的 `reason` 原样传下来的地方）。
+TradeResult reject(std::string message, std::string_view reason) {
+    return {.status = TradeStatus::Rejected, .message = std::move(message), .logReason = reason};
+}
+
+/// 给结果补上流水事实。每一条失败路径都要带：一条 `fail` 不知道是哪个人、哪块牌就白记了。
+TradeResult withFacts(TradeResult result, TradeFacts const& facts) {
+    result.logFacts = facts;
+    return result;
+}
 
 /// 把一条运维消息发给所有在线 OP（没有人能收就当无事发生，日志已经记了）。
 void notifyOperators(std::string const& message) {
@@ -138,7 +229,13 @@ TradeResult broken(std::string const& freeze, std::string message) {
     Shop::getInstance().getSelf().getLogger().fatal("交易补偿失败（{}）：{}", freeze, message);
     notifyOperators("交易补偿失败（" + freeze + "）：" + message);
     gFrozenTrades.insert(freeze);
-    return {.status = TradeStatus::Broken, .message = std::move(message)};
+    // 流水里的 `frozen` 与上面这条 fatal 是**同一件事**：`reason: compensation_failed`
+    // 就是「去 grep 日志里的 交易补偿失败」的指针。
+    return {
+        .status    = TradeStatus::Broken,
+        .message   = std::move(message),
+        .logReason = rejectReasonName(RejectReason::CompensationFailed),
+    };
 }
 
 /// 一组容器里还能再装下几份商品。
@@ -310,11 +407,11 @@ struct Payment {
 /// 「店那一侧」由 `shopSideAccount` 决定：普通店是店主 XUID，管理员店是系统账户（§7.4）。
 /// 买卖两个方向各写一份这个组合，早晚会有一边忘了换收款方或忘了减税。
 Payment paymentFor(
-    TradeDirection           direction,
-    ShopInfoData const&      info,
-    std::string_view         ownerXuid,
-    std::string_view         traderXuid,
-    TradePlan const&         plan
+    TradeDirection      direction,
+    ShopInfoData const& info,
+    std::string_view    ownerXuid,
+    std::string_view    traderXuid,
+    TradePlan const&    plan
 ) {
     std::string const shopSide = economy::shopSideAccount(info.adminShop, ownerXuid);
     if (direction == TradeDirection::Buy) {
@@ -358,7 +455,16 @@ struct TradeFrame {
 /// 两种失败（取货不足、塞不进去）的收尾完全一样，只有文案不同，所以只写一份：
 /// 补偿逻辑一旦分叉，早晚有一边漏掉一步。买卖两个方向也共用它——
 /// 差别只在 `frame.payment` 的方向，退款跟着付款信息走。
-TradeResult undoAndRefund(TradeFrame& frame, bool restoreBackpack, std::string message, std::string const& freeze) {
+///
+/// `reason` 是流水里的短名（`no_stock` / `no_space` / `tax_failed`…），跟着这一笔走：
+/// 退款成不成都不改变「为什么没卖成」。
+TradeResult undoAndRefund(
+    TradeFrame&        frame,
+    bool               restoreBackpack,
+    std::string        message,
+    std::string_view   reason,
+    std::string const& freeze
+) {
     frame.snapshots.restoreShopBox();
     if (restoreBackpack) {
         // 背包可能已经被 `add` 塞进去一部分（或已经被扣掉一部分），整组槽位一起写回
@@ -370,46 +476,53 @@ TradeResult undoAndRefund(TradeFrame& frame, bool restoreBackpack, std::string m
 
     // 免费店（`main == 0`）根本没动过钱，别在提示里编一个「钱已退回」。
     if (frame.payment.main <= 0) {
-        return reject(std::move(message) + "，这笔交易没有成交");
+        return reject(std::move(message) + "，这笔交易没有成交", reason);
     }
     if (auto const failed = refund(frame.provider, frame.payment)) {
+        // 退款也失败：`broken()` 会把流水的原因改成 `compensation_failed`（那才是真事故），
+        // 原先的 `reason` 留在文案里给玩家看。
         return broken(freeze, std::move(message) + "，而且退款也失败了（" + *failed + "），请联系管理员");
     }
-    return reject(std::move(message) + "，这笔交易没有成交，钱已退回");
+    return reject(std::move(message) + "，这笔交易没有成交，钱已退回", reason);
 }
 
-/// 流水需要的「交易事实」（`p1-transaction-log` 票 01）。两个方向只有 `dir` 不同。
+/// 流水事实里「一开始就知道」的那一半：方向、牌子坐标、交易者。
 ///
-/// 在这里取、而不是等 `finishTrade` 再去读世界：商品模板、店主名、单价都是**这一笔**的样子，
-/// 交易走完之后箱子、牌子或在线名单可能已经变了。而 `TradeStatus` 到流水三态的映射、
-/// 以及「哪种终态值得写」都是流水侧的知识，所以 `TradeLogResult` 不在这里填。
-TradeFacts tradeFactsFor(
-    TradeDirection                  direction,
-    Player&                         trader,
-    Cell const&                     sign,
+/// 商店还没解析出来时（「这家商店已经不在了」这种最早失败的路径）流水只有这几项——
+/// 但仍然能定位到「谁在哪块牌前买了什么方向」，比不记强。
+TradeFacts basicTradeFacts(TradeDirection direction, Player& trader, Cell const& sign) {
+    TradeFacts facts;
+    facts.dir         = direction;
+    facts.dimensionId = trader.getDimensionId();
+    facts.shop        = sign;
+    facts.playerXuid  = trader.getXuid();
+    facts.playerName  = trader.getNameTag();
+    return facts;
+}
+
+/// 商店快照拿到之后补齐另一半：店主、商品、单价、后端。
+///
+/// 在这一刻取、而不是等 `finishTrade` 再去读世界：商品模板、店主名、单价都是**这一笔**的样子，
+/// 交易走完之后箱子、牌子或在线名单可能已经变了。
+/// `TradeStatus` 到流水三态的映射不在这里——那是 `finishTrade` 的事。
+void fillTradeFacts(
+    TradeFacts&                     facts,
     ShopSnapshot const&             shop,
     ShopConfig const&               config,
     ItemStack const&                product,
     std::int64_t                    unitPrice,
     economy::EconomyProvider const& provider
 ) {
-    TradeFacts facts;
-    facts.dir         = direction;
-    facts.dimensionId = trader.getDimensionId();
-    facts.shop        = sign;
-    facts.ownerXuid   = shop.ownerXuid;
+    facts.ownerXuid = shop.ownerXuid;
     // 管理员店的「店主」是配置里那个名字（spec：`owner.name = adminShopName`），
     // 不是牌上记的创建者——`readShopOwner` 在 `PlayerInfo` 里查得到时会拿创建者的名字。
-    facts.ownerName   = shop.info.adminShop ? config.adminShopName : shop.info.ownerName;
-    facts.admin       = shop.info.adminShop;
-    facts.backend     = std::string{provider.name()};
-    facts.playerXuid  = trader.getXuid();
-    facts.playerName  = trader.getNameTag();
-    facts.itemId      = product.getTypeName();
-    facts.itemAux     = static_cast<int>(product.getAuxValue());
-    facts.itemName    = product.getName();
-    facts.unitPrice   = unitPrice;
-    return facts;
+    facts.ownerName = shop.info.adminShop ? config.adminShopName : shop.info.ownerName;
+    facts.admin     = shop.info.adminShop;
+    facts.backend   = std::string{provider.name()};
+    facts.itemId    = product.getTypeName();
+    facts.itemAux   = static_cast<int>(product.getAuxValue());
+    facts.itemName  = product.getName();
+    facts.unitPrice = unitPrice;
 }
 
 /// 一次交易的全部前置条件（DESIGN §10.2 第 2、3 步的输入）。买卖共用这一个结构：
@@ -429,6 +542,10 @@ struct TradeContext {
 struct PreparedTrade {
     std::optional<TradeContext> context;
     std::string                 error;
+    /// 同一个失败在流水里的短名（`error` 是玩家看的中文，两件事分开）。
+    /// 走到这里的失败都是**世界状态**（商店没了、后端没起来……），所以走 `RejectReason`；
+    /// 唯一例外是停业——那条原因由 `TradeRejection::ShopClosed` 统一给名字。
+    std::string_view reason;
 };
 
 /// 买卖共用的前置检查（DESIGN §10.2 第 2 步）：牌子还是不是商店、能不能交易、商品是什么。
@@ -447,7 +564,7 @@ PreparedTrade prepareCommon(
     // 重新解析商店：不信任表单里那一份快照（DESIGN §10.4）。
     auto shop = readShop(region, toBlockPos(sign), config);
     if (!shop) {
-        return {.error = "这家商店已经不在了"};
+        return {.error = "这家商店已经不在了", .reason = rejectReasonName(RejectReason::ShopMissing)};
     }
     if (shop->info.closed) {
         // 停业是整家店的属性，比任何上限（以及“这一侧不收/不卖”）都优先。
@@ -457,46 +574,60 @@ PreparedTrade prepareCommon(
         //   走到这里时，箱子可能已经空了、后端可能不可用、店主可能已离线——那些原因都不如
         //   「这家店暂停营业」对得上号。
         // - `planTrade`：纯逻辑层的**权威判据**与单测缝，不靠「调用方已经拦过」这个前提。
-        return {.error = tradeRejectionMessage(direction, TradeRejection::ShopClosed)};
+        return {
+            .error  = tradeRejectionMessage(direction, TradeRejection::ShopClosed),
+            .reason = tradeRejectionReasonName(TradeRejection::ShopClosed),
+        };
     }
     if (!unitPriceOf(shop->info, direction)) {
-        return {.error = selling ? "这家店不收购" : "这家店不出售"};
+        return {
+            .error  = selling ? "这家店不收购" : "这家店不出售",
+            .reason = rejectReasonName(RejectReason::ShopUnavailable)
+        };
     }
     // 普通店两边都靠店主这一个账户：买入店主收钱、卖出店主付钱（ADR-0005）。
     // 管理员店的对手方是系统账户（§7.4），牌上记的 XUID 只是当时的创建者，所以两条都不适用：
     // 「读不到店主」不影响交易，OP 在管理员店里也不是店主（`shopFormRoleOf` 已按访客给按钮）。
     if (!shop->info.adminShop) {
         if (shop->ownerXuid.empty()) {
-            return {.error = selling ? "读不到店主，没法付款" : "读不到店主，没法收款"};
+            return {
+                .error  = selling ? "读不到店主，没法付款" : "读不到店主，没法收款",
+                .reason = rejectReasonName(RejectReason::OwnerUnknown),
+            };
         }
         if (shop->ownerXuid == trader.getXuid()) {
-            return {.error = "不能跟自己交易"};
+            return {.error = "不能跟自己交易", .reason = rejectReasonName(RejectReason::SelfTrade)};
         }
     }
     if (isFrozen(trader.getXuid(), sign)) {
         // 上一次补偿失败还挂着：这次的「钱货一致」没人能保证，别再放行
         // （DESIGN §10.2 第 8 步的「冻结该玩家本次操作，不自动重试」）。
-        return {.error = "这笔交易已被冻结（上一次交易未完成，请联系管理员核对）"};
+        // 被冻结的后续提交是 `fail` + `frozen_pair`，**不是**又一条 `frozen`：
+        // 事故只发生了一次，记成两次会让服主去查两次。
+        return {
+            .error  = "这笔交易已被冻结（上一次交易未完成，请联系管理员核对）",
+            .reason = rejectReasonName(RejectReason::FrozenPair),
+        };
     }
     if (config.ignoreCreativeMode && trader.isCreative()) {
         // 创造模式玩家不参与经济（DESIGN §10.4）
-        return {.error = "创造模式不能与商店交易"};
+        return {.error = "创造模式不能与商店交易", .reason = rejectReasonName(RejectReason::CreativeMode)};
     }
 
     // 余额与能力都要问后端，只问一次（下面 `context.provider` 用的就是这一个）。
     auto& provider = economyBackend();
     if (!provider.available()) {
-        return {.error = noEconomyReason()};
+        return {.error = noEconomyReason(), .reason = rejectReasonName(RejectReason::NoBackend)};
     }
     if (shop->info.adminShop && !provider.supportsSystemAccount()) {
         // 管理员店的资金侧不设上限靠的就是系统账户（§7.4）：后端声明不了这项能力时
         // 两个方向都必然失败，不如提前说清楚（与点牌时藏按钮同一句原因）。
-        return {.error = noSystemAccountReason()};
+        return {.error = noSystemAccountReason(), .reason = rejectReasonName(RejectReason::NoSystemAccount)};
     }
 
     auto attached = attachedContainerOf(region, toBlockPos(sign), config.shopContainers);
     if (!attached.ok()) {
-        return {.error = "商店的箱子不见了"};
+        return {.error = "商店的箱子不见了", .reason = rejectReasonName(RejectReason::BoxMissing)};
     }
     ItemStack const* found = firstProductStack(*attached.container);
     if (found == nullptr) {
@@ -506,11 +637,15 @@ PreparedTrade prepareCommon(
         // 管理员店此时不是「缺货」而是「还没设商品」（票 03）：两条原因分开说，
         // 因为前者等补货、后者只能由 OP 往模板箱里放一件样品。
         if (shop->info.adminShop) {
-            return {.error = unavailableReasonForEmptyBox(/* adminShop=*/true)};
+            return {
+                .error  = unavailableReasonForEmptyBox(/* adminShop=*/true),
+                .reason = rejectReasonName(RejectReason::NoProduct),
+            };
         }
         return {
-            .error = selling ? "商店箱里没有货，看不出这家店收什么"
-                             : tradeRejectionMessage(direction, TradeRejection::NotEnoughGoods)
+            .error  = selling ? "商店箱里没有货，看不出这家店收什么"
+                              : tradeRejectionMessage(direction, TradeRejection::NotEnoughGoods),
+            .reason = tradeRejectionReasonName(TradeRejection::NotEnoughGoods),
         };
     }
 
@@ -521,16 +656,15 @@ PreparedTrade prepareCommon(
     context.shop     = std::move(*shop);
     context.provider = &provider;
 
-    context.request.amountPerUnit          = context.shop.info.amountPerUnit;
-    context.request.maxUnits               = config.maxShopAmount;
-    context.request.allowPartial           = config.allowPartialTransactions;
-    context.request.closed                 = context.shop.info.closed;
+    context.request.amountPerUnit = context.shop.info.amountPerUnit;
+    context.request.maxUnits      = config.maxShopAmount;
+    context.request.allowPartial  = config.allowPartialTransactions;
+    context.request.closed        = context.shop.info.closed;
     // 注：`prepareCommon` 上面已经把停业的店拦了，所以这份 `closed` 在生产路径上恒为 false。
     // 仍然装进去，是因为 `planTrade` 是纯逻辑层的权威判据：它不该依赖「调用方已经拦过」这个前提
     // （单测、以后新加的调用路径都靠它）。
     // 管理员店没有「店主此刻在不在线」这回事：对手方是系统账户（§8.5 表格的「同左」）。
-    context.request.ownerOnline            = context.shop.info.adminShop
-                                          || onlinePlayer(context.shop.ownerXuid) != nullptr;
+    context.request.ownerOnline = context.shop.info.adminShop || onlinePlayer(context.shop.ownerXuid) != nullptr;
     context.request.backendSupportsOffline = context.provider->supportsOffline();
     context.request.requireOwnerOnline     = config.economy.requireOwnerOnline;
     // 商店税（DESIGN §8.9）：税从这笔生意里抽，两个方向都要算；收不走（没有系统账户）时整笔不算；
@@ -545,7 +679,7 @@ PreparedTrade prepareCommon(
     context.request.taxRate    = tax.taxRate;
     context.request.taxOnPayer = tax.taxOnPayer;
 
-    return {.context = std::move(context), .error = {}};
+    return {.context = std::move(context), .error = {}, .reason = {}};
 }
 
 /// 买入方向的预校验：在共用检查之上装买入的角色（货在商店箱，收货方是玩家背包，
@@ -561,7 +695,7 @@ PreparedTrade prepareBuy(BlockSource& region, Cell const& sign, Player& buyer, S
     // 免费店（B 0）不产生账户操作，余额读不到也不影响成交。
     auto const funds = context.provider->get(buyer.getXuid());
     if (!funds && *context.shop.info.buyPrice > 0) {
-        return {.error = playerFundsUnknownReason()};
+        return {.error = playerFundsUnknownReason(), .reason = rejectReasonName(RejectReason::PlayerFundsUnknown)};
     }
 
     context.request.unitPrice  = *context.shop.info.buyPrice;
@@ -612,9 +746,12 @@ PreparedTrade prepareSell(BlockSource& region, Cell const& sign, Player& seller,
                     context.request.backendSupportsOffline,
                     context.request.requireOwnerOnline
                 )) {
-                return {.error = ownerOfflineReason()};
+                return {
+                    .error  = ownerOfflineReason(),
+                    .reason = tradeRejectionReasonName(TradeRejection::OwnerOffline)
+                };
             }
-            return {.error = ownerFundsUnknownReason()};
+            return {.error = ownerFundsUnknownReason(), .reason = rejectReasonName(RejectReason::OwnerFundsUnknown)};
         }
     }
 
@@ -630,15 +767,21 @@ PreparedTrade prepareSell(BlockSource& region, Cell const& sign, Player& seller,
     // 管理员店收进来的货是**销毁**的（票 02）：箱子不是收货方，所以「还能装几份」不存在。
     // 普通店照旧算商店箱（双箱按合并顺序）还能装几份。
     StockView const boxRoomUnits =
-        adminShop ? StockView::makeUnlimited()
-                  : StockView::makeFinite(shopBoxUnits(context.container, context.product, context.shop.info.amountPerUnit));
+        adminShop
+            ? StockView::makeUnlimited()
+            : StockView::makeFinite(shopBoxUnits(context.container, context.product, context.shop.info.amountPerUnit));
     context.request.goodsUnits = StockView::makeFinite(heldUnits);
     context.request.roomUnits  = boxRoomUnits;
 
     // 「我手里根本没有」与「我手里有钻石剑但不是这一把」得分开说（DESIGN §5.3 的严格同种）。
     // 只有严格同种一件都没有时才怀疑「货不对」；有 63 个差一个满一份的，原因就是不够一份。
     if (strictCount == 0 && holdsSimilarItem(seller.getInventory(), context.product)) {
-        return {.error = "你手里的这种物品与商店收的不一样（附魔、耐久或自定义名对不上）"};
+        // 「货不对」不是「没货」：`planTrade` 会把它报成 `NotEnoughGoods`，但流水里
+        // 这两种原因必须分得开（一个该补货、一个该看自己手里的附魔）。
+        return {
+            .error  = "你手里的这种物品与商店收的不一样（附魔、耐久或自定义名对不上）",
+            .reason = rejectReasonName(RejectReason::ItemMismatch),
+        };
     }
 
     // 卖出表单要把「你手里有几份」「商店箱还能装几份」「店主余额」都摆出来
@@ -735,11 +878,14 @@ std::optional<TradeResult> moveMoney(
         // 有一头是系统账户（管理员店）时，可读的只有玩家那一侧：读不到就是玩家账户的问题，
         // 不能报成「后端没有系统账户」——那项能力在预校验里已经判过了（DESIGN §8.2）。
         if (payment.payer.empty() || payment.receiver.empty()) {
-            return reject(playerFundsUnknownReason());
+            return reject(playerFundsUnknownReason(), RejectReason::PlayerFundsUnknown);
         }
         // 两个方向各有一个账户在预校验里已经查过（买入查买家、卖出查店主），
         // 所以走到这里的读不到，是另一头出了问题。
-        return reject(direction == TradeDirection::Buy ? ownerFundsUnknownReason() : playerFundsUnknownReason());
+        return reject(
+            direction == TradeDirection::Buy ? ownerFundsUnknownReason() : playerFundsUnknownReason(),
+            direction == TradeDirection::Buy ? RejectReason::OwnerFundsUnknown : RejectReason::PlayerFundsUnknown
+        );
     }
     auto const paid = provider.transfer(payment.payer, payment.receiver, payment.main);
     if (paid.ok()) {
@@ -750,10 +896,10 @@ std::optional<TradeResult> moveMoney(
     }
     // 买入是玩家付钱，卖出是店主付钱——失败原因得归到对的人头上。
     // 管理员店的卖出方向付款方是系统账户（§7.4），不叫「店主」。
-    std::string const payerName = payment.payer.empty() ? std::string{"系统账户"}
+    std::string const payerName = payment.payer.empty()            ? std::string{"系统账户"}
                                 : direction == TradeDirection::Buy ? std::string{}
                                                                    : std::string{"店主"};
-    return reject(payerName + "付款失败：" + paid.detail);
+    return reject(payerName + "付款失败：" + paid.detail, RejectReason::PaymentFailed);
 }
 
 /// 收商店税时的失败（DESIGN §8.9）。
@@ -795,7 +941,13 @@ std::optional<TradeResult> settleTax(TradeFrame& frame, std::string const& freez
     if (failed->broken) {
         return broken(freeze, taxBrokenReason(failed->detail));
     }
-    return undoAndRefund(frame, /*restoreBackpack=*/true, taxChargeFailureReason(failed->detail), freeze);
+    return undoAndRefund(
+        frame,
+        /*restoreBackpack=*/true,
+        taxChargeFailureReason(failed->detail),
+        rejectReasonName(RejectReason::TaxFailed),
+        freeze
+    );
 }
 
 /// 「点买/卖 → 预校验 → 弹份数表单」的同一套外壳：两个方向只差 `prepare`。
@@ -843,6 +995,23 @@ void requestUnitsForm(
     openTradeForm(player, sign, direction, context.shop.info, context.unitsAvailable);
 }
 
+/// `TradeStatus` → 流水三态（spec D1）。**只在这里映射**：`TradeStatus` 多一个
+/// `NeedsConfirm`，而流水只要终态，所以它返回空表示「这一笔没有可写的流水」。
+/// 纯逻辑层不认识 `TradeStatus`（`TradeLogResult` 是另一套枚举），这条知识属于 mod 一侧。
+std::optional<TradeLogResult> tradeLogResultOf(TradeStatus status) {
+    switch (status) {
+    case TradeStatus::Done:
+        return TradeLogResult::Ok;
+    case TradeStatus::Rejected:
+        return TradeLogResult::Fail;
+    case TradeStatus::Broken:
+        return TradeLogResult::Frozen;
+    case TradeStatus::NeedsConfirm:
+    default:
+        return std::nullopt;
+    }
+}
+
 /// 提交之后的三件事：要确认就弹确认表单、成交就记一条日志、其余情况把消息发给玩家。
 /// 买卖共用一份，免得两边各写一遍「忘了记日志」。
 void finishTrade(Player& player, Cell const& sign, TradeDirection direction, TradeResult const& result) {
@@ -876,12 +1045,18 @@ void finishTrade(Player& player, Cell const& sign, TradeDirection direction, Tra
         return;
     }
     player.sendMessage(result.message);
-    // 成交流水（`p1-transaction-log` spec D1）：唯一接线点就是这里，两个方向每一种终态
-    // 都从这里出去。票 01 只记 `Done → ok`（记录由 `buyUnits` / `sellUnits` 在成交那一刻造好，
-    // 填了才有东西可写）；拒绝与冻结在票 02 接。写失败只 warn：交易已经成交，
-    // 流水不是它的一部分。
-    if (result.tradeLog) {
-        writeTradeRecord(*result.tradeLog);
+    // 成交流水（`p1-transaction-log` spec D1）：**唯一**接线点就是这里，两个方向每一种终态
+    // 都从这里出去。三态映射也只写在这里：
+    // - `Done` → `ok`；`Rejected` → `fail`；`Broken` → `frozen`（与上面那条 fatal 日志成对）；
+    // - `NeedsConfirm` → **不写**：它不是终态，玩家可能直接关掉确认表单，写了就是噪音，
+    //   而且会被读成「失败」。
+    // 写失败只 warn：交易已经完成，流水不是它的一部分。
+    if (result.logFacts) {
+        if (auto const logged = tradeLogResultOf(result.status)) {
+            writeTradeRecord(
+                composeTradeRecord(*result.logFacts, result.plan, *logged, result.logReason, nowIso8601Local())
+            );
+        }
     }
     if (result.done()) {
         // 管理员店卖出销毁的货留档（`p1-transaction-log` spec D5）。写失败只 warn：
@@ -931,11 +1106,15 @@ TradeResult buyUnits(
     ShopConfig const&      config,
     TradeSubmission const& submission
 ) {
-    auto prepared = prepareBuy(region, sign, buyer, config);
+    // 流水事实：一开始只有「谁、在哪块牌、哪个方向」——牌没了（`prepareBuy` 就失败）时
+    // 这三项也够定位；商店解析出来之后再补齐店主、商品、单价与后端。
+    TradeFacts facts    = basicTradeFacts(TradeDirection::Buy, buyer, sign);
+    auto       prepared = prepareBuy(region, sign, buyer, config);
     if (!prepared.context) {
-        return reject(std::move(prepared.error));
+        return withFacts(reject(std::move(prepared.error), prepared.reason), facts);
     }
     auto context = std::move(prepared.context);
+    fillTradeFacts(facts, context->shop, config, context->product, context->request.unitPrice, *context->provider);
 
     // 第 3 步：算可成交份数（部分成交开关在这里生效，DESIGN §10.3）。
     TradeRequest request = context->request;
@@ -943,12 +1122,16 @@ TradeResult buyUnits(
 
     auto const decision = planTrade(request);
     if (!decision.ok()) {
-        return reject(tradeRejectionMessage(TradeDirection::Buy, decision.rejection));
+        return withFacts(
+            reject(tradeRejectionMessage(TradeDirection::Buy, decision.rejection), decision.rejection),
+            facts
+        );
     }
     TradePlan const plan = *decision.plan;
 
     // 第 4 步之前先确认玩家看到的就是要执行的：对不上就什么都不做，先弹确认表单。
     if (auto confirm = confirmIfChanged(TradeDirection::Buy, context->shop.info, plan, submission)) {
+        // `NeedsConfirm` 不是终态，不写流水：连事实也不必带上（`finishTrade` 不会用它）。
         return std::move(*confirm);
     }
 
@@ -958,7 +1141,7 @@ TradeResult buyUnits(
     // 主交易转 `total - tax`，税那一笔再由买家付给系统（DESIGN §8.9）。
     // `plan.tax` 为 0（没开税、后端收不走、或管理员店）时两者相等，第二笔整步跳过。
     Payment const     payment = paymentFor(TradeDirection::Buy, info, context->shop.ownerXuid, buyer.getXuid(), plan);
-    std::string const freeze = freezeKey(buyer.getXuid(), sign);
+    std::string const freeze  = freezeKey(buyer.getXuid(), sign);
 
     // 第 4 步：快照。物品与余额不在同一个事务里，失败时只能靠它反向写回。
     TradeFrame frame{
@@ -973,7 +1156,7 @@ TradeResult buyUnits(
     // 第 5 步：先扣钱。金额接口的失败语义最干净（返回 false 且余额一分不动），
     // 而物品搬运可能部分成功，所以钱一定要走在货前面（DESIGN §10.2 第 5 步）。
     if (auto money = moveMoney(TradeDirection::Buy, provider, payment, freeze)) {
-        return std::move(*money);
+        return withFacts(std::move(*money), facts);
     }
 
     // 第 6 步：先从箱子取货、再塞进背包。
@@ -992,27 +1175,35 @@ TradeResult buyUnits(
             context->product,
             plan.items
         )) {
-        return undoAndRefund(
-            frame,
-            /*restoreBackpack=*/false,
-            tradeRejectionMessage(TradeDirection::Buy, TradeRejection::NotEnoughGoods),
-            freeze
+        return withFacts(
+            undoAndRefund(
+                frame,
+                /*restoreBackpack=*/false,
+                tradeRejectionMessage(TradeDirection::Buy, TradeRejection::NotEnoughGoods),
+                tradeRejectionReasonName(TradeRejection::NotEnoughGoods),
+                freeze
+            ),
+            facts
         );
     }
 
     if (!giveItemsToBackpack(buyer, context->product, plan.items)) {
-        return undoAndRefund(
-            frame,
-            /*restoreBackpack=*/true,
-            tradeRejectionMessage(TradeDirection::Buy, TradeRejection::NoRoomToReceive),
-            freeze
+        return withFacts(
+            undoAndRefund(
+                frame,
+                /*restoreBackpack=*/true,
+                tradeRejectionMessage(TradeDirection::Buy, TradeRejection::NoRoomToReceive),
+                tradeRejectionReasonName(TradeRejection::NoRoomToReceive),
+                freeze
+            ),
+            facts
         );
     }
 
     // 第 5 步的后半段：收商店税（DESIGN §8.9）。走到这里物品已经落进背包，税再失败
     // 就把物品与主交易一起退回去——税在这一步之前一分都还没销毁，补偿因此是精确的。
     if (auto const taxed = settleTax(frame, freeze)) {
-        return *taxed;
+        return withFacts(std::move(*taxed), facts);
     }
 
     // 第 9 步刷新：背包推给客户端，商店箱（双箱两半）各自 refresh 一次
@@ -1031,30 +1222,13 @@ TradeResult buyUnits(
     if (plan.units < submission.units) {
         // 部分成交：如实说清楚为什么只给了这么多（DESIGN §10.3）。
         // 管理员店的库存是无限的，别把「商店箱里的货」列成一个原因——它不存在。
-        message += info.adminShop ? "（你的余额、背包空间或单次上限不够，只成交了 " + std::to_string(plan.units) + " 份）"
-                                  : "（商店箱里的货、余额或背包空间不够，只成交了 " + std::to_string(plan.units)
-                                        + " 份）";
+        message += info.adminShop
+                     ? "（你的余额、背包空间或单次上限不够，只成交了 " + std::to_string(plan.units) + " 份）"
+                     : "（商店箱里的货、余额或背包空间不够，只成交了 " + std::to_string(plan.units) + " 份）";
     }
-    TradeResult result{.status = TradeStatus::Done, .plan = plan, .message = std::move(message)};
-    // 流水在 `Done` 之前造好：`ts`、店主名、商品与单价都还是这一笔的样子。
-    // 落盘在 `Done` 之后（`finishTrade`）——写不进去也不能把成交判成失败。
-    result.tradeLog = composeTradeRecord(
-        tradeFactsFor(
-            TradeDirection::Buy,
-            buyer,
-            sign,
-            context->shop,
-            config,
-            context->product,
-            request.unitPrice,
-            provider
-        ),
-        plan,
-        TradeLogResult::Ok,
-        {},
-        nowIso8601Local()
-    );
-    return result;
+    // 成交的事实已经在 `fillTradeFacts` 里取好（那是这一笔的样子），结论与 `ts` 由
+    // `finishTrade` 补：它才知道终态，也只有一处需要知道「哪种终态写流水」。
+    return withFacts(TradeResult{.status = TradeStatus::Done, .plan = plan, .message = std::move(message)}, facts);
 }
 
 TradeResult sellUnits(
@@ -1064,18 +1238,23 @@ TradeResult sellUnits(
     ShopConfig const&      config,
     TradeSubmission const& submission
 ) {
-    auto prepared = prepareSell(region, sign, seller, config);
+    TradeFacts facts    = basicTradeFacts(TradeDirection::Sell, seller, sign);
+    auto       prepared = prepareSell(region, sign, seller, config);
     if (!prepared.context) {
-        return reject(std::move(prepared.error));
+        return withFacts(reject(std::move(prepared.error), prepared.reason), facts);
     }
     auto context = std::move(prepared.context);
+    fillTradeFacts(facts, context->shop, config, context->product, context->request.unitPrice, *context->provider);
 
     TradeRequest request = context->request;
     request.requested    = submission.units;
 
     auto const decision = planTrade(request);
     if (!decision.ok()) {
-        return reject(tradeRejectionMessage(TradeDirection::Sell, decision.rejection));
+        return withFacts(
+            reject(tradeRejectionMessage(TradeDirection::Sell, decision.rejection), decision.rejection),
+            facts
+        );
     }
     TradePlan const plan = *decision.plan;
 
@@ -1089,7 +1268,7 @@ TradeResult sellUnits(
     // 管理员店是系统账户（§7.4）：钱凭空记到玩家账上，所以不读也不限制「店主余额」。
     // 商店税同样由店那一侧承担：玩家收到的仍是牌面金额 `total`，店主另付一笔 `tax`（§8.9）。
     Payment const     payment = paymentFor(TradeDirection::Sell, info, context->shop.ownerXuid, seller.getXuid(), plan);
-    std::string const freeze = freezeKey(seller.getXuid(), sign);
+    std::string const freeze  = freezeKey(seller.getXuid(), sign);
 
     TradeFrame frame{
         region,
@@ -1106,7 +1285,7 @@ TradeResult sellUnits(
     // 先给钱后取货不构成复制窗口：钱与货是两种东西，玩家拿到钱不会让货变多；
     // 真正要防的是「同一件货同时在两处」，那由下一步的顺序保证。
     if (auto money = moveMoney(TradeDirection::Sell, provider, payment, freeze)) {
-        return std::move(*money);
+        return withFacts(std::move(*money), facts);
     }
 
     // 第 6 步：先从背包取货、再放进商店箱。
@@ -1127,11 +1306,15 @@ TradeResult sellUnits(
             info.adminShop ? &destroyed : nullptr
         )) {
         // 取货失败（背包在他打开表单之后变少了）：快照把背包写回、退款，一件也不会被销毁。
-        return undoAndRefund(
-            frame,
-            /*restoreBackpack=*/true,
-            tradeRejectionMessage(TradeDirection::Sell, TradeRejection::NotEnoughGoods),
-            freeze
+        return withFacts(
+            undoAndRefund(
+                frame,
+                /*restoreBackpack=*/true,
+                tradeRejectionMessage(TradeDirection::Sell, TradeRejection::NotEnoughGoods),
+                tradeRejectionReasonName(TradeRejection::NotEnoughGoods),
+                freeze
+            ),
+            facts
         );
     }
 
@@ -1139,18 +1322,22 @@ TradeResult sellUnits(
     // 所以先把背包与箱子都按快照写回，再退款。
     // 管理员店没有这一步：货是销毁的，永远「收得下」，模板箱也一件不动。
     if (!info.adminShop && !putItemsIntoShopBox(context->container, context->product, plan.items)) {
-        return undoAndRefund(
-            frame,
-            /*restoreBackpack=*/true,
-            tradeRejectionMessage(TradeDirection::Sell, TradeRejection::NoRoomToReceive),
-            freeze
+        return withFacts(
+            undoAndRefund(
+                frame,
+                /*restoreBackpack=*/true,
+                tradeRejectionMessage(TradeDirection::Sell, TradeRejection::NoRoomToReceive),
+                tradeRejectionReasonName(TradeRejection::NoRoomToReceive),
+                freeze
+            ),
+            facts
         );
     }
 
     // 第 5 步的后半段：店主另付商店税（DESIGN §8.9）。失败时物品与主交易一起退回，
     // 此时税还没被销毁，所以退款金额就是玩家 / 店主真正移动过的 `plan.total`。
     if (auto const taxed = settleTax(frame, freeze)) {
-        return *taxed;
+        return withFacts(std::move(*taxed), facts);
     }
 
     seller.sendInventory(true);
@@ -1173,34 +1360,19 @@ TradeResult sellUnits(
     }
     if (plan.units < submission.units) {
         // 部分成交：如实说清原因（DESIGN §10.3）。管理员店的钱与箱空间都没有上限，只有你手里的货。
-        message += info.adminShop ? "（你手里的货或单次上限不够，只成交了 " + std::to_string(plan.units) + " 份）"
-                                  : "（你手里的货、店主的钱或商店箱空间不够，只成交了 " + std::to_string(plan.units)
-                                        + " 份）";
+        message += info.adminShop
+                     ? "（你手里的货或单次上限不够，只成交了 " + std::to_string(plan.units) + " 份）"
+                     : "（你手里的货、店主的钱或商店箱空间不够，只成交了 " + std::to_string(plan.units) + " 份）";
     }
-    TradeResult result{
-        .status  = TradeStatus::Done,
-        .plan    = plan,
-        .message = std::move(message),
-        .discarded = std::move(discarded),
-    };
-    // 流水同样在 `Done` 之前造好（票 01）：管理员店卖出的 `discarded` 与这一条同属一次交接。
-    result.tradeLog = composeTradeRecord(
-        tradeFactsFor(
-            TradeDirection::Sell,
-            seller,
-            sign,
-            context->shop,
-            config,
-            context->product,
-            request.unitPrice,
-            provider
-        ),
-        plan,
-        TradeLogResult::Ok,
-        {},
-        nowIso8601Local()
+    return withFacts(
+        TradeResult{
+            .status    = TradeStatus::Done,
+            .plan      = plan,
+            .message   = std::move(message),
+            .discarded = std::move(discarded),
+        },
+        facts
     );
-    return result;
 }
 
 void requestBuyForm(Player& viewer, Cell const& sign) {
