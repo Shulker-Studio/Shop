@@ -22,7 +22,7 @@
 **已实现（`xmake build Shop` / `ShopTests` 通过，`xmake test` 176 cases / 2736 assertions 全绿）**
 
 - `src/shop/DestructionProtection.{h,cpp}`（新，纯逻辑，不含引擎类型）：
-  - `DestructionTarget{pos, shopBlock}` + `cellsToSpare(targets)`：从引擎给的「要毁掉的格子」里挑出**要放过**的（ADR-0004 的「剔除 ≠ 取消」只写在这里）。爆炸拿它筛 `mBlocks`，凋灵/火焰拿它决定跳过哪一格。
+  - `DestructionTarget{pos, shopBlock}` + `cellsToSpare(targets)`：从引擎给的「要毁掉的格子」里挑出**要放过**的（ADR-0004 的「剔除 ≠ 取消」只写在这里）。只有爆炸用它——那是唯一一次面对一整份方块列表的场景；凋灵/火焰的 hook 每次只拿到一格，直接问 `isShopBlockAt` 就行，不需要再走一层列表语义。
   - `signsAttachedTo(target, signs)`：哪些牌的**附着格**正好是目标格（站立看下方、吊牌看上方、墙牌看向背面的反方向）。几何口径仍然只有 `attachedCellOfSign` 一处。
 - `src/shop/ContainerProtection.{h,cpp}`：`ShopBlockTouch` 新增 `BreakSignSupport`（拆商店牌依附的方块）。放行条件与拆牌相同（`canManageShop`：店主与 OP），提示单独一句——必须点出后果（「拆了牌子会掉下来、商店也就没了」），否则玩家以为自己在拆一块普通方块；管理员商店与无主牌都只提 OP。
 - `src/mod/ContainerFinderBds.{h,cpp}`：
@@ -42,12 +42,13 @@
 
 - **不照搬 ChestLock 的凋灵提前返回**。26.51.8 的 `_destroyBlocks` 一次只拿到整个 `AABB`，提前返回 = 取消那一次破坏的全部方块，旁边的一块也不掉，直接违反 ADR-0004 与票面第 4 条。改成「`_destroyBlocks` 只置一个线程局部标志后放行原版，`Level::$destroyBlock` 在标志期内逐格拒绝」。标志只在这一次凋灵破坏期间为真，所以爆炸、玩家拆除、所有权判定、以及 07 放行后我们主动打商店牌的那次 `destroyBlock` 都不受影响。ADR-0004 已补「修订（08 落地时）」一节把原句与落点对齐。
 - **H3d 用 `FireBlock::checkBurn`，不用 iListenAttentively 的 `FireTryBurnBlockBeforeEvent`**：那个事件只能取消整场燃烧，粒度不对（§6.2 的理由对火焰同样成立）。
-- **活塞只有「整次推不动」**：原版没有部分推动语义，所以一次推动里含商店方块时整次失败——ADR-0004 要求的是「不取消活塞本身」，不是「拆开一次推动」。推与拉共用 `_attachedBlockWalker`，一条 hook 覆盖两边。
+- **活塞只有「整次推不动」**：原版没有部分推动语义，所以一次推动里含商店方块时整次失败——ADR-0004 要求的是「不取消活塞本身」，不是「拆开一次推动」。推与拉在基岩版里走同一条方块移动路径（`_attachedBlockWalker`），所以只挂了一条 hook；「拉动也走它」是推断，真机上验（12 的活塞项专门点了拉）。若拉动不走这条路径，需要另找拉动入口再补一条。
 - **H3e 挂在同一判据上**：拆依附方块的放行条件与拆牌一样是 `canManageShop`，所以走同一张 `planShopBlockTouch` 表，只有说法不同（`BreakSignSupport`）。攻击路径同样接（体验：不用徒劳地挖），拆除路径是权威兜底。
 - **判据不看 `shopContainers` 白名单、牌面用「像商店」**：与 07 完全一致，改配置/脏数据不该让商店方块失去保护。
 
 **已知边界**
 
+- **爆炸剔除依赖 `ValueOrRef` 给的是真引用**：`sendEvent` 里拿到的是 `Details::ValueOrRef<ExplosionStartedEvent>`，我们原地改 `mBlocks`。若某版本给它的是副本，剔除会静默失效（12 的 TNT 项写了判据与退路）。
 - **凋灵逐格剔除依赖一处引擎路径假设**：凋灵销毁方块必须经过 `Level::destroyBlock`。这一条无法单测（不给 hook 写假装验证的单测），只能真机验收；若守卫一次都没命中，退路是回到提前返回并接受「凋灵范围内旁的方块不被破坏」。
 - **店主拆依附方块时牌子靠原版物理掉落**：我们只放行，不自己打牌（自己打会与物理重复掉落）。若真机发现牌子不掉，则「与拆牌等价」不成立，需要改成放行时显式 `Level::destroyBlock` 打牌。
 - **爆炸/活塞不保护「商店牌依附的方块」**：票面第 1、2 条只要求商店箱/商店牌本身幸存，H3e 也只点名玩家拆除路径。所以用 TNT 炸掉牌子背后那块石头、或用活塞推走它，牌子仍会掉落、商店仍会消失——这是与拆依附方块同一类绕过，但不在本票范围。P1 若收紧，做法是把 `cellsToSpare` 的判定从「这一格是商店方块」扩成「这一格是商店方块或是商店牌的附着格」。

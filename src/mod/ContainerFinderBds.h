@@ -158,8 +158,12 @@ shopSignsWithAttachedCell(BlockSource& region, BlockPos const& attachedCell, Sho
 
 /// 这一格是不是被商店占用的方块：商店牌本身，或绑着商店牌的容器（DESIGN §9.3）。
 ///
-/// 判据只在这里组装一次：破坏防护（08）的四条 hook 都用它，不各写一份。
-/// 不看 `shopContainers` 白名单，牌面用「像商店」而不是「现在严格合法”（同 §9.2）。
+/// 判据只在这里组装一次：破坏防护（08）的四条 hook 与 07 的攻击/拆除路径都问它，
+/// 不各写一份「店主 || 挂着的牌」。
+/// 不看 `shopContainers` 白名单，牌面用「像商店」而不是「现在严格合法」（同 §9.2）。
+///
+/// 实现上先看「有没有方块实体」：商店牌与箱子/木桶都必有，没方块实体的格子一定不是。
+/// 爆炸的方块列表动辄上百格，这一句能挡掉大部分，不必每格都解析牌面文本。
 bool isShopBlockAt(BlockSource& region, BlockPos const& pos, ShopConfig const& config);
 
 /// 这一格告示牌是不是一块商店牌；是的话返回它的店主。

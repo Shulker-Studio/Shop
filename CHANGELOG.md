@@ -51,8 +51,8 @@
 - 破坏防护（`src/shop/DestructionProtection.*`、`src/mod/DestructionProtectionHooks.*`）：爆炸 / 活塞 / 凋灵 / 火焰都吞不掉商店箱与商店牌，而旁边的方块照常被炸、被推、被烧。粒度是**方块**：爆炸把商店方块从 `ExplosionStartedEvent::mBlocks` 里剔除、活塞在 `_attachedBlockWalker` 遇到商店方块返回 false、火焰在 `FireBlock::checkBurn` 跳过这一格、凋灵破坏期间由 `Level::$destroyBlock` 逐格拒绝。故意偏离 Java 版（ADR-0004）。
 - 凋灵防护不照搬 ChestLock 的「提前返回」：26.51.8 的 `WitherBoss::_destroyBlocks` 只拿到整个 `AABB`，提前返回等于取消整场破坏（旁的方块也一块不掉），违反 ADR-0004。改成「`_destroyBlocks` 只置一个线程局部的『凋灵正在破坏』标志后放行原版，由 `Level::$destroyBlock` 在标志期内逐格拒绝」——爆炸、玩家拆除、我们主动打商店牌都不受这个标志影响。
 - 拆商店牌**依附的方块**（`ShopBlockTouch::BreakSignSupport`、`src/mod/ContainerFinderBds.*` 的 `shopSignsWithAttachedCell`、`isShopBlockAt`）：拆掉那块墙/桶子/方块会让牌子物理掉落、商店消失，非店主因此能绕过“不能拆牌”。放行条件与拆牌相同（店主与 OP），接在 07 已有的 `PlayerAttackBlockBeforeEvent` / `PlayerDestroyBlockEvent` 监听里（不给同一事件注册第二个监听）；牌挂在石头墙上也算——牌面判据不看附着容器。
-- `src/shop/DestructionProtection.*` 把两个可判定的部分做成纯函数：`cellsToSpare`（哪些目标格子要放过：只放受保护的，其余照炸）与 `signsAttachedTo`（哪些牌附在目标格上：站立看下方、吊牌看上方、墙牌看向背面的反方向）。
-- `tests/shop/DestructionProtectionTest.cpp`（新）：剔除语义与依附几何，共 8 个中文用例；`ContainerProtectionTest.cpp` 补 4 个 `BreakSignSupport` 的用例。
+- `src/shop/DestructionProtection.*` 把两个可判定的部分做成纯函数：`cellsToSpare`（哪些目标格子要放过：只放受保护的，其余照炸；爆炸用它筛方块列表，凋灵/火焰每次只有一格，直接问判据）与 `signsAttachedTo`（哪些牌附在目标格上：站立看下方、吊牌看上方、墙牌看向背面的反方向）。
+- `tests/shop/DestructionProtectionTest.cpp`（新）：剔除语义与依附几何，共 7 个中文用例；`ContainerProtectionTest.cpp` 补 4 个 `BreakSignSupport` 的用例。
 
 ### 变更
 

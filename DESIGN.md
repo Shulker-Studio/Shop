@@ -233,10 +233,10 @@ PlayerEditSignBeforeEvent
 | H2c | `TransportItemsGoal::tick` / `_executeEvent`（`v1_21_100` 的新 AI goal，经 `ChestBlockActor::ChestCloser` 开箱取放） | 铜傀儡从商店箱取货 / 往商店箱放货 | 中（goal 粒度，取消会影响该傀儡的所有运输；也可能误伤同样使用该 goal 的其他生物） |
 | H2d | `DropperBlockActor::pushOutItems(BlockSource&)` | 投掷器往商店箱塞货 | 低 |
 | H3a | `ExplosionStartedEvent::mBlocks`（`TypedStorage<8,64,std::unordered_set<BlockPos>>`），由 `BlockEventCoordinator::sendEvent` 拦截 | 爆炸时把商店方块从方块列表里**剔除**，而不是取消整场爆炸 | 中（同 ChestLock 已验证） |
-| H3b | `PistonBlockActor::_attachedBlockWalker(BlockSource&, BlockPos const&, uchar, uchar)` | 活塞推动路径上遇到商店方块时返回 false（原版语义：这一路推不动） | 中 |
+| H3b | `PistonBlockActor::_attachedBlockWalker(BlockSource&, BlockPos const&, uchar, uchar)` | 活塞推动路径上遇到商店方块时返回 false（原版语义：这一路推不动）。推与拉都走这条移动路径，但「拉动也走它」尚未真机确认（12 有验收项） | 中 |
 | H3c | `WitherBoss::_destroyBlocks(Level&, AABB const&, BlockSource&, int, WitherAttackType)` **只置标志后放行** + `Level::$destroyBlock(BlockSource&, BlockPos const&, bool, BlockChangeContext const&)` 在标志期内逐格拒绝 | 凋灵破坏范围内商店方块逐格留下，其余照常被毁——**不是**提前返回 | 中高（头文件只给整个 `AABB`，逐格剔除只能落在 `Level::destroyBlock` 上；依赖「凋灵的销毁走这条路径」，只能在真机确认） |
 | H3d | `FireBlock::checkBurn(BlockSource&, BlockPos const&, int, IRandom&, int, BlockPos const&)` | 火焰烧到商店方块时跳过这一格，周围照常烧 | 中 |
-| H3e | `PlayerDestroyBlockEvent` + 扫描周围附着的商店牌（对齐 Java `getAttachedSigns`） | **拆掉商店牌依附的方块**会让牌子物理掉落、商店消失，这是非店主绕过"不能拆牌"的真实路径 | 低（逻辑无需引擎内部符号，属于纯判定；与 07 共用同一个监听） |
+| H3e | `PlayerDestroyBlockEvent` + 扫描周围附着的商店牌（对齐 Java `getAttachedSigns`） | **拆掉商店牌依附的方块**会让牌子物理掉落、商店消失，这是非店主绕过"不能拆牌"的真实路径。攻击路径（`PlayerAttackBlockBeforeEvent`）用同一个判据提前拦，免得非店主对着那面墙徒劳地挖 | 低（逻辑无需引擎内部符号，属于纯判定；与 07 共用同一个监听） |
 
 > H3 之所以不用 iListenAttentively 的 `ExplosionBeforeEvent` / `PistonPushBeforeEvent` / `WitherDestroyBeforeEvent` / `FireTryBurnBlockBeforeEvent`，是因为那些事件只能**取消整场**爆炸/推动/燃烧，粒度不对（ADR-0004）。这几条 hook 的符号在 LeviLamina 26.51.8 头文件中均已确认存在，写法参照 ChestLock。
 >
@@ -804,6 +804,7 @@ public:
 40. 铜傀儡走到商店箱旁 → 取不走也放不进。
 41. 投掷器朝商店箱喷物品 → 塞不进去，物品落到地上。
 42. 非店主拆掉商店牌背后那块墙 → 拆不掉（牌子不会掉落）。
+42a. 店主拆掉那面墙 → 可以拆，牌子物理掉落，商店消失（与拆牌等价）。
 
 **边界**
 

@@ -42,15 +42,16 @@ struct ShopBlockSubject {
 /// 把「这一格方块」识别成保护对象。空 = 与商店无关，交给原版。
 ///
 /// 告示牌不是容器，两个分支不会同时命中；牌子优先（DESIGN §9.2：拆牌即关店）。
+/// 「这一格是不是被商店占用」只问 `isShopBlockAt`（那就只有一处口径，08 的四条 hook 也用它）；
+/// 这里只负责在它说「是」之后，把后续判定要用的细节（店主 / 绑着的牌）拿出来。
 std::optional<ShopBlockSubject> shopBlockAt(BlockSource& region, BlockPos const& pos, ShopConfig const& config) {
+    if (!isShopBlockAt(region, pos, config)) {
+        return std::nullopt;
+    }
     if (auto owner = shopSignOwnerAt(region, pos, config)) {
         return ShopBlockSubject{.isSign = true, .signOwner = std::move(*owner)};
     }
-    auto boundSigns = attachedShopSignsAt(region, pos, config);
-    if (boundSigns.empty()) {
-        return std::nullopt;
-    }
-    return ShopBlockSubject{.isSign = false, .boundSigns = std::move(boundSigns)};
+    return ShopBlockSubject{.isSign = false, .boundSigns = attachedShopSignsAt(region, pos, config)};
 }
 
 /// 把「商店牌上记的店主」换成一次判定。身份只由 `shopActorOf` 算（ADR-0005）。

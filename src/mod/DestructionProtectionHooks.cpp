@@ -22,7 +22,7 @@
 #include "mc/world/level/dimension/Dimension.h"
 #include "mc/world/phys/AABB.h"
 
-#include <cstddef>
+#include <iterator>
 #include <type_traits>
 #include <vector>
 
@@ -113,6 +113,9 @@ LL_TYPE_INSTANCE_HOOK(
 /// 所以这里放行原版，由 `Level::destroyBlock` 的守卫在标志期内逐格判定。
 thread_local int gWitherDestroyDepth = 0;
 
+/// 凋灵正在破坏吗。嵌套计数而不是 bool：将来若出现重入，外层没结束前不该提前放开守卫。
+bool witherDestroyInProgress() { return gWitherDestroyDepth > 0; }
+
 struct WitherDestroyScope {
     WitherDestroyScope() { ++gWitherDestroyDepth; }
     ~WitherDestroyScope() { --gWitherDestroyDepth; }
@@ -149,7 +152,7 @@ LL_TYPE_INSTANCE_HOOK(
     bool                      dropResources,
     BlockChangeContext const& changeSourceContext
 ) {
-    if (gWitherDestroyDepth > 0) {
+    if (witherDestroyInProgress()) {
         auto const* config = currentConfig();
         if (config != nullptr && isShopBlockAt(region, pos, *config)) {
             // 这一格不受凋灵影响；同一次破坏里的其他格子继续由原版毁掉
@@ -184,73 +187,61 @@ LL_TYPE_INSTANCE_HOOK(
     origin(region, pos, chance, random, age, firePos);
 }
 
-/// 每一条 hook 是否真的挂上了。手动注册的 hook 没挂上就 `unhook()` 是不对的，
-/// 而 `enable`/`disable` 也不一定成对到达；逐条记账让注册与反注册都变成幂等的，
-/// 也不会在某个符号漂移（注册失败）之后去反注册一个从未挂上的 hook。
-struct HookedHooks {
-    bool explosion  = false;
-    bool piston     = false;
-    bool wither     = false;
-    bool witherCell = false;
-    bool fire       = false;
+/// 一条 hook 的注册/反注册与它的状态。五条 hook 的接线方式完全相同，
+/// 只差一个名字和一对函数，所以用一张表而不是五段同形的 if——加第六条时只加一行。
+struct HookSlot {
+    char const* name;
+    int (*attach)();
+    bool (*detach)();
+    bool attached = false;
 };
 
-HookedHooks gHooked;
+HookSlot gSlots[] = {
+    {"BlockEventCoordinator::sendEvent",
+     [] { return ExplosionStartedHook::hook(); },
+     [] { return ExplosionStartedHook::unhook(); }},
+    {"PistonBlockActor::_attachedBlockWalker",
+     [] { return PistonWalkHook::hook(); },
+     [] { return PistonWalkHook::unhook(); }},
+    {"WitherBoss::_destroyBlocks",
+     [] { return WitherDestroyHook::hook(); },
+     [] { return WitherDestroyHook::unhook(); }},
+    {"Level::destroyBlock",
+     [] { return WitherDestroyCellHook::hook(); },
+     [] { return WitherDestroyCellHook::unhook(); }},
+    {"FireBlock::checkBurn",
+     [] { return FireBurnHook::hook(); },
+     [] { return FireBurnHook::unhook(); }},
+};
 
 } // namespace ss::shop::detail
 
 namespace ss::shop {
 
 void registerDestructionProtectionHooks() {
-    // 返回值非 0 表示符号没挂上（多半是版本漂移）。五条各自独立：
-    // 一条失败不该拖垮另外四条，所以逐条记账、不 early return。
-    auto const tryHook = [](int result, char const* what) {
-        if (result != 0) {
-            Shop::getInstance().getSelf().getLogger().error("破坏防护 hook 注册失败：{}", what);
-            return false;
+    for (auto& slot : detail::gSlots) {
+        // 重复注册 = 同一条路径被拦两次；已经挂上的不重复挂（enable 不该被调两次，这里只是幂等）
+        if (slot.attached) {
+            continue;
         }
-        return true;
-    };
-
-    // 重复注册 = 同一条路径被拦两次；已经挂上的那几条不重复挂。
-    if (!detail::gHooked.explosion) {
-        detail::gHooked.explosion = tryHook(detail::ExplosionStartedHook::hook(), "BlockEventCoordinator::sendEvent");
-    }
-    if (!detail::gHooked.piston) {
-        detail::gHooked.piston = tryHook(detail::PistonWalkHook::hook(), "PistonBlockActor::_attachedBlockWalker");
-    }
-    if (!detail::gHooked.wither) {
-        detail::gHooked.wither = tryHook(detail::WitherDestroyHook::hook(), "WitherBoss::_destroyBlocks");
-    }
-    if (!detail::gHooked.witherCell) {
-        detail::gHooked.witherCell = tryHook(detail::WitherDestroyCellHook::hook(), "Level::destroyBlock");
-    }
-    if (!detail::gHooked.fire) {
-        detail::gHooked.fire = tryHook(detail::FireBurnHook::hook(), "FireBlock::checkBurn");
+        // 返回值非 0 表示符号没挂上（多半是版本漂移）。五条各自独立：
+        // 一条失败不该拖垮其他四条，所以逐条记日志、不 early return。
+        if (slot.attach() != 0) {
+            Shop::getInstance().getSelf().getLogger().error("破坏防护 hook 注册失败：{}", slot.name);
+            continue;
+        }
+        slot.attached = true;
     }
 }
 
 void unregisterDestructionProtectionHooks() {
-    // 只反注册真的挂上了的那几条（注册失败的从来不在）
-    if (detail::gHooked.fire) {
-        detail::FireBurnHook::unhook();
-        detail::gHooked.fire = false;
-    }
-    if (detail::gHooked.witherCell) {
-        detail::WitherDestroyCellHook::unhook();
-        detail::gHooked.witherCell = false;
-    }
-    if (detail::gHooked.wither) {
-        detail::WitherDestroyHook::unhook();
-        detail::gHooked.wither = false;
-    }
-    if (detail::gHooked.piston) {
-        detail::PistonWalkHook::unhook();
-        detail::gHooked.piston = false;
-    }
-    if (detail::gHooked.explosion) {
-        detail::ExplosionStartedHook::unhook();
-        detail::gHooked.explosion = false;
+    // 反注册按注册的逆序来，并且只动真的挂上了的那几条（注册失败的从未挂上）
+    for (auto slot = std::rbegin(detail::gSlots); slot != std::rend(detail::gSlots); ++slot) {
+        if (!slot->attached) {
+            continue;
+        }
+        slot->detach();
+        slot->attached = false;
     }
 }
 

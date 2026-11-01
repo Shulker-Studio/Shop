@@ -24,8 +24,7 @@ constexpr TouchWords wordsOf(ShopBlockTouch touch) {
     case ShopBlockTouch::BreakSign:
         return {"商店牌", "拆掉", "这块牌"};
     case ShopBlockTouch::BreakSignSupport:
-        // 拆依附方块时说“这块方块上挂着……商店牌”，所以主语是牌子本身，
-        // 宾语用不上（整句由 `supportBlockMessage` 拼）。
+        // 拆依附方块时说“这块方块上挂着……商店牌”；主语是牌子，宾语是那块方块本身。
         return {"商店牌", "拆", "这块方块"};
     }
     return {"商店箱", "打开", "这个箱子"};
@@ -83,6 +82,7 @@ std::string supportBlockMessage(ShopActor actor, std::string const& ownerName, b
     bool const operatorOnly = adminShop || actor == ShopActor::NoRecordedOwner;
     message += (operatorOnly ? "；只有 OP 能" : "；只有店主（或 OP）能");
     message += std::string(words.verb);
+    message += std::string(words.object);
     return message;
 }
 
