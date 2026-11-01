@@ -1,11 +1,13 @@
 #pragma once
 
 #include "shop/ContainerFinder.h"
+#include "shop/DiscardRecord.h"
 #include "shop/TradePlan.h"
 
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <vector>
 
 class BlockPos;
 class BlockSource;
@@ -32,6 +34,12 @@ struct TradeResult {
     /// 实际（`NeedsConfirm` 时是待确认的）成交方案：份数、件数、金额。
     TradePlan   plan;
     std::string message; ///< 发给玩家的中文提示；`NeedsConfirm` 时是确认表单的正文
+    /// 这一次被销毁的物品堆的留档（管理员店卖出方向，票 02）。
+    ///
+    /// 记录在 `Done` **之前**造好（SNBT 只有那一刻读得到），落盘在 `Done` **之后**由
+    /// `finishTrade` 做：留档失败只 warn，绝不能把一笔已经成交的生意判成失败
+    /// （`p1-transaction-log` spec D5）。普通店与买入方向留空。
+    std::vector<DiscardRecord> discarded;
 
     [[nodiscard]] bool done() const { return status == TradeStatus::Done; }
     [[nodiscard]] bool needsConfirm() const { return status == TradeStatus::NeedsConfirm; }

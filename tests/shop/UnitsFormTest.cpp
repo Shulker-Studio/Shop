@@ -120,7 +120,7 @@ TEST_CASE("卖表单正文：管理员店不把「店主余额」写进限额来
 
     auto const content = unitsFormContent(TradeDirection::Sell, data, makeUnitsFormModel(2));
     CHECK_FALSE(hasLine(content, "店主余额"));
-    CHECK(hasLine(content, "这次最多卖：2 份（受你手里的货、商店箱空间与单次上限限制）"));
+    CHECK(hasLine(content, "这次最多卖：2 份（受你手里的货与单次上限限制）"));
 }
 
 TEST_CASE("表单正文：没有余额时不编造数字") {
@@ -268,4 +268,16 @@ TEST_CASE("份数表单正文：卖出方向仍是玩家手里的数字，货没
     auto const content = unitsFormContent(TradeDirection::Sell, admin, makeUnitsFormModel(3));
     CHECK(hasLine(content, "你手里有：3 份"));
     CHECK_FALSE(hasLine(content, "你手里有：无限"));
+}
+
+TEST_CASE("卖表单正文：管理员店的箱空间写「无限」，不写「还能装 0 份」") {
+    auto admin         = sampleShop();
+    admin.adminShop    = true;
+    admin.boxRoomUnits = StockView::makeUnlimited();
+
+    auto const content = unitsFormContent(TradeDirection::Sell, admin, makeUnitsFormModel(3));
+    CHECK(hasLine(content, "商店箱还能装：无限（管理员店，永远收得下）"));
+    CHECK_FALSE(hasLine(content, "商店箱还能装：0 份"));
+    // 上限来源里也不该再列一项不存在的限制
+    CHECK(hasLine(content, "这次最多卖：3 份（受你手里的货与单次上限限制）"));
 }

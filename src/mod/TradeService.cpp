@@ -2,11 +2,13 @@
 
 #include "mod/Clock.h"
 #include "mod/ContainerFinderBds.h"
+#include "mod/DiscardLog.h"
 #include "mod/EconomyService.h"
 #include "mod/DebugLog.h"
 #include "mod/Shop.h"
 #include "mod/ShopForm.h"
 #include "mod/ShopService.h"
+#include "mod/WallClock.h"
 #include "shop/ShopInfo.h"
 #include "shop/TradeGate.h"
 #include "shop/TradePlan.h"
@@ -201,7 +203,18 @@ bool holdsSimilarItem(Inventory& inventory, ItemStack const& product) {
 ///
 /// 凑不够就返回 false，调用方按快照把容器写回去（本函数自己不管补偿）。
 /// 买入从商店箱扣、卖出从玩家背包扣，所以容器是参数而不是写死的那一个。
-bool takeMatchingItems(Container& primary, Container* secondary, int slots, ItemStack const& product, int items) {
+///
+/// `taken` 非空时把「扣下来的那几个堆」各复制一份塞进去：管理员店卖出方向的货要被**销毁**，
+/// 而销毁之后再没有任何地方能读到它——SNBT 留档只能靠这一份副本（票 02）。
+/// 买入方向传空：那些货是发给玩家的，不销毁，也没有留档可言。
+bool takeMatchingItems(
+    Container&              primary,
+    Container*              secondary,
+    int                     slots,
+    ItemStack const&        product,
+    int                     items,
+    std::vector<ItemStack>* taken = nullptr
+) {
     int remaining = items;
     for (auto const& slot : mergedSlots(primary, secondary, slots)) {
         if (remaining <= 0) {
@@ -213,6 +226,11 @@ bool takeMatchingItems(Container& primary, Container* secondary, int slots, Item
         }
         // 先算再改：`removeItem` 之后 `stack` 的引用就不能再读了。
         int const take = std::min(static_cast<int>(stack.mCount), remaining);
+        if (taken != nullptr) {
+            ItemStack copy = stack;
+            copy.set(take); // 被扣走的那部分才是「被销毁的物品堆」
+            taken->push_back(std::move(copy));
+        }
         slot.container->removeItem(slot.slot, take);
         remaining -= take;
     }
@@ -567,10 +585,14 @@ PreparedTrade prepareSell(BlockSource& region, Cell const& sign, Player& seller,
     auto const strictCount = static_cast<int>(std::min<std::int64_t>(strictItems, std::numeric_limits<int>::max()));
     // 卖出方向的「货」是玩家背包里的实物，**永远有限**：把它当无限 = 凭空给玩家复制物品。
     // 无限只属于管理员店那一侧的模板箱（买入方向，见 `readShop` 与 `buyUnits`）。
-    int const heldUnits        = unitsFromItems(strictCount, context.shop.info.amountPerUnit);
-    int const boxRoomUnits     = shopBoxUnits(context.container, context.product, context.shop.info.amountPerUnit);
+    int const heldUnits = unitsFromItems(strictCount, context.shop.info.amountPerUnit);
+    // 管理员店收进来的货是**销毁**的（票 02）：箱子不是收货方，所以「还能装几份」不存在。
+    // 普通店照旧算商店箱（双箱按合并顺序）还能装几份。
+    StockView const boxRoomUnits =
+        adminShop ? StockView::makeUnlimited()
+                  : StockView::makeFinite(shopBoxUnits(context.container, context.product, context.shop.info.amountPerUnit));
     context.request.goodsUnits = StockView::makeFinite(heldUnits);
-    context.request.roomUnits  = StockView::makeFinite(boxRoomUnits);
+    context.request.roomUnits  = boxRoomUnits;
 
     // 「我手里根本没有」与「我手里有钻石剑但不是这一把」得分开说（DESIGN §5.3 的严格同种）。
     // 只有严格同种一件都没有时才怀疑「货不对」；有 63 个差一个满一份的，原因就是不够一份。
@@ -814,6 +836,9 @@ void finishTrade(Player& player, Cell const& sign, TradeDirection direction, Tra
     }
     player.sendMessage(result.message);
     if (result.done()) {
+        // 管理员店卖出销毁的货留档（`p1-transaction-log` spec D5）。写失败只 warn：
+        // 交易已经成交，留档不是它的一部分——不许因为磁盘满了把一笔生意判成失败。
+        writeDiscardRecords(result.discarded);
         Shop::getInstance().getSelf().getLogger().debug(
             "{} 在 ({}, {}, {}) {}了 {} 份，金额 {}{}",
             player.getXuid(),
@@ -1023,7 +1048,18 @@ TradeResult sellUnits(
     // 箱子还没多），这是一段「丢失窗口」而不是「复制窗口」，退路是快照回写 + 退款。
     // 反过来先塞箱子再扣背包，中间那一刻就是同一件货既在箱子里又在背包里——那才是复制。
     Inventory& inventory = seller.getInventory();
-    if (!takeMatchingItems(inventory, nullptr, inventory.getContainerSize(), context->product, plan.items)) {
+    // 管理员店：取出来的货不进箱子，直接销毁（票 02）。销毁之前先把这些堆**复制**一份留着，
+    // 因为 `removeItem` 之后箱子与背包里都没有它们了，SNBT 只能从这份副本读。
+    std::vector<ItemStack> destroyed;
+    if (!takeMatchingItems(
+            inventory,
+            nullptr,
+            inventory.getContainerSize(),
+            context->product,
+            plan.items,
+            info.adminShop ? &destroyed : nullptr
+        )) {
+        // 取货失败（背包在他打开表单之后变少了）：快照把背包写回、退款，一件也不会被销毁。
         return undoAndRefund(
             frame,
             /*restoreBackpack=*/true,
@@ -1034,7 +1070,8 @@ TradeResult sellUnits(
 
     // 箱子装不下时整笔退回：容量的偏差只可能来自「算完之后箱子又变了」，
     // 所以先把背包与箱子都按快照写回，再退款。
-    if (!putItemsIntoShopBox(context->container, context->product, plan.items)) {
+    // 管理员店没有这一步：货是销毁的，永远「收得下」，模板箱也一件不动。
+    if (!info.adminShop && !putItemsIntoShopBox(context->container, context->product, plan.items)) {
         return undoAndRefund(
             frame,
             /*restoreBackpack=*/true,
@@ -1050,7 +1087,17 @@ TradeResult sellUnits(
     }
 
     seller.sendInventory(true);
-    refreshShopBox(region, context->container);
+    if (!info.adminShop) {
+        refreshShopBox(region, context->container); // 管理员店的箱子一个字都没动
+    }
+
+    // 留档在 `Done` 之前造好（SNBT 只有这一刻读得到），落盘在 `Done` 之后（见 `finishTrade`）。
+    // 走到这里所有步骤都成功了，所以 `destroyed` 里这些堆确实已经离开玩家的背包。
+    std::vector<DiscardRecord> discarded;
+    if (info.adminShop) {
+        discarded = describeDiscardedItems(nowIso8601Local(), seller.getDimensionId(), sign, seller, destroyed);
+        destroyed.clear(); // 销毁：从此没有任何地方还持有这些物品
+    }
 
     std::string message =
         "卖出 " + std::to_string(plan.units) + " 份 " + info.itemName + "（共 " + std::to_string(plan.items) + " 个）";
@@ -1058,12 +1105,12 @@ TradeResult sellUnits(
         message += "，收入 " + moneyText(info.currencySymbol, plan.total);
     }
     if (plan.units < submission.units) {
-        // 部分成交：如实说清原因（DESIGN §10.3）。管理员店的钱没有上限，不写「店主的钱」。
-        message += info.adminShop
-                     ? "（你手里的货或商店箱空间不够，只成交了 " + std::to_string(plan.units) + " 份）"
-                     : "（你手里的货、店主的钱或商店箱空间不够，只成交了 " + std::to_string(plan.units) + " 份）";
+        // 部分成交：如实说清原因（DESIGN §10.3）。管理员店的钱与箱空间都没有上限，只有你手里的货。
+        message += info.adminShop ? "（你手里的货不够，只成交了 " + std::to_string(plan.units) + " 份）"
+                                  : "（你手里的货、店主的钱或商店箱空间不够，只成交了 " + std::to_string(plan.units)
+                                        + " 份）";
     }
-    return {.status = TradeStatus::Done, .plan = plan, .message = std::move(message)};
+    return {.status = TradeStatus::Done, .plan = plan, .message = std::move(message), .discarded = std::move(discarded)};
 }
 
 void requestBuyForm(Player& viewer, Cell const& sign) {

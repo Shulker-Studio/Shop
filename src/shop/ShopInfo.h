@@ -31,7 +31,8 @@ struct ShopInfoData {
     /// 与 `balance` 一样是「谁在看」的属性，由调用方填；信息表单不显示它。
     int heldUnits = 0;
     /// 商店箱还能装下几份商品（卖出方向的容量）。只有卖出表单显示它。
-    int boxRoomUnits = 0;
+    /// 管理员店的模板箱收进来的货是销毁的（票 02），所以它是 `makeUnlimited()`：永远收得下。
+    StockView boxRoomUnits;
     /// 店主的余额（卖出方向真正的限额来源）。空 = 读不到 / 这一笔是免费收。
     std::optional<std::int64_t> ownerBalance;
     /// 余额。空 = **读不到**（没有可用后端，或后端没给出这个账户的余额），
@@ -53,6 +54,12 @@ std::string moneyText(std::string const& symbol, std::int64_t amount);
 /// 表单正文里凡是显示「库存 / 还剩几份」的地方都走它：一处写「无限」、一处写数字
 /// 是最容易被读成「其实只剩几份」的两种真相（DESIGN §10.1 D2）。
 std::string stockUnitsText(StockView const& stock);
+
+/// 收货方空间的文本：`7 份` / `无限（管理员店，永远收得下）`。
+///
+/// 与 `stockUnitsText` 共用同一个「有限写份数、无限不编数字」的实现，只有无限时那句括号里
+/// 的解释不同——卖出方向的「无限」是**收得下**（货被销毁），不是「有货」。
+std::string boxRoomText(StockView const& stock);
 
 /// 这个方向上「一份」的价格：买入看 `buyPrice`，卖出看 `sellPrice`（DESIGN §10.1）。
 ///

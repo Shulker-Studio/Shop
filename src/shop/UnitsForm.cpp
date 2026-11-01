@@ -67,7 +67,9 @@ Wording const& wordingOf(TradeDirection direction) {
 /// DESIGN §7.4），所以按店的性质换一句——不能把不存在的上限摆给玩家看。
 std::string capHintOf(ShopInfoData const& data, TradeDirection direction) {
     if (direction == TradeDirection::Sell && data.adminShop) {
-        return "（受你手里的货、商店箱空间与单次上限限制）";
+        // 管理员店收进来的货是销毁的（票 02），箱空间不是上限；店主余额也不存在（§7.4）。
+        // 剩下的才是真的：你手里的货、单次上限。
+        return "（受你手里的货与单次上限限制）";
     }
     return wordingOf(direction).capHint;
 }
@@ -148,7 +150,7 @@ std::string unitsFormContent(TradeDirection direction, ShopInfoData const& data,
     if (direction == TradeDirection::Sell) {
         // 卖出那三个上限中另两个（§10.3）：箱子还能装多少、店主付得起多少。
         // 买入侧的对应两行是「商店箱里的货还够」与「余额」。
-        append("商店箱还能装：" + std::to_string(data.boxRoomUnits) + " 份");
+        append("商店箱还能装：" + boxRoomText(data.boxRoomUnits));
         if (data.ownerBalance) {
             append("店主余额：" + moneyText(data.currencySymbol, *data.ownerBalance));
         }

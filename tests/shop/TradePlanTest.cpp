@@ -631,3 +631,52 @@ TEST_CASE("无限库存：模板箱有货也不靠「几份」说话，缺货不
 
     CHECK(planTrade(request).rejection == TradeRejection::NoRoomToReceive);
 }
+
+TEST_CASE("无限收购：商店箱空间不参与上限，玩家手里的货与店主余额照旧") {
+    auto request       = soundSell();
+    request.requested  = 4;
+    request.goodsUnits = StockView::makeFinite(10);   // 玩家手里有 10 份
+    request.roomUnits  = StockView::makeUnlimited();  // 管理员店：收进来就销毁，永远收得下
+    request.payerFunds = 100;
+
+    auto const decision = planTrade(request);
+    REQUIRE(decision.ok());
+    CHECK(decision.plan->units == 4);
+
+    // 玩家手里的货是硬的（无限化它就是复制物品）
+    request.goodsUnits = StockView::makeFinite(2);
+    auto const shortGoods = planTrade(request);
+    REQUIRE(shortGoods.ok());
+    CHECK(shortGoods.plan->units == 2);
+
+    // 店主余额也是硬的（管理员店没有这一项，普通店有）：9 块钱连一份（5）都付不起
+    request.goodsUnits = StockView::makeFinite(10);
+    request.payerFunds = 4;
+    CHECK(planTrade(request).rejection == TradeRejection::NotEnoughFunds);
+}
+
+TEST_CASE("无限收购：玩家手里没有货仍然被拒，「收得下」不能顶替「没有货」") {
+    auto request       = soundSell();
+    request.goodsUnits = StockView::makeFinite(0);
+    request.roomUnits  = StockView::makeUnlimited();
+    request.payerFunds = 100;
+
+    CHECK(planTrade(request).rejection == TradeRejection::NotEnoughGoods);
+}
+
+TEST_CASE("无限收购：关闭部分成交时不会被报成「商店箱装不下」") {
+    auto request         = soundSell();
+    request.requested    = 4;
+    request.goodsUnits   = StockView::makeFinite(2);
+    request.roomUnits    = StockView::makeUnlimited();
+    request.allowPartial = false;
+
+    CHECK(planTrade(request).rejection == TradeRejection::NotEnoughGoods);
+}
+
+TEST_CASE("无限收购：maxTradeUnits 里箱空间那一项不存在") {
+    // 上限 = min(天花板 100, 手里的 10 份, 箱空间无限, 1000 / 5 = 200 份) = 10
+    CHECK(maxTradeUnits(100, StockView::makeFinite(10), StockView::makeUnlimited(), 5, 1000) == 10);
+    CHECK(maxTradeUnits(100, StockView::makeFinite(10), StockView::makeUnlimited(), 5, 1) == 0);
+    CHECK(maxTradeUnits(100, StockView::makeFinite(3), StockView::makeUnlimited(), 5, 1000) == 3);
+}

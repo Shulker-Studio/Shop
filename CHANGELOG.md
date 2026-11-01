@@ -125,6 +125,19 @@
   卖出方向的 `heldUnits` 仍是有限（无限化就是复制物品），商店箱空间这一项留给票 02。
   余额、`maxShopAmount`、背包空间三个上限在无限下照旧生效。
 
+### 变更（P1 票 02：管理员店卖出无限 + 销毁留档）
+
+- `ShopInfoData::boxRoomUnits` 换成 `StockView`：管理员店的模板箱是 `makeUnlimited()`（收进来的货销毁，
+  永远收得下），普通店仍是准确数字。表单的「商店箱还能装」行与上限来源同理，不再列一项不存在的限制。
+- 卖出执行路径对管理员店跳过「放进箱子」这一步：先给钱、再从背包取货、销毁、完成；模板箱与样品槽一件不动。
+  补偿与普通店同一套（取货失败 → 背包快照回写 + 退款；补偿失败 → fatal + 通知 OP + 冻结）。
+- 新增纯逻辑 `DiscardRecord`（`src/shop/DiscardRecord.h`）：一行一个被销毁物品堆的 NDJSON，
+  键序固定 `ts` / `shop` / `player` / `item{id,aux,name,nbt}`，字符串转义与 UTF-8 原样写都有单测。
+- 新增 `src/mod/WallClock.*`（本地 ISO-8601 带时区偏移）与 `src/mod/DiscardLog.*`：
+  SNBT 用 `ItemStack::save(SaveContext{Clone})->toString()` 生成，记录在 `Done` 之前造好、
+  在 `finishTrade` 里 `Done` 之后落盘到 `plugins/Shop/logs/discarded-YYYY-MM-DD.jsonl`；写失败只 warn。
+  （`transactionLog.enabled` 这个开关属于 `p1-transaction-log`，等它落地后接管这条通道。）
+
 ### 修复
 
 - **告示牌没有「除蜡」这回事**：早期把 Java 版铜块的规则套到了告示牌上，判出「斧头 = 除蜡」并在提示里教玩家「先拿斧头除蜡才能改」。实际原版告示牌上蜡后没有任何去除手段（Mojira MC-261313 判 Works As Intended；Wiki 写「若要修改则需破坏后重新放置」），
