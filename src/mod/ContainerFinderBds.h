@@ -1,6 +1,7 @@
 #pragma once
 
 #include "mod/Config.h"
+#include "mod/ShopOwner.h"
 #include "shop/ContainerFinder.h"
 
 #include <cstdint>
@@ -121,5 +122,32 @@ Cell     toCell(BlockPos const& pos);
 /// 「已被别的牌绑定」的检查不会把它自己算成冲突。
 ContainerLookup
 inspectAttachedContainer(BlockSource& region, BlockPos const& signPos, ContainerLookupOptions const& options);
+
+/// 绑在一块容器上的商店牌：几何（拆牌用坐标）+ 店主（保护判定用）。
+struct AttachedShopSign {
+    SignRef   sign;
+    ShopOwner owner;
+};
+
+/// 反查：这一格容器被哪些商店牌绑着（DESIGN §9.3）。
+///
+/// 方向与 `inspectAttachedContainer` 相反——那个是「牌子 → 容器」，这个是「容器 → 牌子」。
+/// 单箱只看自己六面，双箱连另一半的六面一起看。返回空 = 这一格不是商店箱
+/// （普通箱子、不是容器、没有商店牌绑着都返回空）。
+///
+/// 两处刻意的宽松，与 `inspectAttachedContainer` 不同：
+/// - **不看 `shopContainers` 白名单**：改配置不该让一个已经存在的商店箱失去保护；
+/// - **牌面用 `looksLikeShopSign`（像商店）而不是 `ok()`**：调小 `maxShopAmount`、
+///   改 `adminShopName`、外部工具写脏数据，都不该让保护整体失效（DESIGN §9.2）。
+///
+/// 只读取：不写方块、不发消息。
+std::vector<AttachedShopSign>
+attachedShopSignsAt(BlockSource& region, BlockPos const& containerPos, ShopConfig const& config);
+
+/// 这一格告示牌是不是一块商店牌；是的话返回它的店主。
+///
+/// 判据与容器保护一致：只看正面文本「像不像商店牌」，不看附着容器
+/// （DESIGN §9.2：箱子被拆了牌面仍然受保护）。普通告示牌返回空。
+std::optional<ShopOwner> shopSignOwnerAt(BlockSource& region, BlockPos const& signPos, ShopConfig const& config);
 
 } // namespace ss::shop

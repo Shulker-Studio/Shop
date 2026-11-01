@@ -25,10 +25,11 @@ enum class ShopActor : std::uint8_t {
 /// 牌上记的 XUID 只是当时创建它的那个 OP，他被撤权之后不该继续当店主。
 ShopActor shopActorOf(std::string_view recordedOwnerXuid, std::string_view actorXuid, bool actorIsOp, bool adminShop);
 
-/// 能不能拿到管理入口（点牌时的表单角色）。
+/// 「管理身份」：店主与 OP。点牌时的表单管理入口、拆箱/拆牌共用这个判据，
+/// 所以它回答的是「这个人对这家店算不算管理者」，不是某一个按钮。
 ///
-/// **fail-closed**：管理入口只给店主与 OP。记录不到店主时不给任何人——一个查不到主人的
-/// 店不该把「管理商店」按钮发给路过的每一个人。
+/// **fail-closed**：记录不到店主时谁都没有管理身份——一个查不到主人的店不该把
+/// 「管理商店」按钮发给路过的每一个人，也不该让任何人搬走库存。
 bool canManageShop(ShopActor actor);
 
 /// 能不能改这块商店牌的正面文本（DESIGN §9.2）。

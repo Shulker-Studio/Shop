@@ -42,6 +42,9 @@ struct ShopConfig {
     bool                     allowPartialTransactions    = true;
     /// 创造模式玩家不参与交易（DESIGN §10.4）。
     bool                     ignoreCreativeMode          = true;
+    /// 店主能不能打开自己的商店箱（DESIGN §9.2 / §15）。关掉后连店主也只能找 OP，
+    /// 但**不影响拆箱**：拆掉箱子本来就是店主的权利（拆了即关店）。
+    bool                     allowOwnerOpenChest        = true;
     /// 同一玩家对同一块商店牌的连点冷却（毫秒），对齐 DESIGN §10.4。
     int                      shopInteractionCooldownMs   = 250;
     EconomyConfig            economy;

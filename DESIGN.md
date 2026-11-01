@@ -248,7 +248,7 @@ PlayerEditSignBeforeEvent
 | `ila::mc::world::actor::player::PlayerEditSignAfterEvent` | 牌子已更新后的通知：按 Before 阶段定下的归属写回 ownerID（DESIGN §5.4） | 否 |
 | `ila::mc::world::actor::player::PlayerOpenContainerBeforeEvent` | 阻止非店主开商店箱；`pos` / `containerType` / `containerActorId` 齐全 | 是 |
 | `ila::mc::world::actor::player::PlayerAttackBlockBeforeEvent` | 左键点方块（可做"左键=卖"，也用于提前拦截拆牌） | 是 |
-| `ila::mc::world::actor::player::PlayerDestroyBlockEvent`（LL 原生） | 拆牌/拆箱保护 | 是 |
+| `ll::event::player::PlayerDestroyBlockEvent`（LL 原生） | 拆牌/拆箱保护；放行拆商店箱时先按原版语义打掉绑在上面的商店牌（双箱拆一半也要掉） | 是 |
 | `ila::mc::world::ChestPairWithBeforeEvent` | 双箱配对时校验两半归属 | 是 |
 | `ila::mc::world::ExplosionBeforeEvent` | 爆炸保护（`explosion()` 可取受影响方块） | 是 |
 | `ila::mc::world::PistonPushBeforeEvent` | 活塞推商店箱/牌 | 是 |
@@ -519,7 +519,7 @@ public:
 
 ### 9.1 保护对象
 
-被至少一块有效商店牌连接的容器（含双箱两半）以及这些商店牌本身。
+被至少一块商店牌（正面**像**商店牌，判据见 §9.3）连接的容器（含双箱两半）以及这些商店牌本身。
 
 ### 9.2 规则
 
@@ -543,6 +543,13 @@ public:
 
 > 破坏保护是**方块级**而非整事件取消：只让商店箱免疫，旁边的方块照常被炸掉或被活塞推动。这一条**故意偏离 Java 版**（Java 一旦命中受保护方块就取消整场爆炸/推动），理由见 ADR-0004。
 
+**开箱与拆除**（表格里那三行）的落地口径（07）：
+
+- 开箱只看配置 `allowOwnerOpenChest`（默认 true）：店主可关，OP 恒可；关掉时连店主也只能找 OP，但**不影响拆箱**——拆掉箱子本来就是店主的权利。
+- 拆箱与拆牌都是「店主与 OP」。拆牌即关店；拆箱连带关店。
+- 拆商店箱（双箱任意一半都算）时，先按原版语义把绑在上面的商店牌打掉（有掉落），商店随之失效。拆的若是**不**挨着牌子的那一半，另一半还在、牌子不会因失去支撑而自己掉落，这一步必须显式做（§13 第 34 条）。
+- 普通箱子、普通告示牌不在判定内：开箱、攻击、拆除都交给原版。
+
 「编辑商店牌文本」有两道闸：交互阶段取消 `PlayerInteractBlockEvent`（非店主连编辑界面都弹不出来），提交阶段在 `PlayerEditSignBeforeEvent` 里再判一次（非店主提交一律丢弃这个包）。后者是防绕过：别的模组、取消语义失效、以后从管理表单进编辑，都不该让改牌生效。
 
 有一个例外：**牌还在、但店停摆了**（附着格不再是可用容器，或牌面已经不严格合法）。这时没有表单可弹：能进原版编辑界面的判据与提交阶段相同（`mayEditShopSignText`），其余人被拦下并被告知停摆的原因（「商店箱不在了」/「写法现在不算有效商店」）——不能把编辑界面递给非店主，哪怕提交阶段还会兜底。
@@ -555,13 +562,14 @@ public:
 - **用「像商店」而不是「现在严格合法」**：`looksLikeShopSign`（第 3 行有 B/S 且第 1 行非空，即 `ok()` 或错误不是「不像商店牌」），不是 `ok()`。把 `maxShopAmount` 调小、把 `adminShopName` 改名、或者牌子是外部工具写的脏数据，都不应该让保护整体失效。
 - **两道闸，不是一道**：非店主不放（`mayEditShopSignText`），上了蜡的牌连店主与 OP 也不放（“先除蜡”）。上蜡是一道对所有人的闸，因此与“你是谁”分开算。
 
-判定只看店主 XUID 这一个真相源（ADR-0005），OP 放行。**记录不到店主 XUID 时三处口径不同，故意如此**：
+判定只看店主 XUID 这一个真相源（ADR-0005），OP 放行。**记录不到店主 XUID 时四处口径不同，故意如此**：
 
 | 场景 | 无主牌（记录缺失） | 理由 |
 | --- | --- | --- |
 | 改牌面文本 | 放行（fail-open） | 记录缺失的牌不该因此永久锁死；代价是被第一个改它的人接手（§5.4） |
 | 表单管理入口 | 不给（fail-closed） | 一个查不到主人的店不该把「管理商店」按钮发给路过的每个人 |
 | 染色 / 墨囊 / 上蜡 / 除蜡 | 只给 OP | 这些改的是牌子本身，不是归属；没有必要为异常牌开一个装饰口 |
+| 开箱 / 拆箱 / 拆牌 | 只给 OP（fail-closed） | 动的是库存与方块本身；查不到主人不该等于「谁都能搬」 |
 
 物品类操作（染色 / 墨囊 / 上蜡 / 除蜡）**与玩家站在哪一面无关**：上蜡改的是整块牌子，站在背面刷一下就能把店主的编辑权限冻住，所以判定只看「这一格是不是商店牌」。文字则不同，背面仍是布告板（§5.5）。
 
@@ -573,8 +581,9 @@ public:
 
 ### 9.3 判定"这个方块是否被商店占用"
 
-- 方块本身是有效商店牌 → 是。
-- 方块是容器 → 查它六个相邻面（以及双箱另一半的六个相邻面）是否存在有效商店牌，且该牌连到的容器正是它 → 是。
+- 方块本身是商店牌（正面文本像商店牌，`looksLikeShopSign`）→ 是。
+- 方块是容器 → 查它六个相邻面（以及双箱另一半的六个相邻面）是否存在商店牌，且该牌**附着的正是它** → 是。反查只看附着格，不扫别的邻居（与 §7.1 同一条规则）。
+- 保护判定用「像商店」而不是「现在严格合法」，也**不看 `shopContainers` 白名单**：改配置、把 `maxShopAmount` 调小、牌子是外部工具写的脏数据，都不该让一个已经存在的商店箱失去保护（理由同 §9.2 的牌面防护）。
 - 判定为纯读取，无缓存，失败即放行（不误伤普通箱子）。
 
 ---
@@ -772,10 +781,12 @@ public:
 **保护**
 
 30. 非店主开商店箱 → 打不开。
+30a. 店主开自己的商店箱 → 能开；把 `allowOwnerOpenChest` 改成 `false` 后店主也打不开（提示指向这个开关），OP 仍然能开。
 31. 非店主拆商店箱 → 拆不掉。
 32. 非店主拆商店牌 → 拆不掉。
 33. 店主拆牌 → 成功，箱子恢复普通箱子。
-34. 拆掉双箱一半 → 商店失效，牌子物理掉落。
+34. 拆掉双箱一半 → 商店失效，牌子物理掉落（两半各试一次：挨着牌子的那一半、以及不挨着的那一半）。
+34a. 普通箱子与普通告示牌不受影响：开箱、攻击、拆除都照常。
 35. TNT 在商店箱旁爆炸 → **商店箱幸存，旁边的方块照常被炸掉**。
 36. 活塞推商店箱 → 推不动；推旁边的方块 → 正常推动。
 37. 凋灵破坏 / 火焰 → 商店箱不受影响。
@@ -815,6 +826,9 @@ public:
 | 侧挂的悬挂牌无法从状态判定墙面 | 已知，P0 不支持 | 基岩把两种悬挂形态合并成一个方块 ID，侧挂时 `facing_direction` 与墙面垂直；猜错会误绑旁边的箱子 |
 | 上蜡状态读取 | 已确认字段 | `SignBlockActor::mIsWaxed`（bool），无 xuid 记录 |
 | 并发/线程安全 | 待验证 | 表单回调切主线程执行方块操作 |
+| 拆箱时手动打掉商店牌 | 待实测 | 在 `PlayerDestroyBlockEvent` 里调 `Level::destroyBlock` 毁牌；确认不会与原版物理/双箱处理重复掉落，且 `dropResources = true` 仍尊重 `doTileDrops` / 创造模式（验收第 34 条顺手看） |
+| `PlayerDestroyBlockEvent` 的触发时机 | 待实测 | 事件里能否读到 `ChestBlockActor::mLargeChestPaired`；若方块先被移除再发事件，反查会拿到空列表 → 商店箱静默放行、手动打牌也不执行（12 有验收项）。手动打牌是不可回滚的副作用：我们自己打完牌后若另一个监听取消了这次拆除，会留下「牌已掉、箱子还在」 |
+| 「贴牌占箱子」 | 已知，P0 接受 | 保护从牌子推导（ADR-0002），P0 不记录箱子原主；任何人给尚未绑定的箱子贴一块像商店的牌，就能把它变成自己的商店箱，原主只能找 OP。与 Java 版 ChestShop 同为生态行为，P1 可考虑开店收费 / 领地插件 |
 
 ## 15. 配置草案
 
@@ -848,6 +862,14 @@ public:
   }
 }
 ```
+
+> 草案里的键随对应 ticket 落地。没有被实现读取的键（`protectShopChest`、`preventHopperExtraction`、
+> `allowMultipleShopsAtOneBlock`、`allowOneContainerPerShop`、`itemNameLocalized`、`removeInvalidShopSign`、
+> `dropSignOnCreationFailure`、`economy.createObjectiveIfMissing`、`economy.requireOwnerOnline`、`tax` 等）
+> 目前**不生效**——写进 `config.json` 也不会改变行为。已生效的键：`adminShopName`、`shopContainers`、
+> `maxShopAmount`、`allowPartialTransactions`、`blockSellPriceHigherThanBuy`、`allowOwnerOpenChest`、
+> `shopInteractionCooldownMs`、`ignoreCreativeMode`、`economy.backend`、`economy.scoreboardObjective`、
+> `economy.currencySymbol`。
 
 ---
 

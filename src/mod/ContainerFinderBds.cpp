@@ -154,6 +154,34 @@ ItemStack const* firstNonEmptyStack(Container& primary, Container* secondary, in
     return product;
 }
 
+/// 把容器两半合成一个 `ContainerRef`，并带上要读写物品的两个指针。不看白名单。
+struct ContainerAt {
+    ContainerRef ref;
+    Container*   primary   = nullptr;
+    Container*   secondary = nullptr;
+};
+
+/// 这一格的容器本体（双箱已合并）。不是容器方块返回空。
+std::optional<ContainerAt> containerAt(BlockSource& region, BlockPos const& pos) {
+    auto* actor = region.getBlockEntity(pos);
+    if (actor == nullptr
+        || (!actor->isTypeOrDerived(BlockActorType::Chest) && !actor->isTypeOrDerived(BlockActorType::BarrelBlock))) {
+        return std::nullopt;
+    }
+
+    // `BarrelBlockActor` 本身派生自 `ChestBlockActor`（mc/world/level/block/actor/BarrelBlockActor.h），
+    // 所以这个向下转型对木桶也合法；木桶永远不会配对，双箱分支自然走不到。
+    auto*        chest     = static_cast<ChestBlockActor*>(actor);
+    Container*   secondary = nullptr;
+    ContainerRef ref{toCell(pos), chest->getContainerSize(), std::nullopt};
+    if (auto* paired = chest->mLargeChestPaired) {
+        secondary     = paired;
+        ref.pairedPos = toCell(chest->mLargeChestPairedPosition);
+        ref.size      += secondary->getContainerSize();
+    }
+    return ContainerAt{ref, chest, secondary};
+}
+
 /// 这一格上的牌是不是「合法商店牌」。只有合法商店牌才算占用了容器。
 bool isShopSign(BlockSource& region, BlockPos const& pos, ShopSignConfig const& signConfig) {
     auto* sign = signBlockActorAt(region, pos);
@@ -163,24 +191,48 @@ bool isShopSign(BlockSource& region, BlockPos const& pos, ShopSignConfig const& 
     return isShopSignFront(*sign, signConfig);
 }
 
+/// 这一格上的告示牌如果「像商店牌」，返回它的店主（DESIGN §9.2 的保护判据）。
+///
+/// 与 `isShopSign`（现在严格合法）故意不同：只看正面文本**像不像**商店牌，
+/// 不看附着容器。改配置、脏数据、箱子被拆掉，都不该让商店牌失去保护。
+std::optional<ShopOwner> shopSignOwnerHere(BlockSource& region, BlockPos const& pos, ShopSignConfig const& signConfig) {
+    auto* sign = signBlockActorAt(region, pos);
+    if (sign == nullptr) {
+        return std::nullopt;
+    }
+    auto const parsed = parseShopSignFront(*sign, signConfig);
+    if (!parsed.looksLikeShopSign()) {
+        return std::nullopt;
+    }
+    return readShopOwner(*sign, parsed);
+}
+
+/// 容器（含双箱另一半）六个面周围的每一块告示牌：回调拿到位置与几何。
+/// 「扫哪几格」只在这里定义一次——开店时的冲突检查与保护时的反查共用。
+template <class Fn>
+void forEachSignAround(BlockSource& region, ContainerRef const& container, Fn&& fn) {
+    auto const around = [&](Cell const& containerCell) {
+        for (Cell const& cell : neighboursOf(containerCell)) {
+            BlockPos const pos = toBlockPos(cell);
+            if (auto const geometry = readSignGeometry(region, pos)) {
+                fn(pos, *geometry);
+            }
+        }
+    };
+
+    around(container.pos);
+    if (container.pairedPos) {
+        around(*container.pairedPos);
+    }
+}
+
 /// 收集容器（含双箱另一半）六个面周围的牌子，交给纯逻辑判定冲突。
 std::vector<NeighbourSign>
 collectNeighbourSigns(BlockSource& region, ContainerRef const& container, ShopSignConfig const& signConfig) {
     std::vector<NeighbourSign> signs;
-    auto const                 collectAround = [&](Cell const& containerCell) {
-        for (Cell const& cell : neighboursOf(containerCell)) {
-            auto const geometry = readSignGeometry(region, toBlockPos(cell));
-            if (!geometry) {
-                continue;
-            }
-            signs.push_back({*geometry, isShopSign(region, toBlockPos(cell), signConfig)});
-        }
-    };
-
-    collectAround(container.pos);
-    if (container.pairedPos) {
-        collectAround(*container.pairedPos);
-    }
+    forEachSignAround(region, container, [&](BlockPos const& pos, SignRef const& geometry) {
+        signs.push_back({geometry, isShopSign(region, pos, signConfig)});
+    });
     return signs;
 }
 
@@ -248,28 +300,15 @@ AttachedContainerResult attachedContainerOf(
     Cell const     attached    = attachedCellOfSign(geometry->pos, geometry->form, geometry->facing);
     BlockPos const attachedPos = toBlockPos(attached);
 
-    auto* actor = region.getBlockEntity(attachedPos);
-    if (actor == nullptr
-        || (!actor->isTypeOrDerived(BlockActorType::Chest) && !actor->isTypeOrDerived(BlockActorType::BarrelBlock))) {
+    auto container = containerAt(region, attachedPos);
+    if (!container) {
         return {.error = ContainerError::NotAContainer};
     }
     if (!isAllowedType(region.getBlock(attachedPos).getTypeName(), allowedBlockTypes)) {
         return {.error = ContainerError::NotAllowedContainer};
     }
 
-    // `BarrelBlockActor` 本身派生自 `ChestBlockActor`（mc/world/level/block/actor/BarrelBlockActor.h），
-    // 所以这个向下转型对木桶也合法；木桶永远不会配对，双箱分支自然走不到。
-    auto*        chest     = static_cast<ChestBlockActor*>(actor);
-    Container*   primary   = chest;
-    Container*   secondary = nullptr;
-    ContainerRef ref{attached, primary->getContainerSize(), std::nullopt};
-    if (auto* paired = chest->mLargeChestPaired) {
-        secondary     = paired;
-        ref.pairedPos = toCell(chest->mLargeChestPairedPosition);
-        ref.size      += secondary->getContainerSize();
-    }
-
-    return {.container = AttachedContainer{*geometry, ref, primary, secondary}};
+    return {.container = AttachedContainer{*geometry, container->ref, container->primary, container->secondary}};
 }
 
 std::optional<SignRef> readSignGeometry(BlockSource& region, BlockPos const& signPos) {
@@ -332,6 +371,40 @@ inspectAttachedContainer(BlockSource& region, BlockPos const& signPos, Container
         .itemName  = product->getName(),
         .itemCount = countMatchingItems(*box.primary, box.secondary, box.ref.size, *product),
     };
+}
+
+std::vector<AttachedShopSign>
+attachedShopSignsAt(BlockSource& region, BlockPos const& containerPos, ShopConfig const& config) {
+    auto const container = containerAt(region, containerPos);
+    if (!container) {
+        return {};
+    }
+
+    auto const                 signConfig = toSignConfig(config);
+    std::vector<AttachedShopSign> bound;
+
+    forEachSignAround(region, container->ref, [&](BlockPos const& signPos, SignRef const& geometry) {
+        // `bindsTo` 已经说明「这块牌附着的正是这个容器」；双箱两半算同一个库存。
+        if (!bindsTo(geometry, container->ref)) {
+            return;
+        }
+        // 同一块牌可能同时是两半的邻居（双箱接缝上方），只收一次。
+        bool const seen = std::any_of(bound.begin(), bound.end(), [&](AttachedShopSign const& candidate) {
+            return candidate.sign.pos == geometry.pos;
+        });
+        if (seen) {
+            return;
+        }
+
+        if (auto owner = shopSignOwnerHere(region, signPos, signConfig)) {
+            bound.push_back(AttachedShopSign{geometry, *owner});
+        }
+    });
+    return bound;
+}
+
+std::optional<ShopOwner> shopSignOwnerAt(BlockSource& region, BlockPos const& signPos, ShopConfig const& config) {
+    return shopSignOwnerHere(region, signPos, toSignConfig(config));
 }
 
 } // namespace ss::shop

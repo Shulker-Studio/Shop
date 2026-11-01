@@ -42,6 +42,12 @@
 - 管理员商店的身份判定：`shopActorOf` 新增 `adminShop` 入参，管理员店只有现任 OP 算管理身份（牌上记的创建者撤权后不再有权限，DESIGN §11）。
 - 归属交接改成 4 条小环：两个玩家同一 tick 各改各的牌时，单槽会把前一个人的交接顶掉（那条 After 就什么也不写，引擎没写 XUID 的牌子会静默变成无主牌）。
 - `tests/shop/SignProtectionTest.cpp`：物品分类、身份与权限、交互决策（含背面、潜行、上蜡、斧头没蜡）、提交闸与文案，共 26 个中文用例。
+- 商店箱保护（`src/shop/ContainerProtection.*`、`src/mod/ContainerProtectionListener.*`）：`PlayerOpenContainerBeforeEvent` 拦非店主开箱（店主受 `allowOwnerOpenChest` 开关、OP 恒可），`PlayerAttackBlockBeforeEvent` + `PlayerDestroyBlockEvent` 拦非店主拆箱/拆牌；`attachedShopSignsAt` 反查「这一格容器被哪些商店牌绑着」（双箱两半都看，同一块牌只收一次）。
+- 容器保护的判据与牌面防护对齐：牌面用 `looksLikeShopSign`、不看 `shopContainers` 白名单——改配置或牌子变脏都不该让商店箱失去保护；普通箱子与普通告示牌返回空，原版照常。
+- 拆商店箱（双箱任意一半都算）时先按原版语义打掉绑着的商店牌（有掉落），商店随之失效；拆掉不挨着牌子的那一半也不会留下一个带着半份库存继续营业的商店（DESIGN §13 第 34 条）。
+- 无主牌（`mLastEditXuid` 为空）的容器操作 fail-closed：开箱子/拆箱子/拆牌子只给 OP（与牌面文本的 fail-open 故意不同，DESIGN §9.2 新增的那一表）。
+- `config.json` 新增 `allowOwnerOpenChest`（默认 `true`）：关掉后连店主也开不了自己的商店箱（提示指向这个开关），只有 OP 能开；不影响拆箱。
+- `tests/shop/ContainerProtectionTest.cpp`：开箱/拆箱/拆牌的权限与提示文案，共 13 个中文用例。
 
 ### 变更
 
@@ -51,6 +57,7 @@
 - `TradePlan::planBuy` 并入 `TradePlan::planTrade`（`BuyRequest` / `SellRequest` 合并为 `TradeRequest`，角色由调用方装）：买卖不再各写一份份数算法。
 - `ShopSnapshot` 拆成「只看世界」的 `readShop` 与「看视角 + 读余额 + 定角色」的 `inspectShop`，交易路径复用前者。
 - `ContainerFinderBds` 导出 `AttachedContainer` / `mergedSlots` / `sameShopItem` / `firstProductStack`，「合并槽位的顺序与边界」与「严格同种比较」各只有一处定义。
+- `ContainerFinderBds` 收掉三处重复形状：`containerAt`（容器两半 + `ContainerRef`）、`forEachSignAround`（两半 × 六面）、`shopSignOwnerHere`（牌子 → 店主，`looksLikeShopSign` 判据）。反查与开店路径共用它们。
 - `xmake.lua`：移除 server/client 双目标，固定为服务端模组；版本号由 `modpacker` 显式指定为 `0.1.0`。
 - `manifest.json`：移除未被替换的 `platform` 占位符。
 - CI：`build.yml` / `release.yml` 只构建服务端产物。
