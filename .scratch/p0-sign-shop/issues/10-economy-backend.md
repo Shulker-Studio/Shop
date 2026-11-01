@@ -132,3 +132,42 @@
 8. 税为 0 时只有一条流水；记分板后端 + 税率 > 0 时税不生效且日志有说明。
 9. 32 位记分板后端写超范围时被拒而不是截断。
 10. `pay_tax` 的实际扣法（0.05 时收款方少收）与文档一致。
+
+## 后续修正（2026-11-01）：删掉 `auto`，不做任何自动降级
+
+**决定**：`economy.backend` 只允许 `legacy_money` / `scoreboard` / `null`，**默认 `legacy_money`**；
+`auto` 从枚举、名字表、探测计划、选择逻辑里整体删除。老配置写 `auto` 会被配置校验拒绝加载，
+并给出专门的迁移提示（不是泛泛的「只能是 A / B / C」）。同时 `economy.createObjectiveIfMissing`
+的默认值从 `false` 改为 `true`。
+
+**为什么**：本票原设计里「显式 `legacy_money` 探不到也降级」（当时的理由是 §8.4 第 4 条
+「加载失败不 panic」）配合默认值 `auto`，等于让账本可以**在服主不知情的时候换一套**：LegacyMoney
+因版本不兼容导致导出缺失时，本模组会改用记分板记账，玩家余额看起来一夜之间全变 0，而日志里
+只有一条容易被忽略的 info。这与本工程「配置非法就拒绝加载、不带着半份配置跑」的既有原则直接冲突。
+
+**落地**
+
+- `shop/Economy.h`：`Backend` 去掉 `Auto`；`probesFor` 只探配置写着的那一个；
+  `selectBackend` 删掉跨后端分支（探不到就是 `Null` + `skipped` 原因）。
+- `mod/Config.h`：默认 `backend = "legacy_money"`、`createObjectiveIfMissing = true`。
+- `mod/Config.cpp`：`auto` 单列一条迁移错误；`builtin` 的提示文案里去掉 `auto`。
+- `mod/EconomyService.cpp`：`noBackendHint` 认识「你写的是哪个」，按 `ModuleMissing` /
+  `ExportsMissing` / `ObjectiveMissing` / `ObjectiveCreateFailed` 给不同建议，并明写
+  「本模组不会自动改用另一个后端（账本换家必须由你在 `economy.backend` 里决定）」。
+  记分板探测不再需要 `legacyMoney` 的探测结果。
+- 测试：删掉 4 个 `Auto` 用例，改为「写了哪个后端就只认哪个：探不到也不许换成另一个账本」
+  （正向 + 反向各一条），并新增 `parseBackend("auto")` 必须为空、提示文本里不许再出现 `auto`。
+- 文档：`DESIGN §8.4`（含两档后端差异对照表）、§15 默认值、§14 风险表（本项标「已移除」，
+  管理员店系统账户改「已真机验证」，新增「`LLMoney_Add` 对未上账 XUID」已由源码证伪）、
+  `README` 的「经济后端」整节、`CHANGELOG`「变更」。
+
+**顺带核实到的 LegacyMoney 源码事实**（`LiteLDev/LegacyMoney` 的 `src/API.cpp`）：
+
+- `LLMoney_Get`：查不到行时**先 `insert` 一行 `def_money` 再返回**；只有空 XUID 或数据库异常返回 `-1`。
+- `LLMoney_Add(xuid, n)`：走 `Trans("", xuid, n)`，**从未上账的 XUID 也能加钱**（会顺带建行）。
+- `LLMoney_Trans`：`n < 0` 或 `from == to` 直接 false；`from` 空 = 凭空记，`to` 空 = 销毁
+  （仍写一条 `mtrans`，界面显示成 `System`）。
+- `pay_tax` 只在 `from` 非空时对**收款方**扣 `val × pay_tax`，而 `mtrans` 记的是**税前** `val`
+  → 所以「开商店税就把 `pay_tax` 设为 0」是必需而不是保守。
+
+**指标**：`xmake build Shop` 通过（无新增告警）；`xmake test` 207 cases / 2944 assertions 全绿。
