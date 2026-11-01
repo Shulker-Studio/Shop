@@ -284,6 +284,25 @@ struct Payment {
     std::int64_t tax  = 0;
 };
 
+/// 一次交易的付款信息（DESIGN §10.2 第 5 步 / §8.9）。**方向只在这里分叉一次**：
+/// 买入是买家付给店那一侧（`总额 - 税`，税另付），卖出是店那一侧付给玩家（`总额`，税另付）。
+///
+/// 「店那一侧」由 `shopSideAccount` 决定：普通店是店主 XUID，管理员店是系统账户（§7.4）。
+/// 买卖两个方向各写一份这个组合，早晚会有一边忘了换收款方或忘了减税。
+Payment paymentFor(
+    TradeDirection           direction,
+    ShopInfoData const&      info,
+    std::string_view         ownerXuid,
+    std::string_view         traderXuid,
+    TradePlan const&         plan
+) {
+    std::string const shopSide = economy::shopSideAccount(info.adminShop, ownerXuid);
+    if (direction == TradeDirection::Buy) {
+        return {std::string{traderXuid}, shopSide, plan.total - plan.tax, plan.tax};
+    }
+    return {shopSide, std::string{traderXuid}, plan.total, plan.tax};
+}
+
 /// 把钱原路退回：从收钱方反向再走一次，金额就是已经移动过的 `main`。
 ///
 /// 税不回退：它永远是最后一步（见 `chargeTax`），真正需要退款的时候它还没被收。
@@ -376,19 +395,19 @@ PreparedTrade prepareCommon(
     if (!shop) {
         return {.error = "这家商店已经不在了"};
     }
-    if (shop->info.adminShop) {
-        // 管理员店的资金端是系统账户，属于 11 的范围；这里不伪造收款方（DESIGN §7.4）。
-        return {.error = "管理员商店的交易还没实现"};
-    }
     if (!unitPriceOf(shop->info, direction)) {
         return {.error = selling ? "这家店不收购" : "这家店不出售"};
     }
-    if (shop->ownerXuid.empty()) {
-        // 买入是店主收钱、卖出是店主付钱：两种情况都需要知道店主是谁（ADR-0005）。
-        return {.error = selling ? "读不到店主，没法付款" : "读不到店主，没法收款"};
-    }
-    if (shop->ownerXuid == trader.getXuid()) {
-        return {.error = "不能跟自己交易"};
+    // 普通店两边都靠店主这一个账户：买入店主收钱、卖出店主付钱（ADR-0005）。
+    // 管理员店的对手方是系统账户（§7.4），牌上记的 XUID 只是当时的创建者，所以两条都不适用：
+    // 「读不到店主」不影响交易，OP 在管理员店里也不是店主（`shopFormRoleOf` 已按访客给按钮）。
+    if (!shop->info.adminShop) {
+        if (shop->ownerXuid.empty()) {
+            return {.error = selling ? "读不到店主，没法付款" : "读不到店主，没法收款"};
+        }
+        if (shop->ownerXuid == trader.getXuid()) {
+            return {.error = "不能跟自己交易"};
+        }
     }
     if (isFrozen(trader.getXuid(), sign)) {
         // 上一次补偿失败还挂着：这次的「钱货一致」没人能保证，别再放行
@@ -399,8 +418,16 @@ PreparedTrade prepareCommon(
         // 创造模式玩家不参与经济（DESIGN §10.4）
         return {.error = "创造模式不能与商店交易"};
     }
-    if (!economyBackendAvailable()) {
+
+    // 余额与能力都要问后端，只问一次（下面 `context.provider` 用的就是这一个）。
+    auto& provider = economyBackend();
+    if (!provider.available()) {
         return {.error = noEconomyReason()};
+    }
+    if (shop->info.adminShop && !provider.supportsSystemAccount()) {
+        // 管理员店的资金侧不设上限靠的就是系统账户（§7.4）：后端声明不了这项能力时
+        // 两个方向都必然失败，不如提前说清楚（与点牌时藏按钮同一句原因）。
+        return {.error = noSystemAccountReason()};
     }
 
     auto attached = attachedContainerOf(region, toBlockPos(sign), config.shopContainers);
@@ -422,18 +449,25 @@ PreparedTrade prepareCommon(
     // 商品模板当场拷一份：`found` 指向箱子里的槽位，扣货之后那个引用就失效了。
     context.product  = *found;
     context.shop     = std::move(*shop);
-    context.provider = &economyBackend();
+    context.provider = &provider;
 
     context.request.amountPerUnit          = context.shop.info.amountPerUnit;
     context.request.maxUnits               = config.maxShopAmount;
     context.request.allowPartial           = config.allowPartialTransactions;
-    context.request.ownerOnline            = onlinePlayer(context.shop.ownerXuid) != nullptr;
+    // 管理员店没有「店主此刻在不在线」这回事：对手方是系统账户（§8.5 表格的「同左」）。
+    context.request.ownerOnline            = context.shop.info.adminShop
+                                          || onlinePlayer(context.shop.ownerXuid) != nullptr;
     context.request.backendSupportsOffline = context.provider->supportsOffline();
     context.request.requireOwnerOnline     = config.economy.requireOwnerOnline;
     // 商店税（DESIGN §8.9）：税从这笔生意里抽，两个方向都要算；收不走（没有系统账户）时整笔不算；
-    // 「压在谁身上」由方向决定（买入是店主少收，卖出是店主另付）。两个方向加后端能力的组合
-    // 由纯函数决定——这里不再自己写 `direction == Sell`。
-    auto const tax        = tradeTaxPlan(direction, config.tax.shopTaxRate, context.provider->supportsMoneySink());
+    // 「压在谁身上」由方向决定（买入是店主少收，卖出是店主另付）。两个方向加后端能力、
+    // 以及「管理员店没有可抽的成交额」这几条判断由纯函数决定——这里不再自己写 `direction == Sell`。
+    auto const tax = tradeTaxPlan(
+        direction,
+        config.tax.shopTaxRate,
+        context.provider->supportsMoneySink(),
+        context.shop.info.adminShop
+    );
     context.request.taxRate    = tax.taxRate;
     context.request.taxOnPayer = tax.taxOnPayer;
 
@@ -489,23 +523,29 @@ PreparedTrade prepareSell(BlockSource& region, Cell const& sign, Player& seller,
     // 读不到（账户不可记账）与「余额是 0」是两件事——当成 0 会对着一个有钱的店主
     // 报「店主资金不足」，事故无从查起（DESIGN §8.2）。
     // 免费店（S 0）不产生账户操作，店主余额读不到也不算错。
-    auto const ownerFunds = context.provider->get(context.shop.ownerXuid);
-    if (!ownerFunds && *context.shop.info.sellPrice > 0) {
-        // 不支持离线记账的后端（记分板）在店主离线时本来就读不到余额：
-        // 真正的原因是「店主不在线」，报那一句才对得上号（DESIGN §8.5）。
-        // 判据与表单藏按钮、`planTrade` 完全共用一个函数。
-        if (economy::ownerUnreachable(
-                context.request.ownerOnline,
-                context.request.backendSupportsOffline,
-                context.request.requireOwnerOnline
-            )) {
-            return {.error = ownerOfflineReason()};
+    // 管理员店没有店主余额这回事：资金侧不设上限（§7.4 / GLOSSARY）。
+    bool const adminShop = context.shop.info.adminShop;
+
+    std::optional<std::int64_t> ownerFunds;
+    if (!adminShop) {
+        ownerFunds = context.provider->get(context.shop.ownerXuid);
+        if (!ownerFunds && *context.shop.info.sellPrice > 0) {
+            // 不支持离线记账的后端（记分板）在店主离线时本来就读不到余额：
+            // 真正的原因是「店主不在线」，报那一句才对得上号（DESIGN §8.5）。
+            // 判据与表单藏按钮、`planTrade` 完全共用一个函数。
+            if (economy::ownerUnreachable(
+                    context.request.ownerOnline,
+                    context.request.backendSupportsOffline,
+                    context.request.requireOwnerOnline
+                )) {
+                return {.error = ownerOfflineReason()};
+            }
+            return {.error = ownerFundsUnknownReason()};
         }
-        return {.error = ownerFundsUnknownReason()};
     }
 
     context.request.unitPrice  = *context.shop.info.sellPrice;
-    context.request.payerFunds = ownerFunds.value_or(0);
+    context.request.payerFunds = economy::shopSideFunds(adminShop, ownerFunds.value_or(0));
     // 份数与件数都要：件数为 0 才是「根本没有」，份数为 0 但件数不为 0 只是「不够一份」。
     auto const strictItems =
         countMatchingItems(seller.getInventory(), nullptr, seller.getInventory().getContainerSize(), context.product);
@@ -524,6 +564,7 @@ PreparedTrade prepareSell(BlockSource& region, Cell const& sign, Player& seller,
     // 玩家自己的余额读不到不算错误：钱那一步会在扣款前再确认一次两边账户（见 `moveMoney`）。
     context.shop.info.heldUnits    = context.request.goodsUnits;
     context.shop.info.boxRoomUnits = context.request.roomUnits;
+    // 管理员店的「店主余额」不编一个数字：资金侧不设上限，它不是一个可读的账户。
     context.shop.info.ownerBalance = ownerFunds;
     context.shop.info.balance      = context.provider->get(seller.getXuid());
 
@@ -609,6 +650,11 @@ std::optional<TradeResult> moveMoney(
         return std::nullopt;
     }
     if (!accountsRecordable(provider, payment.payer, payment.receiver)) {
+        // 有一头是系统账户（管理员店）时，可读的只有玩家那一侧：读不到就是玩家账户的问题，
+        // 不能报成「后端没有系统账户」——那项能力在预校验里已经判过了（DESIGN §8.2）。
+        if (payment.payer.empty() || payment.receiver.empty()) {
+            return reject(playerFundsUnknownReason());
+        }
         // 两个方向各有一个账户在预校验里已经查过（买入查买家、卖出查店主），
         // 所以走到这里的读不到，是另一头出了问题。
         return reject(direction == TradeDirection::Buy ? ownerFundsUnknownReason() : playerFundsUnknownReason());
@@ -621,7 +667,11 @@ std::optional<TradeResult> moveMoney(
         return broken(freeze, "付款没能完成，而且退款也失败了（" + paid.detail + "），请联系管理员");
     }
     // 买入是玩家付钱，卖出是店主付钱——失败原因得归到对的人头上。
-    return reject(std::string{direction == TradeDirection::Buy ? "付款失败：" : "店主付款失败："} + paid.detail);
+    // 管理员店的卖出方向付款方是系统账户（§7.4），不叫「店主」。
+    std::string const payerName = payment.payer.empty() ? std::string{"系统账户"}
+                                : direction == TradeDirection::Buy ? std::string{}
+                                                                   : std::string{"店主"};
+    return reject(payerName + "付款失败：" + paid.detail);
 }
 
 /// 收商店税时的失败（DESIGN §8.9）。
@@ -788,10 +838,10 @@ TradeResult buyUnits(
 
     auto&               provider = *context->provider;
     ShopInfoData const& info     = context->shop.info;
-    // 买入：买家付钱、店主收钱。商店税从店主的收入里扣（店主承担），买家总支出仍是 `total`：
+    // 买入：买家付钱、店那一侧收钱。商店税从店主的收入里扣（店主承担），买家总支出仍是 `total`：
     // 主交易转 `total - tax`，税那一笔再由买家付给系统（DESIGN §8.9）。
-    // `plan.tax` 为 0（没开税、或后端收不走）时两者相等，第二笔整步跳过。
-    Payment const     payment{buyer.getXuid(), context->shop.ownerXuid, plan.total - plan.tax, plan.tax};
+    // `plan.tax` 为 0（没开税、后端收不走、或管理员店）时两者相等，第二笔整步跳过。
+    Payment const     payment = paymentFor(TradeDirection::Buy, info, context->shop.ownerXuid, buyer.getXuid(), plan);
     std::string const freeze = freezeKey(buyer.getXuid(), sign);
 
     // 第 4 步：快照。物品与余额不在同一个事务里，失败时只能靠它反向写回。
@@ -890,9 +940,10 @@ TradeResult sellUnits(
 
     auto&               provider = *context->provider;
     ShopInfoData const& info     = context->shop.info;
-    // 卖出：店主付钱、玩家收钱（DESIGN §8.5 的表格）。所以付款方是店主。
-    // 商店税同样由店主承担：玩家收到的仍是牌面金额 `total`，店主另付一笔 `tax`（§8.9）。
-    Payment const     payment{context->shop.ownerXuid, seller.getXuid(), plan.total, plan.tax};
+    // 卖出：店那一侧付钱、玩家收钱（DESIGN §8.5 的表格）。普通店的付款方是店主，
+    // 管理员店是系统账户（§7.4）：钱凭空记到玩家账上，所以不读也不限制「店主余额」。
+    // 商店税同样由店那一侧承担：玩家收到的仍是牌面金额 `total`，店主另付一笔 `tax`（§8.9）。
+    Payment const     payment = paymentFor(TradeDirection::Sell, info, context->shop.ownerXuid, seller.getXuid(), plan);
     std::string const freeze = freezeKey(seller.getXuid(), sign);
 
     TradeFrame frame{
@@ -954,7 +1005,10 @@ TradeResult sellUnits(
         message += "，收入 " + moneyText(info.currencySymbol, plan.total);
     }
     if (plan.units < submission.units) {
-        message += "（你手里的货、店主的钱或商店箱空间不够，只成交了 " + std::to_string(plan.units) + " 份）";
+        // 部分成交：如实说清原因（DESIGN §10.3）。管理员店的钱没有上限，不写「店主的钱」。
+        message += info.adminShop
+                     ? "（你手里的货或商店箱空间不够，只成交了 " + std::to_string(plan.units) + " 份）"
+                     : "（你手里的货、店主的钱或商店箱空间不够，只成交了 " + std::to_string(plan.units) + " 份）";
     }
     return {.status = TradeStatus::Done, .plan = plan, .message = std::move(message)};
 }

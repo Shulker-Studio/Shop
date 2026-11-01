@@ -176,6 +176,38 @@ TEST_CASE("读不到店主余额的说法：讲的是余额，不是店主没钱
     CHECK_FALSE(reason == noEconomyReason());
 }
 
+TEST_CASE("后端当不了系统账户的说法：说的是经济后端能力，不是玩家的问题") {
+    auto const reason = noSystemAccountReason();
+    CHECK_FALSE(reason.empty());
+    CHECK(reason.find("系统账户") != std::string::npos);
+    CHECK(reason.find("管理员商店") != std::string::npos);
+    // 与「没有后端」「店主不可达」是两回事，文案不能串行。
+    CHECK_FALSE(reason == noEconomyReason());
+    CHECK_FALSE(reason == ownerOfflineReason());
+}
+
+TEST_CASE("表单角色：普通店店主与 OP 拿管理入口，管理员店所有人都能买卖") {
+    CHECK(shopFormRoleOf(ShopActor::Owner, /*adminShop=*/false) == ShopFormRole::Manager);
+    CHECK(shopFormRoleOf(ShopActor::Operator, /*adminShop=*/false) == ShopFormRole::Manager);
+    CHECK(shopFormRoleOf(ShopActor::Other, false) == ShopFormRole::Visitor);
+    CHECK(shopFormRoleOf(ShopActor::NoRecordedOwner, false) == ShopFormRole::Visitor);
+
+    // 管理员店：对手方是系统账户（§7.4），店主不是交易的一侧，OP 也能买卖（票 11）
+    for (auto const actor :
+         {ShopActor::Owner, ShopActor::Operator, ShopActor::Other, ShopActor::NoRecordedOwner}) {
+        CHECK(shopFormRoleOf(actor, /*adminShop=*/true) == ShopFormRole::Visitor);
+    }
+}
+
+TEST_CASE("管理员店 + 后端当不了系统账户：正文写原因，买卖按钮一个不给") {
+    auto data              = sampleShop();
+    data.adminShop         = true;
+    data.unavailableReason = noSystemAccountReason();
+
+    CHECK(hasLine(shopInfoLines(data), "状态：" + noSystemAccountReason()));
+    CHECK(shopFormButtons(data, ShopFormRole::Visitor).empty());
+}
+
 TEST_CASE("表单正文：不能交易时写明原因，且不给买卖按钮") {
     auto data              = sampleShop();
     data.unavailableReason = "店主不在线，现在不能交易";

@@ -135,8 +135,8 @@ economy::TransferResult LegacyMoneyEconomy::transfer(
     std::int64_t            amount,
     bool                    allowNegative
 ) {
-    // 参数校验与文案与基类默认实现共用一份（金额/空付款方/自转自/系统账户）。
-    if (auto const invalid = economy::checkTransfer(from, to, amount, supportsMoneySink())) {
+    // 参数校验与文案与基类默认实现共用一份（金额/空付款方/空收款方/自转自/系统账户能力）。
+    if (auto const invalid = economy::checkTransfer(*this, from, to, amount)) {
         return *invalid;
     }
     if (allowNegative) {
@@ -145,6 +145,15 @@ economy::TransferResult LegacyMoneyEconomy::transfer(
     if (!modulePresent()) {
         // 与「被拒绝」分开说：这一笔一分钱都没动，原因是后端整个不在了。
         return {economy::TransferStatus::Rejected, "LegacyMoney.dll 已经不在进程里了，这一笔没有动账"};
+    }
+
+    // 空付款方 = 从系统付款（管理员店的卖出方向，DESIGN §7.4）：`LLMoney_Add` 就是凭空记账。
+    // 它不进 `LLMoney_Trans`：Trans 从空 XUID 扣款只会失败。
+    if (from.empty()) {
+        if (!mExports.add(to, amount)) {
+            return {economy::TransferStatus::Rejected, "LegacyMoney 没能把钱记到收款方账上"};
+        }
+        return {economy::TransferStatus::Ok, {}};
     }
 
     // 只走这一次 `LLMoney_Trans`：它内部是一个 SQLite 事务（扣款、入账、写流水一起提交或一起回滚），

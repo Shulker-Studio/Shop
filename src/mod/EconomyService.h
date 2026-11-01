@@ -23,9 +23,6 @@ struct ShopConfig;
 /// 服主建好记分板目标后需要重载模组（`/shop` 关开一次）才会重探。
 economy::EconomyProvider& economyBackend();
 
-/// 有没有真正能记账的后端（空实现不算）。表单用它决定「余额」显示真值还是占位。
-bool economyBackendAvailable();
-
 /// 账户此刻在不在线。记分板后端要拿它判断「这个账户现在能不能记账」，
 /// 交易服务要拿它判断「店主不在线时这笔生意还能不能做」（DESIGN §8.5）。
 Player* onlinePlayer(std::string_view xuid);

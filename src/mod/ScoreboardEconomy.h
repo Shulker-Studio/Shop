@@ -31,6 +31,12 @@ public:
 
     std::string_view name() const override { return "scoreboard"; }
     bool             supportsOffline() const override { return false; }
+    /// 管理员店的资金侧（DESIGN §7.4）：钱进 = 扣掉付款方的分（销毁），钱出 = 给收款方加分
+    /// （凭空记账）。两笔都只需要一个在线玩家，而交易的两头总有一头是玩家。
+    ///
+    /// 注意与 `supportsMoneySink()` 的区别：那个只用于商店税，10 已经把记分板刻意排除在外
+    /// （§8.9），这里不让它变成真，否则记分板服会突然开始收税。
+    bool supportsSystemAccount() const override { return true; }
 
     std::optional<std::int64_t> get(economy::Account const& account) const override;
     bool                        set(economy::Account const& account, std::int64_t amount) override;

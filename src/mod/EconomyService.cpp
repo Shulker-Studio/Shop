@@ -210,8 +210,6 @@ economy::EconomyProvider& economyBackend() {
     return gProvider ? *gProvider : gNullBackend;
 }
 
-bool economyBackendAvailable() { return economyBackend().available(); }
-
 Player* onlinePlayer(std::string_view xuid) {
     if (xuid.empty()) {
         return nullptr;
@@ -225,7 +223,14 @@ Player* onlinePlayer(std::string_view xuid) {
 
 bool accountsRecordable(economy::EconomyProvider& provider, std::string_view payer, std::string_view receiver) {
     // `get` 返回空 = 这个账户现在不可记账（不在线、没有这个账户），不是余额 0。
-    return provider.get(economy::Account{payer}).has_value() && provider.get(economy::Account{receiver}).has_value();
+    //
+    // 空账户 = 系统账户（管理员店，DESIGN §7.4）：它本来就不是一个能 `get` 的账户，
+    // 能不能用它已由 `supportsSystemAccount()` 在预校验里答过。拿 `get("")` 去问
+    // 一定读不到，那样每一笔管理员店交易都会被拦下。
+    auto const recordable = [&provider](std::string_view account) {
+        return account.empty() || provider.get(economy::Account{account}).has_value();
+    };
+    return recordable(payer) && recordable(receiver);
 }
 
 void resetEconomy() {

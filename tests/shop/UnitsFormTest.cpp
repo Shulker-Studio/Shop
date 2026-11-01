@@ -113,6 +113,16 @@ TEST_CASE("卖表单正文：限额来源是玩家手里的货与店主的钱，
     CHECK(hasLine(content, "自定义份数：收入 = $ 5 × 份数（1 到 2 份，恒为整数）"));
 }
 
+TEST_CASE("卖表单正文：管理员店不把「店主余额」写进限额来源") {
+    auto data      = sampleShop();
+    data.adminShop = true;
+    data.ownerBalance.reset(); // 管理员店没有可读的店主余额（DESIGN §7.4）
+
+    auto const content = unitsFormContent(TradeDirection::Sell, data, makeUnitsFormModel(2));
+    CHECK_FALSE(hasLine(content, "店主余额"));
+    CHECK(hasLine(content, "这次最多卖：2 份（受你手里的货、商店箱空间与单次上限限制）"));
+}
+
 TEST_CASE("表单正文：没有余额时不编造数字") {
     auto data = sampleShop();
     data.balance.reset();

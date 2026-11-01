@@ -193,7 +193,7 @@ inspectShop(BlockSource& region, BlockPos const& signPos, Player& viewer, ShopCo
 
     ShopInteraction interaction{
         .actor       = actor,
-        .role        = canManageShop(actor) ? ShopFormRole::Manager : ShopFormRole::Visitor,
+        .role        = shopFormRoleOf(actor, owner.adminShop),
         .waxed       = sign->mIsWaxed,
         .facingFront = sign->getSideFacingPlayer(viewer) == SignTextSide::Front,
     };
@@ -220,16 +220,18 @@ inspectShop(BlockSource& region, BlockPos const& signPos, Player& viewer, ShopCo
         } else {
             // 读不到就留空：正文写「暂时读不到」，不猜一个数字（DESIGN §10.1）。
             shop->info.balance = provider.get(viewer.getXuid());
-            // 店主收不了钱时提前把买卖按钮藏起来（DESIGN §8.5）：只有不支持离线记账的
-            // 后端（记分板）才会碰到这个情况，支持离线的后端根本不看店主在不在线。
-            // 管理员店不受这条约束：它的资金端是系统账户（§8.5 表格的「同左」）。
-            // 判据与 `planTrade` / `prepareSell` 共用 `ownerUnreachable`（`requireOwnerOnline` 也在里面）。
-            if (!shop->info.adminShop && shop->info.unavailableReason.empty()
-                && economy::ownerUnreachable(
-                    onlinePlayer(shop->ownerXuid) != nullptr,
-                    provider.supportsOffline(),
-                    config.economy.requireOwnerOnline
-                )) {
+            // 管理员店的资金端是系统账户（§7.4）：后端声明不了这项能力时买卖必然失败，
+            // 那就一个按钮都不给（与下面的离线策略同一套“提前藏按钮”的做法）。
+            if (shop->info.adminShop) {
+                if (!provider.supportsSystemAccount() && shop->info.unavailableReason.empty()) {
+                    shop->info.unavailableReason = noSystemAccountReason();
+                }
+            } else if (shop->info.unavailableReason.empty()
+                       && economy::ownerUnreachable(
+                           onlinePlayer(shop->ownerXuid) != nullptr,
+                           provider.supportsOffline(),
+                           config.economy.requireOwnerOnline
+                       )) {
                 shop->info.unavailableReason = ownerOfflineReason();
             }
         }

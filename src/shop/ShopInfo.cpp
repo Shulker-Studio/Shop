@@ -41,6 +41,10 @@ std::string playerFundsUnknownReason() { return "读不到你的余额，这一�
 
 std::string noEconomyReason() { return "服务器没有可用的经济后端，暂时不能交易"; }
 
+std::string noSystemAccountReason() {
+    return "当前经济后端没有系统账户，管理员商店现在不能交易（换用支持它的后端后恢复）";
+}
+
 std::string emptyBoxReason() { return "商店箱里没有货，现在没法交易（补货后恢复）"; }
 
 std::string taxChargeFailureReason(std::string const& detail) { return "收取商店税失败（" + detail + "）"; }
@@ -109,6 +113,15 @@ std::string shopFormContent(ShopInfoData const& data) {
         appendLine(content, line);
     }
     return content;
+}
+
+ShopFormRole shopFormRoleOf(ShopActor actor, bool adminShop) {
+    // 管理员店的管理权只给 OP（§11），但那不等于「OP 不能买东西」：
+    // 它的对手方是系统账户（§7.4），店主不在这里。
+    if (adminShop) {
+        return ShopFormRole::Visitor;
+    }
+    return canManageShop(actor) ? ShopFormRole::Manager : ShopFormRole::Visitor;
 }
 
 std::vector<ShopFormButton> shopFormButtons(ShopInfoData const& data, ShopFormRole role) {

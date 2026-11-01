@@ -52,7 +52,15 @@ struct TradeTaxPlan {
 ///
 /// `backendSupportsMoneySink` 是 `EconomyProvider::supportsMoneySink()`：没有「付给系统」的账户
 /// （记分板）时，这道税收不走——算出来只会让店主少收、买家少付，而没有任何地方记着它，所以整笔不算。
-TradeTaxPlan tradeTaxPlan(TradeDirection direction, double configuredRate, bool backendSupportsMoneySink);
+///
+/// `adminShop` 为真时也没有税：管理员店的对手方是系统账户（DESIGN §7.4），买卖两边的钱
+/// 本来就靠销毁 / 凭空记账，再抽一道税只是把买家的钱多烧一笔，没有任何人收到它。
+TradeTaxPlan tradeTaxPlan(
+    TradeDirection direction,
+    double         configuredRate,
+    bool           backendSupportsMoneySink,
+    bool           adminShop
+);
 
 /// 成交方案：份数、件数、金额三者一致，都由这里算出来，别处不再乘一遍。
 struct TradePlan {
@@ -95,6 +103,7 @@ struct TradeRequest {
     /// 商店税率（DESIGN §8.9）：这笔交易的税 = `total × taxRate`，向下取整。
     /// **两个方向都要传**——税是从这笔生意里抽的，与谁承担那一笔无关。
     /// 后端不能销毁余额（记分板）时由调用方填 0：那样税根本收不走，算出来只会让账对不上。
+    /// 管理员店也填 0：对手方是系统账户，没有可抽的成交额（`tradeTaxPlan` 已经判好）。
     double taxRate = 0.0;
     /// 这笔税是否**额外压在付款方身上**：卖出方向是 true（店主另付 `tax`），
     /// 买入方向是 false（税从店主的收入里扣，买家总支出不变）。

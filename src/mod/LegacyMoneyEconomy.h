@@ -32,6 +32,9 @@ public:
     bool supportsOffline() const override { return true; }
     /// `LLMoney_Trans(from, "", n)` 就是把 n 从 from 身上扣掉、谁都不加。
     bool supportsMoneySink() const override { return true; }
+    /// 管理员店的资金侧（DESIGN §7.4）：钱进 = `LLMoney_Trans(to="")` 销毁，
+    /// 钱出 = `LLMoney_Add` 凭空记账。两个方向都有单次调用就能做完的导出。
+    bool supportsSystemAccount() const override { return true; }
 
     /// 余额。**读不到时返回空**：`LLMoney_Get` 在空 XUID 或数据库出错时返回 `-1`
     /// （见它自己的 `src/API.cpp`），这不是余额，而是「读不到」。

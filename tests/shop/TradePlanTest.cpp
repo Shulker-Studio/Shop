@@ -392,25 +392,32 @@ TEST_CASE("requireOwnerOnline 对支持离线的后端没有意义") {
 
 TEST_CASE("税字段由方向与后端能力决定（mod 层不再自己写 direction == Sell）") {
     // 支持销毁（LegacyMoney）：两个方向都要收，税只压在卖出方向的店主身上
-    auto const buy = tradeTaxPlan(TradeDirection::Buy, 0.1, /*backendSupportsMoneySink=*/true);
+    auto const buy = tradeTaxPlan(TradeDirection::Buy, 0.1, /*backendSupportsMoneySink=*/true, /*adminShop=*/false);
     CHECK(buy.taxRate == doctest::Approx(0.1));
     CHECK_FALSE(buy.taxOnPayer);
 
-    auto const sell = tradeTaxPlan(TradeDirection::Sell, 0.1, true);
+    auto const sell = tradeTaxPlan(TradeDirection::Sell, 0.1, true, /*adminShop=*/false);
     CHECK(sell.taxRate == doctest::Approx(0.1));
     CHECK(sell.taxOnPayer);
 
     // 收不走（记分板）：整笔不算，两个方向都归零
     for (auto direction : {TradeDirection::Buy, TradeDirection::Sell}) {
-        auto const none = tradeTaxPlan(direction, 0.1, /*backendSupportsMoneySink=*/false);
+        auto const none = tradeTaxPlan(direction, 0.1, /*backendSupportsMoneySink=*/false, /*adminShop=*/false);
         CHECK(none.taxRate == 0.0);
         CHECK_FALSE(none.taxOnPayer);
     }
 
     // 没开税：也归零
-    auto const off = tradeTaxPlan(TradeDirection::Sell, 0.0, true);
+    auto const off = tradeTaxPlan(TradeDirection::Sell, 0.0, true, /*adminShop=*/false);
     CHECK(off.taxRate == 0.0);
     CHECK_FALSE(off.taxOnPayer);
+
+    // 管理员店：对手方是系统账户，没有可抽的成交额（DESIGN §7.4），两个方向都归零
+    for (auto direction : {TradeDirection::Buy, TradeDirection::Sell}) {
+        auto const admin = tradeTaxPlan(direction, 0.1, /*backendSupportsMoneySink=*/true, /*adminShop=*/true);
+        CHECK(admin.taxRate == 0.0);
+        CHECK_FALSE(admin.taxOnPayer);
+    }
 }
 
 TEST_CASE("付款方含税成本率：只有税压在付款方身上时才是税率") {

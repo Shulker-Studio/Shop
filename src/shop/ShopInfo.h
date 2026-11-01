@@ -1,5 +1,6 @@
 #pragma once
 
+#include "shop/SignProtection.h"
 #include "shop/TradePlan.h"
 
 #include <cstdint>
@@ -66,6 +67,12 @@ std::string playerFundsUnknownReason();
 /// 没有可用经济后端的原因。
 std::string noEconomyReason();
 
+/// 后端当不了系统账户的原因（DESIGN §7.4）。
+///
+/// 管理员店的资金侧是系统账户（买入销毁、卖出凭空记账），靠后端的能力声明
+/// `supportsSystemAccount()`；声明不了的就不能开买卖按钮，也不能在提交阶段放行。
+std::string noSystemAccountReason();
+
 /// 商店税没收到时的原因（DESIGN §8.9）。`detail` 是后端给的细节，前缀只写一次。
 std::string taxChargeFailureReason(std::string const& detail);
 
@@ -87,6 +94,14 @@ std::string shopFormContent(ShopInfoData const& data);
 
 /// 这个表单给谁看：游客/买家，还是店主/OP。
 enum class ShopFormRole : std::uint8_t { Visitor, Manager };
+
+/// 点牌时给哪种表单角色（DESIGN §10.1 / §11）。
+///
+/// 普通店：店主与 OP 拿管理入口，其余人拿买卖按钮。
+/// **管理员店一律是访客**：它的资金对手方是系统账户（§7.4），所以「店主」不是交易的一侧，
+/// OP 在这里也能正常买卖（包括当初建它的那个 OP）。管理能力（改牌、开箱、拆箱）不看这个角色，
+/// 判据仍然是 `canManageShop`。
+ShopFormRole shopFormRoleOf(ShopActor actor, bool adminShop);
 
 /// 按钮要做的事。`Buy` / `Sell` 都已接真实交易，`Manage` 等 06。
 enum class ShopFormAction : std::uint8_t { Buy, Sell, Manage };

@@ -1,4 +1,5 @@
 #include "shop/Economy.h"
+#include "shop/TradePricing.h"
 
 #include <doctest/doctest.h>
 #include <limits>
@@ -15,6 +16,12 @@ class FakeEconomy final : public EconomyProvider {
 public:
     std::string_view name() const override { return "fake"; }
     bool             supportsOffline() const override { return true; }
+    bool             supportsMoneySink() const override { return moneySink; }
+    bool             supportsSystemAccount() const override { return systemAccount; }
+
+    /// 后端能力开关：默认两者都没有（像一个既不收税也不能当系统账户的后端）。
+    bool moneySink     = false;
+    bool systemAccount = false;
 
     std::optional<std::int64_t> get(Account const& account) const override {
         auto it = mBalances.find(account);
@@ -322,7 +329,7 @@ TEST_CASE("店主离线判据：支持离线的后端不看店主在不在线") 
 }
 
 TEST_CASE("转账：不支持系统账户的后端拒绝「付给空账户」") {
-    FakeEconomy backend; // 默认 supportsMoneySink() == false
+    FakeEconomy backend; // 默认 supportsMoneySink() == false，也没有系统账户
     backend.set("buyer", 100);
 
     auto const result = backend.transfer("buyer", "", 10);
@@ -331,15 +338,73 @@ TEST_CASE("转账：不支持系统账户的后端拒绝「付给空账户」") 
     CHECK(backend.get("buyer") == 100);
 }
 
-TEST_CASE("转账参数校验只有一份：金额、空付款方、自转自、系统账户") {
-    CHECK_FALSE(checkTransfer("a", "b", 10, /*supportsMoneySink=*/false).has_value());
+TEST_CASE("系统账户：生钱与灭钱是两个判据，管理员店靠后者之外的那一项") {
+    // 1. 什么都不声明：两个方向都拒，余额一分不动
+    {
+        FakeEconomy backend;
+        backend.set("buyer", 100);
+        CHECK(backend.transfer("buyer", "", 10).status == TransferStatus::Rejected);
+        CHECK(backend.transfer("", "buyer", 10).status == TransferStatus::Rejected);
+        CHECK(backend.get("buyer") == 100);
+    }
 
-    CHECK(checkTransfer("a", "b", 0, false)->status == TransferStatus::Rejected);
-    CHECK(checkTransfer("a", "b", -1, false)->status == TransferStatus::Rejected);
-    CHECK(checkTransfer("", "b", 10, false)->status == TransferStatus::Rejected);
-    CHECK(checkTransfer("a", "a", 10, false)->status == TransferStatus::Rejected);
+    // 2. 只有税用的「销毁」能力（记分板式的组合）：能付给系统，不能从系统付款
+    {
+        FakeEconomy backend;
+        backend.moneySink = true;
+        backend.set("buyer", 100);
+        CHECK(backend.transfer("buyer", "", 10).ok());
+        CHECK(backend.get("buyer") == 90);
+        CHECK(backend.transfer("", "buyer", 10).status == TransferStatus::Rejected);
+        CHECK(backend.get("buyer") == 90);
+    }
 
-    // 空收款方 = 付给系统：只有声明支持销毁的后端才放行
-    CHECK_FALSE(checkTransfer("a", "", 10, /*supportsMoneySink=*/true).has_value());
-    CHECK(checkTransfer("a", "", 10, /*supportsMoneySink=*/false)->status == TransferStatus::Rejected);
+    // 3. 管理员店的系统账户：买入销毁、卖出凭空记账（DESIGN §7.4）
+    {
+        FakeEconomy backend;
+        backend.systemAccount = true;
+        backend.set("buyer", 100);
+        CHECK(backend.transfer("buyer", "", 30).ok());
+        CHECK(backend.get("buyer") == 70);
+        CHECK(backend.transfer("", "buyer", 12).ok());
+        CHECK(backend.get("buyer") == 82);
+    }
+}
+
+TEST_CASE("管理员店的资金侧：对手方是系统账户，余额不设上限") {
+    // 普通店：对手方就是牌上记录的店主，钱也就是他的
+    CHECK(shopSideAccount(/*adminShop=*/false, "xuid-owner") == "xuid-owner");
+    CHECK(shopSideFunds(/*adminShop=*/false, 25) == 25);
+
+    // 管理员店：没有玩家账户，资金侧不设上限（GLOSSARY）。哨兵有名字，读得懂也用得起。
+    CHECK(shopSideAccount(/*adminShop=*/true, "xuid-owner").empty());
+    CHECK(shopSideFunds(/*adminShop=*/true, 0) == kUnlimitedFunds);
+    CHECK(shopSideFunds(/*adminShop=*/true, 25) == kUnlimitedFunds);
+    // 拿去算份数不会溢出，也不会变成「不限制实例数」以外的东西
+    CHECK(ss::shop::affordableUnits(10, kUnlimitedFunds) > 0);
+}
+
+TEST_CASE("转账参数校验只有一份：金额、空的付款方 / 收款方、自转自") {
+    FakeEconomy plain; // 没有销毁能力，也没有系统账户
+    CHECK_FALSE(checkTransfer(plain, "a", "b", 10).has_value());
+
+    CHECK(checkTransfer(plain, "a", "b", 0)->status == TransferStatus::Rejected);
+    CHECK(checkTransfer(plain, "a", "b", -1)->status == TransferStatus::Rejected);
+    CHECK(checkTransfer(plain, "a", "a", 10)->status == TransferStatus::Rejected);
+    // 空付款方 = 从系统付款：只有声明了系统账户的后端才放行
+    CHECK(checkTransfer(plain, "", "b", 10)->status == TransferStatus::Rejected);
+
+    // 空收款方 = 付给系统：销毁能力与系统账户能力任一即可
+    FakeEconomy sink;
+    sink.moneySink = true;
+    CHECK_FALSE(checkTransfer(sink, "a", "", 10).has_value());
+    CHECK(checkTransfer(plain, "a", "", 10)->status == TransferStatus::Rejected);
+
+    FakeEconomy system;
+    system.systemAccount = true;
+    CHECK_FALSE(checkTransfer(system, "", "b", 10).has_value());
+    CHECK_FALSE(checkTransfer(system, "a", "", 10).has_value());
+
+    // 自己转给自己仍然拦（空账户有自己的一套判据，不靠这一条）。
+    CHECK(checkTransfer(system, "", "", 10)->status == TransferStatus::Rejected);
 }

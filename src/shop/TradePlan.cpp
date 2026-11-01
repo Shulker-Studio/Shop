@@ -39,9 +39,15 @@ std::string_view directionVerb(TradeDirection direction) {
     return direction == TradeDirection::Sell ? "卖" : "买";
 }
 
-TradeTaxPlan tradeTaxPlan(TradeDirection direction, double configuredRate, bool backendSupportsMoneySink) {
-    if (!backendSupportsMoneySink || !(configuredRate > 0.0)) {
-        // 收不走（没有系统账户）或本来就没开税：两个字段都归零，第二笔整步跳过。
+TradeTaxPlan tradeTaxPlan(
+    TradeDirection direction,
+    double         configuredRate,
+    bool           backendSupportsMoneySink,
+    bool           adminShop
+) {
+    if (adminShop || !backendSupportsMoneySink || !(configuredRate > 0.0)) {
+        // 管理员店（对手方是系统账户）、收不走的后端（没有系统账户的税）、或本来就没开税：
+        // 两个字段都归零，第二笔整步跳过。
         return {};
     }
     return {configuredRate, direction == TradeDirection::Sell};

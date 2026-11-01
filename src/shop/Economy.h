@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <string>
@@ -159,7 +160,22 @@ public:
     /// LegacyMoney 的 `LLMoney_Trans(from, "", n)` 就是「从 from 扣掉 n，谁都不加」；
     /// 记分板没有这种账户，所以返回 false，调用方据此**整笔税都不算**（不是少记一条流水：
     /// 硬收会让店主少收、买家少付，而没有任何地方记着那笔钱）。
+    ///
+    /// 与 `supportsSystemAccount()` 分开：这一项只回答「税那一笔能不能销毁」，是商店税的政策
+    /// （10 落地时记分板被刻意排除在外）；管理员店的资金端是另一项能力，判据与文案都不同，
+    /// 别把两者合并——合并会让记分板突然开始收税。
     virtual bool supportsMoneySink() const { return false; }
+
+    /// 能不能把「系统账户」当交易对手（DESIGN §7.4 的管理员店资金端）。
+    ///
+    /// 管理员店的资金侧不设上限（GLOSSARY），P0 的落地方式就是这一对动作：
+    /// 玩家买入时钱被销毁（付给系统），玩家卖出时钱凭空记到玩家账上（从系统付款）。
+    /// 声明了它就必须能走通**两个方向**：买入失败要把钱从系统退回玩家（凭空记账），
+    /// 卖出失败要把钱从玩家退给系统（销毁）——缺一个方向，补偿路径就断了。
+    ///
+    /// LegacyMoney 用 `LLMoney_Add` / `LLMoney_Trans(to="")`；记分板用 `add` / `reduce`
+    /// （只能动在线玩家，而交易的两头总有一头是玩家，够了）。
+    virtual bool supportsSystemAccount() const { return false; }
 
     /// 余额。**读不到时返回空，返回 0 就真的是 0 元**。
     ///
@@ -176,8 +192,11 @@ public:
     ///
     /// 补偿也失败时返回 `Broken`：钱未必还在 `from` 身上，调用方不能当普通失败处理。
     ///
-    /// `to` 为空 = 付给系统（销毁），只有 `supportsMoneySink()` 的后端支持：
-    /// 默认实现会把它当普通账户走 `add`，所以这条路径只由调用方在确认能力之后才用。
+    /// 系统账户的两条边（DESIGN §7.4）：
+    /// * `to` 为空 = 付给系统（销毁）→ 直接 `reduce` 付款方；
+    /// * `from` 为空 = 从系统付款（凭空记账）→ 直接 `add` 收款方。
+    /// 两条都要先在 `checkTransfer` 里过能力声明；没有单边失败后的补偿问题
+    /// （只有一笔动作，要么成要么没动）。
     virtual TransferResult
     transfer(Account const& from, Account const& to, std::int64_t amount, bool allowNegative = false);
 };
@@ -185,10 +204,36 @@ public:
 /// 转账入参的公共校验（默认实现与各后端实现共用）。
 ///
 /// 返回空 = 参数合法、可以往下走；否则是现成的拒绝结果。放在这里的原因很实际：
-/// 金额非正、付款账户为空、自己转自己、以及「这个后端有没有系统账户」这四条错误，
+/// 金额非正、空的付款方 / 收款方、自己转自己、以及「这个后端能不能用系统账户」这几条错误，
 /// 基类默认实现与每个覆写都要判一遍，文案只该有一份。
-std::optional<TransferResult>
-checkTransfer(Account const& from, Account const& to, std::int64_t amount, bool supportsMoneySink);
+///
+/// 系统账户（GLOSSARY）的两个方向在这里分开授权（DESIGN §7.4 / §8.9）：空收款方 = 把钱销毁，
+/// `supportsMoneySink()` 或 `supportsSystemAccount()` 任一为真即可；空付款方 = 凭空记账，
+/// 只有 `supportsSystemAccount()` 放行。
+std::optional<TransferResult> checkTransfer(
+    EconomyProvider const& provider,
+    Account const&         from,
+    Account const&         to,
+    std::int64_t           amount
+);
+
+/// 「资金侧不设上限」的哨兵（GLOSSARY 的管理员店）。
+///
+/// 不用 `-1`：这个值会直接拿去算份数（`affordableUnits` 的除法），做过 `INT64_MAX` 后
+/// 再被 `maxShopAmount` 与货量夹住，不会溢出；用负数就会在每个调用点都要先判哨兵。
+inline constexpr std::int64_t kUnlimitedFunds = std::numeric_limits<std::int64_t>::max();
+
+/// 一次交易里「店那一侧」的资金账户（DESIGN §7.4 / §11）。
+///
+/// 普通商店是店主 XUID；管理员商店是**系统账户**（空账户键）——管理权只给 OP，
+/// 但资金不归任何玩家，所以不能拿牌上记录的创建者冒充收款方。
+Account shopSideAccount(bool adminShop, std::string_view ownerXuid);
+
+/// 店那一侧能付多少钱（卖出方向上「付款方余额」这一条上限的来源）。
+///
+/// 管理员店的资金侧不设上限（GLOSSARY），返回 `kUnlimitedFunds`：份数上限只剩「你手里的货」
+/// 与「商店箱还能装几份」两条，不会出现「系统账户的钱不够」这种不可能发生的原因。
+std::int64_t shopSideFunds(bool adminShop, std::int64_t ownerFunds);
 
 /// 空实现：谁的余额都读不到，写操作一律「成功」但什么也不记（DESIGN §8.6 第 3 条）。
 ///

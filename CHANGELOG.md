@@ -66,6 +66,11 @@
 - 离线店主按后端能力判定（`economy::ownerUnreachable`，纯函数）：点牌时藏按钮、`prepareSell`、`planTrade` 三处共用同一个判据；`economy.requireOwnerOnline`（默认 `true`）只对不支持离线的记分板有意义，关掉并不会让记分板获得给离线玩家记账的能力。
 - 商店税（`tax.shopTaxRate`，默认 `0`）：店主承担，`总额 × 税率` 向下取整，税为 0 完全跳过第二笔。买入时从店主收入里扣（买家支出不变），卖出时店主另付一笔；收税排在物品那一步之后，所以任何失败点的补偿都精确，补偿再失败才升级为 `Broken`。税率只在能「把钱付给系统（销毁）」的后端上收得走（目前只有 LegacyMoney），记分板上不生效并在启动日志里说明。`shopTaxRate > 0` 时启动无条件 WARN 要求把 LegacyMoney 的 `pay_tax` 设为 0（那个值没有任何导出能读，只能提醒）。卖出方向的份数上限按含税成本算（`affordableUnitsWithTax`）。
 - `tests/shop/EconomyTest.cpp` / `TradePricingTest.cpp` / `TradePlanTest.cpp` 补 17 个中文用例：探测顺序与降级原因文案、探测计划、离线判据矩阵、转账参数校验、税率舍入与边界（含 NaN）、含税份数上限、成交方案里的税额与「税压在谁身上」的两种形状。
+- 管理员商店（`src/shop/Economy.*`、`src/mod/TradeService.*`、`src/shop/SignProtection.*`）：OP 建的管理员店现在真的能买卖了——资金对手方是**系统账户**（空账户键），买入时钱被销毁、卖出时凭空记到玩家账上（`EconomyProvider::supportsSystemAccount()`，LegacyMoney 走 `LLMoney_Add` / `LLMoney_Trans(to="")`，记分板走 `add` / `reduce`）。库存仍然来自容器，卖光就是没货；管理员店不收商店税、不吃离线策略，`shopSideAccount` / `shopSideFunds` 把这两条收成纯函数。
+- 管理员店的表单角色一律是访客（`shopFormRoleOf`）：OP 在这里也是买家，「不能跟自己交易」不适用；管理能力（改牌、开箱、拆箱）仍由 `shopActorOf` / `canManageShop` 判，与表单按钮彻底解耦。
+- `checkTransfer` 改成问后端对象（`checkTransfer(provider, from, to, amount)`）：金额、空付款方（＝从系统付款，需要系统账户能力）、空收款方（＝销毁，销毁能力或系统账户能力任一）、自转自，四条校验与文案仍只有一份；基类 `transfer` 补上两个系统账户方向的实现（凭空记账 / 销毁）。
+- `tradeTaxPlan` 新增 `adminShop` 入参：管理员店两个方向都不收税。卖出份数表单在管理员店不再把「店主余额」写进上限来源（`UnitsForm` 的 `capHintOf`）。
+- `tests/shop/EconomyTest.cpp` / `TradePlanTest.cpp` / `SignProtectionTest.cpp` / `ShopInfoTest.cpp` / `UnitsFormTest.cpp` 补 6 个中文用例：系统账户的两个方向与能力组合、管理员店的资金侧纯函数、管理员店免税、表单角色、管理员店按钮与限额文案。
 
 ### 变更
 

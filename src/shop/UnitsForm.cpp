@@ -71,6 +71,15 @@ Wording const& wordingOf(TradeDirection direction) {
     return direction == TradeDirection::Sell ? kSellWording : kBuyWording;
 }
 
+/// 上限受什么限制。卖出侧的默认那句提到「店主余额」，而管理员店没有这一条（资金侧不设上限，
+/// DESIGN §7.4），所以按店的性质换一句——不能把不存在的上限摆给玩家看。
+std::string capHintOf(ShopInfoData const& data, TradeDirection direction) {
+    if (direction == TradeDirection::Sell && data.adminShop) {
+        return "（受你手里的货、商店箱空间与单次上限限制）";
+    }
+    return wordingOf(direction).capHint;
+}
+
 /// 剩下的货有几份：买入看商店箱（`stockUnits`）、卖出看玩家手里（`heldUnits`）。
 int goodsCount(ShopInfoData const& data, TradeDirection direction) {
     return direction == TradeDirection::Sell ? data.heldUnits : data.stockUnits;
@@ -148,7 +157,7 @@ std::string unitsFormContent(TradeDirection direction, ShopInfoData const& data,
         // 所以标签写清「你的」，与上限那行的「店主余额」分开。
         append("你的余额：" + moneyText(data.currencySymbol, *data.balance));
     }
-    append(std::string{words.capLabel} + "：" + std::to_string(model.maxUnits) + " 份" + words.capHint);
+    append(std::string{words.capLabel} + "：" + std::to_string(model.maxUnits) + " 份" + capHintOf(data, direction));
 
     // 每一档都把总件数与总金额写出来：选哪一档，看到的数就是实际成交的数。
     for (auto const& choice : model.choices) {

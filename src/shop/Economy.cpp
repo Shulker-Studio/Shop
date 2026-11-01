@@ -150,19 +150,28 @@ bool ownerUnreachable(bool ownerOnline, bool backendSupportsOffline, bool requir
     return requireOwnerOnline && !ownerOnline;
 }
 
-std::optional<TransferResult>
-checkTransfer(Account const& from, Account const& to, std::int64_t amount, bool supportsMoneySink) {
+std::optional<TransferResult> checkTransfer(
+    EconomyProvider const& provider,
+    Account const&         from,
+    Account const&         to,
+    std::int64_t           amount
+) {
     if (amount <= 0) {
         return TransferResult{TransferStatus::Rejected, "转账金额必须大于 0"};
     }
-    if (from.empty()) {
-        return TransferResult{TransferStatus::Rejected, "付款账户为空，没法扣款"};
+    if (from.empty() && to.empty()) {
+        // 两边都是系统账户：既没有钱生出来，也没有钱被销毁，这笔转账没有意义。
+        return TransferResult{TransferStatus::Rejected, "系统账户不能转给系统账户"};
+    }
+    // 空付款方 = 从系统付款（凭空记账，管理员店的卖出方向，DESIGN §7.4）。
+    if (from.empty() && !provider.supportsSystemAccount()) {
+        return TransferResult{TransferStatus::Rejected, "这个后端没有系统账户，没法从系统付款"};
     }
     // `to` 为空是合法的（付给系统 = 销毁），与「自己转给自己」不是一回事。
     if (!to.empty() && from == to) {
         return TransferResult{TransferStatus::Rejected, "不能转给同一个账户"};
     }
-    if (to.empty() && !supportsMoneySink) {
+    if (to.empty() && !provider.supportsMoneySink() && !provider.supportsSystemAccount()) {
         // 空账户 = 付给系统（销毁）。不声明支持的后端拿它没谱，当成普通账户会变成一笔读不到的入账。
         return TransferResult{TransferStatus::Rejected, "这个后端没有可以把钱付给系统的账户"};
     }
@@ -171,13 +180,23 @@ checkTransfer(Account const& from, Account const& to, std::int64_t amount, bool 
 
 TransferResult
 EconomyProvider::transfer(Account const& from, Account const& to, std::int64_t amount, bool allowNegative) {
-    if (auto const invalid = checkTransfer(from, to, amount, supportsMoneySink())) {
+    if (auto const invalid = checkTransfer(*this, from, to, amount)) {
         return *invalid;
     }
+    if (from.empty()) {
+        // 从系统付款 = 凭空记账（管理员店的卖出方向，DESIGN §7.4）。只有一笔动作，
+        // 没有「扣了没入」的中间态，所以不需要补偿。
+        if (add(to, amount)) {
+            return {TransferStatus::Ok, {}};
+        }
+        return {TransferStatus::Rejected, "系统账户的钱没能记到收款方账上"};
+    }
     if (to.empty()) {
-        // 声明支持「付给系统」却没覆写 `transfer`：基类的 `reduce` + `add` 拼不出销毁，
-        // 硬走会变成一次「收款方不可记账、款已退回」的普通拒绝，读日志的人会被误导。
-        return {TransferStatus::Rejected, "这个后端没有实现「付给系统」的转账"};
+        // 付给系统 = 销毁（管理员店的买入方向、商店税）。同样只有一笔动作。
+        if (reduce(from, amount, allowNegative)) {
+            return {TransferStatus::Ok, {}};
+        }
+        return {TransferStatus::Rejected, "付款方扣款失败（余额不足或账户不可记账）"};
     }
     if (!reduce(from, amount, allowNegative)) {
         return {TransferStatus::Rejected, "付款方扣款失败（余额不足或账户不可记账）"};
@@ -191,6 +210,20 @@ EconomyProvider::transfer(Account const& from, Account const& to, std::int64_t a
         return {TransferStatus::Rejected, "收款方不可记账，款已退回付款方"};
     }
     return {TransferStatus::Broken, "收款方不可记账，且退款也失败"};
+}
+
+Account shopSideAccount(bool adminShop, std::string_view ownerXuid) {
+    if (adminShop) {
+        return Account{}; // 系统账户（空键）：管理员店的资金不归任何玩家
+    }
+    return Account{ownerXuid};
+}
+
+std::int64_t shopSideFunds(bool adminShop, std::int64_t ownerFunds) {
+    if (adminShop) {
+        return kUnlimitedFunds;
+    }
+    return ownerFunds;
 }
 
 std::optional<int> toScoreValue(std::int64_t amount) {
