@@ -232,13 +232,15 @@ PlayerEditSignBeforeEvent
 
 | H2c | `TransportItemsGoal::tick` / `_executeEvent`（`v1_21_100` 的新 AI goal，经 `ChestBlockActor::ChestCloser` 开箱取放） | 铜傀儡从商店箱取货 / 往商店箱放货 | 中（goal 粒度，取消会影响该傀儡的所有运输；也可能误伤同样使用该 goal 的其他生物） |
 | H2d | `DropperBlockActor::pushOutItems(BlockSource&)` | 投掷器往商店箱塞货 | 低 |
-| H3a | `ExplosionStartedEvent::mBlocks`（`TypedStorage<8,64,std::unordered_set<BlockPos>>`），由 `BlockEventCoordinator::sendEvent` 拦截 | 爆炸时把商店箱从方块列表里**剔除**，而不是取消整场爆炸 | 中（同 ChestLock 已验证） |
-| H3b | `PistonBlockActor::_attachedBlockWalker(BlockSource&, BlockPos const&, uchar, bool)` | 活塞推动路径上遇到商店箱时返回 false | 中 |
-| H3c | `WitherBoss::_destroyBlocks(Level&, AABB const&, int, WitherAttackType, BlockSource&)` | 凋灵破坏范围内含商店箱时提前返回 | 中 |
-| H3d | `FireBlock` 燃烧判定 / `BlockEventCoordinator` 的 burn 分支 | 火焰不吞掉商店箱 | 中 |
-| H3e | `PlayerDestroyBlockEvent` + 扫描周围附着的商店牌（对齐 Java `getAttachedSigns`） | **拆掉商店牌依附的方块**会让牌子物理掉落、商店消失，这是非店主绕过"不能拆牌"的真实路径 | 低（逻辑无需引擎内部符号，属于纯判定） |
+| H3a | `ExplosionStartedEvent::mBlocks`（`TypedStorage<8,64,std::unordered_set<BlockPos>>`），由 `BlockEventCoordinator::sendEvent` 拦截 | 爆炸时把商店方块从方块列表里**剔除**，而不是取消整场爆炸 | 中（同 ChestLock 已验证） |
+| H3b | `PistonBlockActor::_attachedBlockWalker(BlockSource&, BlockPos const&, uchar, uchar)` | 活塞推动路径上遇到商店方块时返回 false（原版语义：这一路推不动） | 中 |
+| H3c | `WitherBoss::_destroyBlocks(Level&, AABB const&, BlockSource&, int, WitherAttackType)` **只置标志后放行** + `Level::$destroyBlock(BlockSource&, BlockPos const&, bool, BlockChangeContext const&)` 在标志期内逐格拒绝 | 凋灵破坏范围内商店方块逐格留下，其余照常被毁——**不是**提前返回 | 中高（头文件只给整个 `AABB`，逐格剔除只能落在 `Level::destroyBlock` 上；依赖「凋灵的销毁走这条路径」，只能在真机确认） |
+| H3d | `FireBlock::checkBurn(BlockSource&, BlockPos const&, int, IRandom&, int, BlockPos const&)` | 火焰烧到商店方块时跳过这一格，周围照常烧 | 中 |
+| H3e | `PlayerDestroyBlockEvent` + 扫描周围附着的商店牌（对齐 Java `getAttachedSigns`） | **拆掉商店牌依附的方块**会让牌子物理掉落、商店消失，这是非店主绕过"不能拆牌"的真实路径 | 低（逻辑无需引擎内部符号，属于纯判定；与 07 共用同一个监听） |
 
-> H3 之所以不用 iListenAttentively 的 `ExplosionBeforeEvent` / `PistonPushBeforeEvent` / `WitherDestroyBeforeEvent` / `FireTryBurnBlockBeforeEvent`，是因为那些事件只能**取消整场**爆炸/推动/燃烧，粒度不对（ADR-0004）。这四个 hook 的符号在 LeviLamina 26.51.8 头文件中均已确认存在，写法参照 ChestLock。
+> H3 之所以不用 iListenAttentively 的 `ExplosionBeforeEvent` / `PistonPushBeforeEvent` / `WitherDestroyBeforeEvent` / `FireTryBurnBlockBeforeEvent`，是因为那些事件只能**取消整场**爆炸/推动/燃烧，粒度不对（ADR-0004）。这几条 hook 的符号在 LeviLamina 26.51.8 头文件中均已确认存在，写法参照 ChestLock。
+>
+> **H3c 与 ChestLock 不一样**：ChestLock 发现范围内有受保护箱子就 `return`，等于取消整场凋灵破坏——那正是 ADR-0004 拒绝的行为（旁边方块也一块不掉）。26.51.8 的 `_destroyBlocks` 只拿到一个 `AABB`，没有逐格的插手点，所以这里改成「`_destroyBlocks` 只置一个『凋灵正在破坏』的线程标志后放行原版，由 `Level::$destroyBlock` 在标志期内逐格拒绝」。标志只在这一次凋灵破坏期间为真，因此玩家拆除（07）、爆炸（H3a）、我们主动打掉商店牌都不受影响。若真机发现凋灵的销毁不走 `Level::destroyBlock`（守卫一次都没命中），退路是回到提前返回，代价是凋灵范围内旁的方块不被破坏（12 有对应验收项）。
 
 ### 6.3 直接监听即可（iListenAttentively 提供，无需自己 hook）
 
@@ -534,7 +536,7 @@ public:
 | 右键点商店箱 | 取消（不能开箱） | 允许（可配 `allowOwnerOpenChest`，默认 true） | 允许 | `PlayerOpenContainerBeforeEvent` |
 | 拆商店牌 | 取消 | 允许（拆除即关店） | 允许 | `PlayerAttackBlockBeforeEvent` + `PlayerDestroyBlockEvent` |
 | 拆商店箱 | 取消 | 允许（连带关店） | 允许 | 同上 |
-| 爆炸 / 活塞 / 凋灵 / 火焰 | 保护 | 保护 | 保护 | **方块级**：`ExplosionStartedEvent::mBlocks` 剔除、`PistonBlockActor::_attachedBlockWalker` 返回 false、`WitherBoss::_destroyBlocks` 提前返回（见 6.2、ADR-0004） |
+| 爆炸 / 活塞 / 凋灵 / 火焰 | 保护 | 保护 | 保护 | **方块级**：`ExplosionStartedEvent::mBlocks` 剔除、`PistonBlockActor::_attachedBlockWalker` 返回 false、凋灵破坏期间 `Level::$destroyBlock` 逐格拒绝、`FireBlock::checkBurn` 跳过这一格（见 6.2、ADR-0004） |
 | 漏斗方块 / 漏斗矿车抽塞 | 阻止 | 阻止 | 阻止 | H2a（见 6.2） |
 | 铜傀儡取放货 | 阻止 | 阻止 | 阻止 | H2c |
 | 投掷器塞货 | 阻止 | 阻止 | 阻止 | H2d |
@@ -549,6 +551,13 @@ public:
 - 拆箱与拆牌都是「店主与 OP」。拆牌即关店；拆箱连带关店。
 - 拆商店箱（双箱任意一半都算）时，先按原版语义把绑在上面的商店牌打掉（有掉落），商店随之失效。拆的若是**不**挨着牌子的那一半，另一半还在、牌子不会因失去支撑而自己掉落，这一步必须显式做（§13 第 34 条）。
 - 普通箱子、普通告示牌不在判定内：开箱、攻击、拆除都交给原版。
+
+**破坏防护**（表格里那两行：爆炸/活塞/凋灵/火焰、拆依附方块）的落地口径（08）：
+
+- 保护对象与 07 完全一致：方块本身是商店牌（正面文本像商店牌）或绑着商店牌的容器（§9.3），不看 `shopContainers` 白名单。
+- 粒度是**方块**，不是事件：爆炸只把商店方块从 `mBlocks` 里删掉（旁边的方块照炸），火焰只跳过被烧的那一格（旁边的木头照烧）；活塞没有「部分推动」语义，所以一次推动里包含商店方块时整次推动失败，但别处的活塞照常工作。
+- **凋灵不提前返回**：`WitherBoss::_destroyBlocks` 只置「凋灵正在破坏」的线程标志后放行原版，由 `Level::$destroyBlock` 在标志期内逐格拒绝（§6.2 H3c）。提前返回会把整场破坏取消，违反 ADR-0004。
+- 「拆商店牌依附的方块」单列一支（H3e）：拆的往往不是容器而是块普通方块，但牌子会物理掉落、商店随之消失，所以放行条件与拆牌相同（店主与 OP），提示要把后果说出来。牌挂在石头墙上也算——牌面判据不看附着容器（§9.2）。店主拆掉时什么都不用做：牌子由原版物理打落，与拆牌等价（§4.2）。
 
 「编辑商店牌文本」有两道闸：交互阶段取消 `PlayerInteractBlockEvent`（非店主连编辑界面都弹不出来），提交阶段在 `PlayerEditSignBeforeEvent` 里再判一次（非店主提交一律丢弃这个包）。后者是防绕过：别的模组、取消语义失效、以后从管理表单进编辑，都不该让改牌生效。
 
@@ -821,6 +830,9 @@ public:
 | LeviLamina 目标版本 | 已定 `26.51.8`（兼容 `>=26.51.7 <26.60.0`） | iListenAttentively 0.17.0、行为以实际头文件为准 |
 | 商店税与 `pay_tax` 双重扣税 | 已知，**无法程序化检测** | `shopTaxRate > 0` 时无条件 WARN；服主不关 `pay_tax` 则商店税按 0 处理（见 8.9） |
 | H2/H3 自定义 hook 的符号漂移 | 已知 | 每个 LeviLamina 大版本回归一次；符号在 26.51.8 头文件中已确认存在 |
+| 凋灵逐格剔除的落点 | 待实测 | 逐格剔除只能落在 `Level::$destroyBlock`（`_destroyBlocks` 只给整个 `AABB`）。若凋灵的销毁不走这条路径，商店箱会被毁；退路是回到提前返回（代价：凋灵范围内旁的方块不毁），见 §6.2 H3c |
+| 依附方块的物理掉落 | 待实测 | 拆掉商店牌依附的方块后，牌子是否真的由原版物理打落（以及掉落物是否尊重 `doTileDrops`）；若不打落，则「店主拆时与拆牌等价」不成立，需改成拆方块时显式打牌 |
+| 爆炸/活塞不保护「依附方块」 | 已知，P0 接受 | H3e 只盖玩家拆除路径；TNT 炸掉牌子背后那块石头、或活塞推走它，牌子仍会掉落、商店仍会消失。P1 若收紧，把 `cellsToSpare` 的判定从「这一格是商店方块」扩成「这一格是商店方块或是商店牌的附着格」 |
 | 编辑拦截的用户体验 | 待实测 | 交互阶段拦下可以不弹 UI，但需确认 `PlayerInteractBlockEvent` 的取消确实阻止 `OpenSignPacket` |
 | 包路径是否写入 `mLastEditXuid` | 待实测 | `setMessageForServerScripingOnly` 需要显式传 `ownerID`；若包路径不写，03/06 需要在写入后补一次显式 ownerID |
 | 侧挂的悬挂牌无法从状态判定墙面 | 已知，P0 不支持 | 基岩把两种悬挂形态合并成一个方块 ID，侧挂时 `facing_direction` 与墙面垂直；猜错会误绑旁边的箱子 |

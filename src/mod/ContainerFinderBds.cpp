@@ -14,6 +14,7 @@
 #include "mc/world/level/block/actor/SignBlockActor.h"
 #include "mc/world/level/block/states/BlockState.h"
 #include "mc/world/level/block/states/BlockStateInstance.h"
+#include "shop/DestructionProtection.h"
 #include "shop/ShopSign.h"
 
 #include <algorithm>
@@ -405,6 +406,37 @@ attachedShopSignsAt(BlockSource& region, BlockPos const& containerPos, ShopConfi
 
 std::optional<ShopOwner> shopSignOwnerAt(BlockSource& region, BlockPos const& signPos, ShopConfig const& config) {
     return shopSignOwnerHere(region, signPos, toSignConfig(config));
+}
+
+std::vector<AttachedShopSign>
+shopSignsWithAttachedCell(BlockSource& region, BlockPos const& attachedCell, ShopConfig const& config) {
+    auto const signConfig = toSignConfig(config);
+
+    // 先拿到六个邻居里能读出几何的（残牌、侧挂的悬挂牌读不出来，直接跳过）
+    std::vector<SignRef> geometries;
+    for (Cell const& cell : neighboursOf(toCell(attachedCell))) {
+        if (auto const geometry = readSignGeometry(region, toBlockPos(cell))) {
+            geometries.push_back(*geometry);
+        }
+    }
+
+    // 「谁的附着格是这一格」的几何口径在纯逻辑层，这里不另算一份偏移
+    std::vector<AttachedShopSign> attached;
+    for (SignRef const& sign : signsAttachedTo(toCell(attachedCell), geometries)) {
+        if (auto owner = shopSignOwnerHere(region, toBlockPos(sign.pos), signConfig)) {
+            attached.push_back(AttachedShopSign{sign, *owner});
+        }
+    }
+    return attached;
+}
+
+bool isShopBlockAt(BlockSource& region, BlockPos const& pos, ShopConfig const& config) {
+    // 便宜的粗筛：商店牌与容器都必有方块实体，没方块实体的格子一定不是。
+    // 爆炸列表动辄上百格，大部分被这一句挡掉，不必每格都解析牌面文本。
+    if (region.getBlockEntity(pos) == nullptr) {
+        return false;
+    }
+    return shopSignOwnerAt(region, pos, config).has_value() || !attachedShopSignsAt(region, pos, config).empty();
 }
 
 } // namespace ss::shop

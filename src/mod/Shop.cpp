@@ -1,6 +1,7 @@
 #include "mod/Shop.h"
 
 #include "mod/ContainerProtectionListener.h"
+#include "mod/DestructionProtectionHooks.h"
 #include "mod/EconomyService.h"
 #include "mod/SignEditListener.h"
 #include "mod/SignInteractListener.h"
@@ -35,11 +36,13 @@ bool Shop::enable() {
     registerSignEditListener();
     registerSignInteractListener();
     registerContainerProtectionListener();
+    registerDestructionProtectionHooks();
     return true;
 }
 
 bool Shop::disable() {
     getSelf().getLogger().debug("Disabling...");
+    unregisterDestructionProtectionHooks();
     unregisterContainerProtectionListener();
     unregisterSignInteractListener();
     unregisterSignEditListener();

@@ -23,6 +23,10 @@ constexpr TouchWords wordsOf(ShopBlockTouch touch) {
         return {"商店箱", "拆掉", "这个箱子"};
     case ShopBlockTouch::BreakSign:
         return {"商店牌", "拆掉", "这块牌"};
+    case ShopBlockTouch::BreakSignSupport:
+        // 拆依附方块时说“这块方块上挂着……商店牌”，所以主语是牌子本身，
+        // 宾语用不上（整句由 `supportBlockMessage` 拼）。
+        return {"商店牌", "拆", "这块方块"};
     }
     return {"商店箱", "打开", "这个箱子"};
 }
@@ -56,6 +60,32 @@ std::string ownerOpenDisabledMessage() {
          + std::string(words.object);
 }
 
+/// 拆「商店牌依附的那一格」（DESIGN §6.2 H3e）：玩家以为自己在拆一块普通方块，
+/// 不知道牌子会跟着掉、商店会没，所以这一句必须把后果说出来。
+/// 主语与动词仍然从 `wordsOf` 取，保持「加一个取值只改那张表」的口径。
+std::string supportBlockMessage(ShopActor actor, std::string const& ownerName, bool adminShop) {
+    auto const words = wordsOf(ShopBlockTouch::BreakSignSupport);
+
+    std::string message = "这块方块上挂着";
+    if (adminShop) {
+        message += "管理员商店的";
+    } else if (actor == ShopActor::NoRecordedOwner) {
+        message += "没有记录店主的";
+    } else if (!ownerName.empty()) {
+        message += " " + ownerName + " 的";
+    } else {
+        message += "别人的";
+    }
+    message += std::string(words.subject);
+    message += "，拆了牌子会掉下来、商店也就没了";
+    // 管理员商店与无主牌都只给 OP（§9.2 / §11），写“店主”会让人去找一个不存在的人。
+    // 括号不能省：`+=` 的优先级高于 `?:`，省了它就会把条件本身当成字符拼进去。
+    bool const operatorOnly = adminShop || actor == ShopActor::NoRecordedOwner;
+    message += (operatorOnly ? "；只有 OP 能" : "；只有店主（或 OP）能");
+    message += std::string(words.verb);
+    return message;
+}
+
 } // namespace
 
 ShopBlockDecision planShopBlockTouch(ShopBlockTouchContext const& context) {
@@ -73,12 +103,16 @@ ShopBlockDecision planShopBlockTouch(ShopBlockTouchContext const& context) {
         break;
     case ShopBlockTouch::BreakChest:
     case ShopBlockTouch::BreakSign:
+    case ShopBlockTouch::BreakSignSupport:
         if (canManageShop(context.actor)) {
             return {};
         }
         break;
     }
 
+    if (context.touch == ShopBlockTouch::BreakSignSupport) {
+        return {false, supportBlockMessage(context.actor, context.ownerName, context.adminShop)};
+    }
     if (context.actor == ShopActor::NoRecordedOwner) {
         return {false, noRecordedOwnerMessage(context.touch)};
     }

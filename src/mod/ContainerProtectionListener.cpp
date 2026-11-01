@@ -81,6 +81,20 @@ ShopBlockDecision judgeSigns(
     return {};
 }
 
+/// 拆「商店牌依附的那一格」（DESIGN §6.2 H3e）：不是商店牌、也不是商店箱，
+/// 但拆了它牌子会物理掉落、商店随之消失——非店主绕过「不能拆牌」的真实路径。
+///
+/// 放行条件与拆牌完全相同（店主与 OP），所以走同一张判定表，只有说法不同。
+ShopBlockDecision
+judgeSupportBlock(BlockSource& region, BlockPos const& pos, Player const& player, ShopConfig const& config) {
+    return judgeSigns(
+        shopSignsWithAttachedCell(region, pos, config),
+        ShopBlockTouch::BreakSignSupport,
+        player,
+        config
+    );
+}
+
 /// 这一格商店方块对这次操作放不放行。`signTouch` / `chestTouch` 区分拆的是牌还是箱。
 ShopBlockDecision judge(
     ShopBlockSubject const& subject,
@@ -127,6 +141,11 @@ void onAttackBlock(AttackBlockBeforeEvent& event) {
     auto&      region  = player.getDimensionBlockSource();
     auto const subject = shopBlockAt(region, event.pos(), *config);
     if (!subject) {
+        // 不是商店方块本身，但可能挂着商店牌（H3e，与拆除那道用同一个判据）
+        ShopBlockDecision const support = judgeSupportBlock(region, event.pos(), player, *config);
+        if (!support.allowed) {
+            reject(event, player, support);
+        }
         return;
     }
     ShopBlockDecision const decision =
@@ -147,6 +166,12 @@ void onDestroyBlock(DestroyBlockEvent& event) {
     auto&      region  = player.getDimensionBlockSource();
     auto const subject = shopBlockAt(region, event.pos(), *config);
     if (!subject) {
+        // 不是商店方块本身，但可能挂着商店牌（H3e）：放行时什么都不用做，
+        // 牌子会在下一拍被原版物理打落——与拆牌等价（DESIGN §4.2）。
+        ShopBlockDecision const support = judgeSupportBlock(region, event.pos(), player, *config);
+        if (!support.allowed) {
+            reject(event, player, support);
+        }
         return;
     }
 

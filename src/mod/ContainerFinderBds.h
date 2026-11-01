@@ -144,6 +144,24 @@ struct AttachedShopSign {
 std::vector<AttachedShopSign>
 attachedShopSignsAt(BlockSource& region, BlockPos const& containerPos, ShopConfig const& config);
 
+/// 反查：附着格正好是这一格的商店牌（DESIGN §6.2 H3e）。
+///
+/// 与 `attachedShopSignsAt` 是同一根轴上的两个口径：那个问「这一格**容器**绑着哪些牌」
+/// （要求这一格是容器、且牌子真的绑在它上面，§9.3），这个只问「哪些牌的附着格是这一格」
+/// ——墙牌贴在它侧面、站立牌立在它顶面、吊牌吊在它底面都算，不管这一格是不是容器。
+/// 拆掉这一格牌子会物理掉落、商店随之消失，所以就算它只是块石头也要保护：
+/// 牌面「像不像商店牌」的判据不看附着容器（§9.2）。
+///
+/// 只看六个正邻居（附着格必在其中），不扫更大范围。返回空 = 这一格上没挂着商店牌。
+std::vector<AttachedShopSign>
+shopSignsWithAttachedCell(BlockSource& region, BlockPos const& attachedCell, ShopConfig const& config);
+
+/// 这一格是不是被商店占用的方块：商店牌本身，或绑着商店牌的容器（DESIGN §9.3）。
+///
+/// 判据只在这里组装一次：破坏防护（08）的四条 hook 都用它，不各写一份。
+/// 不看 `shopContainers` 白名单，牌面用「像商店」而不是「现在严格合法”（同 §9.2）。
+bool isShopBlockAt(BlockSource& region, BlockPos const& pos, ShopConfig const& config);
+
 /// 这一格告示牌是不是一块商店牌；是的话返回它的店主。
 ///
 /// 判据与容器保护一致：只看正面文本「像不像商店牌」，不看附着容器

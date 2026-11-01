@@ -128,3 +128,44 @@ TEST_CASE("放行时不带提示：消息只用来解释拒绝") {
     CHECK(decide(ShopBlockTouch::OpenChest, ShopActor::Owner).message.empty());
     CHECK(decide(ShopBlockTouch::BreakSign, ShopActor::Operator).message.empty());
 }
+
+TEST_CASE("拆依附方块：放行条件与拆牌相同（店主与 OP）") {
+    CHECK_FALSE(decide(ShopBlockTouch::BreakSignSupport, ShopActor::Other).allowed);
+    CHECK_FALSE(decide(ShopBlockTouch::BreakSignSupport, ShopActor::NoRecordedOwner).allowed);
+    CHECK(decide(ShopBlockTouch::BreakSignSupport, ShopActor::Owner).allowed);
+    CHECK(decide(ShopBlockTouch::BreakSignSupport, ShopActor::Operator).allowed);
+    CHECK(decide(ShopBlockTouch::BreakSignSupport, ShopActor::Owner).message.empty());
+}
+
+TEST_CASE("拆依附方块：提示点出后果（牌子会掉、商店会没），不让人以为只是拆普通方块") {
+    auto const decision = decide(ShopBlockTouch::BreakSignSupport, ShopActor::Other);
+    CHECK_FALSE(decision.allowed);
+    CHECK(decision.message.find("Alex") != std::string::npos);
+    CHECK(decision.message.find("商店牌") != std::string::npos);
+    CHECK(decision.message.find("商店也就没了") != std::string::npos);
+    // 拆的是方块，不是把牌本身说成“商店箱”
+    CHECK(decision.message.find("商店箱") == std::string::npos);
+}
+
+TEST_CASE("拆依附方块：管理员商店只提 OP，且不报店主名") {
+    auto const decision = decide(
+        ShopBlockTouch::BreakSignSupport,
+        ShopActor::Other,
+        /*allowOwnerOpenChest=*/true,
+        "Alex",
+        /*adminShop=*/true
+    );
+    CHECK_FALSE(decision.allowed);
+    CHECK(decision.message.find("OP") != std::string::npos);
+    CHECK(decision.message.find("Alex") == std::string::npos);
+    CHECK(decision.message.find("管理员商店") != std::string::npos);
+}
+
+TEST_CASE("拆依附方块：无主牌只提 OP，不拼出「是  的」这种半句话") {
+    auto const decision =
+        decide(ShopBlockTouch::BreakSignSupport, ShopActor::NoRecordedOwner, /*allowOwnerOpenChest=*/true, "");
+    CHECK_FALSE(decision.allowed);
+    CHECK(decision.message.find("没有记录店主") != std::string::npos);
+    CHECK(decision.message.find("只有 OP") != std::string::npos);
+    CHECK(decision.message.find("是 ") == std::string::npos);
+}
