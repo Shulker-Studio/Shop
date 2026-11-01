@@ -14,7 +14,7 @@
 - [x] 补偿必须对称：钱记上了但取货失败 → 把已取走的物品还给玩家；任一补偿失败 → 与 P0 同一套（`fatal` + 通知 OP + 冻结这一对）
 - [x] 表单正文别写「商店箱还能装 0 份」这类误导数字
 - [x] 单测：无限收购下箱空间不参与上限；玩家手里没有货仍被拒（`NotEnoughGoods`）；店主余额不足仍被拒；普通店卖出行为不变
-- [x] 真机：卖 10 次 → 每次都收下并给钱、箱子一件不动（第一格逐字段不变）、`logs/discarded-*.jsonl` 里能 `jq` 出对应的 `item.nbt`
+- [ ] 真机（**未验**）：卖 10 次 → 每次都收下并给钱、箱子一件不动（第一格逐字段不变）、`logs/discarded-*.jsonl` 里能 `jq` 出对应的 `item.nbt`
 - [x] `xmake test` 全绿，测试数与断言数写进本票
 
 ## Answer
@@ -52,6 +52,7 @@
   的差算出，不依赖 `tm_gmtoff` 与 `strftime("%z")` 的平台差异）与 `src/mod/DiscardLog.*`
   （`describeDiscardedItems` 生成 SNBT、`writeDiscardRecords` 追加写；`ios::binary` 保证 `
 ` 不被翻成 `
+
 `）。
   SNBT 取法按票面：`stack.save(SaveContext{SaveContext::SaveUseCase::Clone})->toString()`。
 - 补偿对称（票面要求，路径本来就对称，这次只是把「写进箱子」那一步换成「销毁」）：
@@ -62,8 +63,12 @@
 `§10.3` 的两条公式注明卖出侧的「容器剩余空间」在管理员店为无限且货是销毁的；`GLOSSARY.md` 新增「销毁留档」
 （含 `_Avoid_`：流水 / 备份）；`CHANGELOG.md` 记一条。
 
-**没做的一件（有理由）**：`transactionLog.enabled` 这个总开关属于 `p1-transaction-log` 的 spec D5，
-本票没有自己发明一个配置键；现在这条通道**无条件**写 `discarded`，等流水落地后由它接管开关与压缩规则。
+**没做的一件（有理由，也是已知缺口）**：`p1-transaction-log` 的 D4 / D5 还要求「按天轮转 + 7 天后 gzip」
+与「`transactionLog.enabled = false` 时两个文件一起停」。这两条都**没有**落地：本票没有自己发明
+`transactionLog` 配置块（那会与该 spec 的字段定义打架），所以现在这条通道**无条件**追加写、不压缩，
+文件按天分（`discarded-YYYY-MM-DD.jsonl`）但绝不删除。日常体量是「管理员店收到的货」，
+真到了需要压缩的那天，`p1-transaction-log` 落地时会接管开关与轮转——那是它的地盘，
+票面也只要求「通过，不包括这部分。
 
 ### 测试
 
@@ -72,7 +77,7 @@
 - `xmake test`：`ShopTests/default passed`
 - `./build/windows/x64/release/ShopTests.exe`：**288 cases / 3356 assertions，全绿**
   （票 01 后 278 / 3332 → **+10 cases / +24 assertions**；基线 260 / 3254）
-- 分布：新增 `DiscardRecordTest`（4 个：键序固定的完整字符串比对、转义后仍是一行、中文原样、nbt 原样透传、文件名）；
+- 分布：新增 `DiscardRecordTest`（5 个：键序固定的完整字符串比对、转义后仍是一行、中文原样、nbt 原样透传、文件名）；
   `TradePlanTest` +4（无限收购下箱空间不进上限而手里的货/店主余额照旧、没有货仍报 `NotEnoughGoods`、
   关闭部分成交不会被报成「装不下」、`maxTradeUnits` 里那一项不存在）；
   `UnitsFormTest` +1（箱空间写「无限」、上限来源不再列箱空间）。
@@ -102,3 +107,20 @@
 5. **磁盘满 / 文件被占用时只 warn、交易仍成功** —— **未验**。
    退路：`writeDiscardRecords` 的三个失败点都只 `logger.warn` 并 `return`，没有任何返回值参与 `TradeResult`；
    真机可以临时把 `logs` 建成同名**文件**来模拟目录创建失败。
+
+### 代码审查后的修改（Standards / Spec 两轴并行审 `git diff a737762...HEAD`）
+
+**改掉的**
+
+- Spec 轴：票面真机项退回 `- [ ]` 并标「未验」（勾着「卖 10 次已过」而 Answer 说没跑过是自相矛盾）。
+- Spec 轴：`DiscardRecordTest` 的用例数写错了（写 4 个，实为 5 个），已改；总数 288 / 3356 当时是对的。
+- Spec 轴：把 `p1-transaction-log` D4 / D5 的两条要求（轮转 + 压缩、`transactionLog.enabled` 一起停）
+  从「没做的一件」升级成**明确列出的已知缺口**：文件按天分但只增不减、开关还没地方关。
+  这是与该 spec 的边界（它定义配置块与轮转规则，本票只负责「交出物品堆」），不是漏做。
+- Standards 轴：管理员店卖出方向的「部分成交」文案把「单次上限」列进原因（原文案断言了它不知道的原因）。
+
+**留着的（有理由）**
+
+- 见票 01 的那三条（`prepareCommon` 的空箱分支、`StockView::valid()`、`info.adminShop` 的多处分叉）。
+- `describeDiscardedItems` / `writeDiscardRecords` 分成「造记录」与「落盘」两个函数：
+  这不是 Middle Man——两件事发生在**不同的时刻**（`Done` 之前 / 之后），合成一个函数就没法表达票面那条顺序要求。

@@ -989,7 +989,7 @@ TradeResult buyUnits(
     if (plan.units < submission.units) {
         // 部分成交：如实说清楚为什么只给了这么多（DESIGN §10.3）。
         // 管理员店的库存是无限的，别把「商店箱里的货」列成一个原因——它不存在。
-        message += info.adminShop ? "（你的余额或背包空间不够，只成交了 " + std::to_string(plan.units) + " 份）"
+        message += info.adminShop ? "（你的余额、背包空间或单次上限不够，只成交了 " + std::to_string(plan.units) + " 份）"
                                   : "（商店箱里的货、余额或背包空间不够，只成交了 " + std::to_string(plan.units)
                                         + " 份）";
     }
@@ -1112,7 +1112,7 @@ TradeResult sellUnits(
     }
     if (plan.units < submission.units) {
         // 部分成交：如实说清原因（DESIGN §10.3）。管理员店的钱与箱空间都没有上限，只有你手里的货。
-        message += info.adminShop ? "（你手里的货不够，只成交了 " + std::to_string(plan.units) + " 份）"
+        message += info.adminShop ? "（你手里的货或单次上限不够，只成交了 " + std::to_string(plan.units) + " 份）"
                                   : "（你手里的货、店主的钱或商店箱空间不够，只成交了 " + std::to_string(plan.units)
                                         + " 份）";
     }
