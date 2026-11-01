@@ -73,12 +73,40 @@ OP 把第 1 行写成 `adminShopName`（默认 `Admin Shop`）就是管理员商
 > 都支持：前者是 `LLMoney_Trans(from, "", n)`，后者是只 `reduce` 买家。将来出现不支持的后端时，
 > `tax.shopTaxRate` 在那个后端上会整笔不生效，启动日志会写明这一条。
 
+### 交易流水（JSONL，P1）
+
+每笔**终态**交易自己留一行，位置 `plugins/Shop/logs/transactions-YYYY-MM-DD.jsonl`（按天分文件，服务器本地时间）。
+一行一个 JSON 对象（NDJSON）、键序固定、UTF-8 无 BOM、中文不转义，`jq` / `duckdb` 直接读。
+
+`result` 只有三种：`ok`（成交）、`fail`（拒绝或没成交，带机器可读的 `reason`，如 `no_money` / `no_stock` /
+`no_space` / `owner_offline` / `shop_closed` / `frozen_pair`）、`frozen`（补偿失败被冻结，
+`reason` 为 `compensation_failed`，同时有一条 `fatal` 日志）。等待玩家确认的那一屏**不记**——它不是终态。
+
+管理员店卖出时被**销毁**的货另写一个文件 `discarded-YYYY-MM-DD.jsonl`：一行一件物品堆，
+带完整 SNBT（`item.nbt`），所以它可能与业务流水不是同一个量级。两个文件同一套轮转规则。
+
+**永不删除**：超过 `transactionLog.compressAfterDays` 天（默认 7）的文件压成 `.jsonl.gz`，
+压缩成功后才删原文件。`0` 表示永不压缩；负数被拒（配置非法不加载）。要清盘请服主自己 `rm`。
+`transactionLog.enabled = false` 时**两个文件一起停**（不存在“只关一个”的组合），交易照常进行。
+
+```bash
+# 1. 今天卖了什么：只看成交，挑几个字段
+jq 'select(.result=="ok") | {ts, dir, item: .item.name, units, total}' plugins/Shop/logs/transactions-2026-11-01.jsonl
+
+# 2. 查已压缩的历史（.jsonl.gz 直接 zcat 进 jq）
+zcat plugins/Shop/logs/transactions-2026-10-2*.jsonl.gz | jq -c 'select(.player.xuid=="2535400000000002")'
+
+# 3. 用 duckdb 聚合（.jsonl 与 .jsonl.gz 都能直读）
+duckdb -c "SELECT owner.name, sum(total) AS 营业额 FROM read_json_auto('plugins/Shop/logs/transactions-*.jsonl*') WHERE result='ok' GROUP BY 1 ORDER BY 2 DESC"
+```
+
 ### 配置项（P0 已生效）
 
 `adminShopName`、`shopContainers`、`maxShopAmount`、`allowPartialTransactions`、`blockSellPriceHigherThanBuy`、
 `allowOwnerOpenChest`、`shopInteractionCooldownMs`、`ignoreCreativeMode`、`economy.backend`（`legacy_money` /
 `scoreboard` / `null`；`auto` 已删除）、`economy.scoreboardObjective`、`economy.createObjectiveIfMissing`、
-`economy.requireOwnerOnline`、`economy.currencySymbol`、`tax.shopTaxRate`。
+`economy.requireOwnerOnline`、`economy.currencySymbol`、`tax.shopTaxRate`、
+`transactionLog.enabled`（默认 `true`）、`transactionLog.compressAfterDays`（默认 `7`，`0` = 永不压缩）。
 （`tax.taxDestination` 等仍留待 P1，见 `DESIGN.md` 第 15 节。）
 
 ## 构建

@@ -12,6 +12,9 @@ add_requires("doctest 2.5.3")
 -- JSON：交易流水用 nlohmann::ordered_json 生成（键序固定、转义交给它）。header-only，
 -- 纯逻辑层与测试都要它；levilamina 包不传递它，必须单独声明。
 add_requires("nlohmann_json 3.12.0")
+-- 流水压缩（`p1-transaction-log` D4）：只压缩、永不删除，用 zlib 的 `gzopen`/`gzwrite` 流式写。
+-- 只有 BDS 适配层用（纯逻辑层只算「该不该压」），所以只有 Shop 链接它。
+add_requires("zlib 1.3.2")
 
 if not has_config("vs_runtime") then
     set_runtimes("MD")
@@ -53,7 +56,7 @@ target("Shop")
         )
         set_toolchains("clang-cl")
     end
-    add_packages("levilamina", "ilistenattentively", "nlohmann_json")
+    add_packages("levilamina", "ilistenattentively", "nlohmann_json", "zlib")
     set_kind("shared")
     set_languages("c++20")
     set_symbols("debug")

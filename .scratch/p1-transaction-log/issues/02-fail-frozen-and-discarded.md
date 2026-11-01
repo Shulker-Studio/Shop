@@ -110,4 +110,7 @@
 这两项都要先有 `transactionLog` 配置块，而配置块按票面由票 03 定义。本票只把两个文件
 **接到同一套落盘策略**上（同一份 `appendLogLines`、同一种「失败只 warn 一次」），
 所以票 03 的开关只要加在这一个入口上就同时管住两个文件——不会出现「只关了一个」。
-落地后在此处与 `p1-admin-unlimited-stock` 票 02 的 Answer 各补一句「缺口已闭合」。
+
+**缺口已闭合**（票 03 落地后补记）：`transactionLog.enabled = false` 时两个文件一起停、以及
+`compressAfterDays` 的 `.jsonl.gz` 压缩，两项都在票 03 落在 `LogFile::appendLogLines` 这一个入口上。
+本票的 `discarded` 不需要任何额外接线就同时受开关与轮转管住。

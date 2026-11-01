@@ -79,6 +79,15 @@ bool validate(ShopConfig const& config, ll::io::Logger& logger) {
         );
         return false;
     }
+    // `0` 是「永不压缩」的正式取值，负数没有意义（它会让 `today - days` 跑到未来，
+    // 把所有文件都压掉）。不静默按 0 处理：服主写错了应该知道。
+    if (config.transactionLog.compressAfterDays < 0) {
+        logger.error(
+            "config.json 非法：transactionLog.compressAfterDays 不能为负数（0 = 永不压缩，当前 {}）",
+            config.transactionLog.compressAfterDays
+        );
+        return false;
+    }
     return true;
 }
 

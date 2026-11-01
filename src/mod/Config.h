@@ -48,6 +48,19 @@ struct TaxConfig {
     std::string taxDestination = "void";
 };
 
+/// 交易流水配置（`p1-transaction-log` spec D4 / D5 的 `transactionLog` 块）。
+struct TransactionLogConfig {
+    /// 总开关。关掉之后**两个文件一起停**（业务流水与 `discarded` 都不写）：
+    /// 它们只在一个入口上（`appendLogLines`），不存在「只关一个」的组合。
+    /// 关掉不影响交易：流水本来就不是交易的一部分。
+    bool enabled = true;
+    /// 超过几天压成 `.jsonl.gz`：`0` = 永不压缩，默认 `7`。**负数非法**（加载时拒）。
+    ///
+    /// **只压缩、永不删除**（spec D4）：删数据没有回头路，要清盘得服主自己 `rm` 一次——
+    /// 那种操作必须是人做出的决定，不该由插件替他做。
+    int compressAfterDays = 7;
+};
+
 /// config.json 的内存形态。聚合体，字段名就是配置键名。
 struct ShopConfig {
     /// 配置结构版本。`ll::config::loadConfig` 用它判断是否需要做默认值迁移，
@@ -68,6 +81,7 @@ struct ShopConfig {
     int                      shopInteractionCooldownMs   = 250;
     EconomyConfig            economy;
     TaxConfig                tax;
+    TransactionLogConfig     transactionLog;
 };
 
 /// 读取并校验 config.json；文件不存在时按默认值写出一份。

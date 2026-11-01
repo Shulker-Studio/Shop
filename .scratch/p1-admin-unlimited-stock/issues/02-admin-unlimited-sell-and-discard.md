@@ -67,8 +67,12 @@
 与「`transactionLog.enabled = false` 时两个文件一起停」。这两条都**没有**落地：本票没有自己发明
 `transactionLog` 配置块（那会与该 spec 的字段定义打架），所以现在这条通道**无条件**追加写、不压缩，
 文件按天分（`discarded-YYYY-MM-DD.jsonl`）但绝不删除。日常体量是「管理员店收到的货」，
-真到了需要压缩的那天，`p1-transaction-log` 落地时会接管开关与轮转——那是它的地盘，
-票面也只要求「通过，不包括这部分。
+真到了需要压缩的那天，`p1-transaction-log` 落地时会接管开关与轮转——那是它的地盘。
+
+**缺口已闭合**（`p1-transaction-log` 票 03 落地后补记）：`transactionLog.enabled = false` 时
+两个文件一起停、以及 `compressAfterDays` 的 `.jsonl.gz` 压缩（成功后才删原文件、永不删除），
+两项都落在 `src/mod/LogFile.cpp` 的 `appendLogLines` 这一个入口上——本票这条 `discarded` 通道
+不需要任何额外接线就同时受开关与轮转管住（`writeDiscardRecords` 已改走同一个函数）。
 
 ### 测试
 

@@ -3,6 +3,7 @@
 #include "mod/DebugLog.h"
 #include "mod/EconomyService.h"
 #include "mod/HookSlots.h"
+#include "mod/LogFile.h"
 #include "mod/Shop.h"
 
 #include "ll/api/command/CommandHandle.h"
@@ -104,6 +105,16 @@ void reportStatus(CommandOutput& output) {
     out += " shopTaxRate=" + decimalText(config->tax.shopTaxRate);
     out += " shopInteractionCooldownMs=" + std::to_string(config->shopInteractionCooldownMs);
     out += " economy.backend=" + config->economy.backend;
+    out += '\n';
+
+    // 交易流水（`p1-transaction-log` D4）：两个配置项 + 现在到底开没开。
+    // 「开」不等于「能写」：目录建不出来、磁盘满的时候每一笔都会 warn（同进程一次），
+    // 所以这里只报**配置与目录**，不编一个健康状态。
+    out += "交易流水：";
+    out += config->transactionLog.enabled ? "开" : "关（业务流水与 discarded 一起停）";
+    out += " compressAfterDays=" + std::to_string(config->transactionLog.compressAfterDays);
+    out += config->transactionLog.compressAfterDays == 0 ? "（永不压缩）" : "（超期压成 .jsonl.gz，永不删除）";
+    out += "，目录 " + logDirectory().string();
     out += '\n';
 
     // **只读**：不在这里触发解析。解析由 `ServerStartedEvent` 或第一次动钱负责，
