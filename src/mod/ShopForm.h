@@ -13,9 +13,22 @@ namespace ss::shop {
 /// 打开商店信息表单。
 ///
 /// 内容与按钮文案全部来自 `data`（纯逻辑），这里只做渲染与按钮接线。
-/// `sign` 是这块牌的位置：按钮回调里不能拿着旧快照过日子，成交时要用它重新解析商店。
+/// `sign` 是这块牌的位置：按钮回调里不能拿着旧快照过日子，成交/改价时要用它重新解析商店。
+/// `role` 只决定买卖这一侧的视角；管理入口看 `canManage`（`canManageShop(shopActorOf(...))`）——
+/// 管理员店在交易上是访客，OP 仍要能进管理表单（spec D5）。
 /// 调用方必须先确认「这块牌是合法商店且附着容器可用」（`inspectShop` 返回了结果）。
-void openShopForm(Player& viewer, Cell const& sign, ShopInfoData const& data, ShopFormRole role);
+void openShopForm(Player& viewer, Cell const& sign, ShopInfoData const& data, ShopFormRole role, bool canManage);
+
+/// 信息表单上「管理商店」按钮的入口（P1）。
+///
+/// 与交易相同的机制：回调里不碰世界，切回服务端线程后再重新读牌面与容器，
+/// 重新判一次管理身份，然后弹管理表单。
+void requestManageForm(Player& viewer, Cell const& sign);
+
+/// 管理表单上「改买入价」的入口：一张只有一个输入框的 `CustomForm`。
+///
+/// 提交时重新解析牌面、重新鉴权；成功则写正面的价格行并把这一格发给整维度（DESIGN §9.2）。
+void requestBuyPriceForm(Player& viewer, Cell const& sign);
 
 /// 打开「几份」表单（DESIGN §10.1 第 3 步）。买卖共用同一张表单：档位与上限都是「份数」的事。
 ///

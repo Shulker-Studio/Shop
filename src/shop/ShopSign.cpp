@@ -1,5 +1,7 @@
 #include "shop/ShopSign.h"
 
+#include "shop/Text.h"
+
 #include <algorithm>
 #include <cctype>
 #include <cstddef>
@@ -18,19 +20,6 @@ constexpr std::size_t kMaxFractionDigits = 9;
 constexpr std::size_t kMaxIntegerDigits = 19;
 
 bool isDigit(char c) { return c >= '0' && c <= '9'; }
-
-std::string_view trimView(std::string_view text) {
-    const auto isSpace = [](char c) { return std::isspace(static_cast<unsigned char>(c)) != 0; };
-    while (!text.empty() && isSpace(text.front())) {
-        text.remove_prefix(1);
-    }
-    while (!text.empty() && isSpace(text.back())) {
-        text.remove_suffix(1);
-    }
-    return text;
-}
-
-std::string trimCopy(std::string_view text) { return std::string{trimView(text)}; }
 
 std::vector<std::string_view> splitWhitespace(std::string_view text) {
     std::vector<std::string_view> tokens;
@@ -300,6 +289,25 @@ std::optional<PricePair> parsePriceLine(std::string_view line) {
     return prices;
 }
 
+bool sellPriceHigherThanBuy(
+    std::optional<std::int64_t> buy,
+    std::optional<std::int64_t> sell,
+    ShopSignConfig const&       config
+) {
+    if (!config.blockSellPriceHigherThanBuy) {
+        return false;
+    }
+    return buy.has_value() && sell.has_value() && *buy < *sell;
+}
+
+std::string sellPriceAboveBuyMessage(std::optional<std::int64_t> buy, std::optional<std::int64_t> sell) {
+    if (!buy || !sell) {
+        // 手写编辑报错时手上没有「改成了什么」：牌面就在眼前，不必把号码再念一遍。
+        return "卖出价不能高于买入价";
+    }
+    return "卖出价 " + std::to_string(*sell) + " 高于买入价 " + std::to_string(*buy) + "：卖出价不能高于买入价";
+}
+
 bool isAdminShop(std::string_view ownerLine, std::string_view adminShopName, bool editorIsOp) {
     if (!editorIsOp) {
         return false;
@@ -329,8 +337,7 @@ parseShopSign(const std::array<std::string_view, 4>& lines, bool editorIsOp, con
     if (!prices.has_value()) {
         return {std::nullopt, ShopSignError::BadPrice};
     }
-    if (config.blockSellPriceHigherThanBuy && prices->buy.has_value() && prices->sell.has_value()
-        && *prices->buy < *prices->sell) {
+    if (sellPriceHigherThanBuy(prices->buy, prices->sell, config)) {
         return {std::nullopt, ShopSignError::SellPriceAboveBuy};
     }
 
@@ -364,7 +371,7 @@ formatShopSign(const ShopSpec& spec, std::string_view ownerDisplayName, std::str
 }
 
 ShopSignResult parseShopSignText(std::string_view text, bool editorIsOp, const ShopSignConfig& config) {
-    auto const                      split = splitSignText(text);
+    auto const                            split = splitSignText(text);
     std::array<std::string_view, 4> const lines{split[0], split[1], split[2], split[3]};
     return parseShopSign(lines, editorIsOp, config);
 }

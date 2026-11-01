@@ -1,5 +1,6 @@
 #include "shop/UnitsForm.h"
 
+#include "shop/Text.h"
 #include "shop/TradePricing.h"
 
 #include <algorithm>
@@ -11,15 +12,6 @@ namespace {
 
 /// 预设档位：DESIGN §10.1 第 3 步的 `1 份 / 2 份 / 4 份`。
 constexpr std::array<int, 3> kPresetUnits{1, 2, 4};
-
-std::string_view trim(std::string_view text) {
-    auto const first = text.find_first_not_of(" \t\r\n");
-    if (first == std::string_view::npos) {
-        return {};
-    }
-    auto const last = text.find_last_not_of(" \t\r\n");
-    return text.substr(first, last - first + 1);
-}
 
 /// 只接受 ASCII 十进制。最多 9 位，所以不可能溢出 `int`。
 std::optional<int> parseUnits(std::string_view text) {
@@ -228,7 +220,7 @@ RequestedUnits resolveRequestedUnits(UnitsFormModel const& model, int choiceInde
         return {.units = chosen};
     }
 
-    auto const text = trim(customText);
+    auto const text = trimView(customText);
     if (text.empty()) {
         return {.error = "选了「自定义份数」，请在输入框里填一个整数"};
     }

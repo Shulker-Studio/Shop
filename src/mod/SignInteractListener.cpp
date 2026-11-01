@@ -202,7 +202,7 @@ void onInteractBlock(ll::event::player::PlayerInteractBlockEvent& event) {
         return;
     }
 
-    openShopForm(player, sign, interaction->shop->info, interaction->role);
+    openShopForm(player, sign, interaction->shop->info, interaction->role, canManageShop(interaction->actor));
 }
 
 } // namespace

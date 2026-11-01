@@ -97,26 +97,45 @@ enum class ShopFormRole : std::uint8_t { Visitor, Manager };
 
 /// 点牌时给哪种表单角色（DESIGN §10.1 / §11）。
 ///
-/// 普通店：店主与 OP 拿管理入口，其余人拿买卖按钮。
+/// 这里只决定**买卖这一侧**的视角（买家 vs 店主），**不**决定管理入口：
+/// 管理入口用 `canManageShop(shopActorOf(...))` 单独判（见 `shopFormButtons` 的 `canManage`）。
+///
+/// 普通店：店主与 OP 不跟自己交易，其余人拿买卖按钮。
 /// **管理员店一律是访客**：它的资金对手方是系统账户（§7.4），所以「店主」不是交易的一侧，
 /// OP 在这里也能正常买卖（包括当初建它的那个 OP）。管理能力（改牌、开箱、拆箱）不看这个角色，
 /// 判据仍然是 `canManageShop`。
 ShopFormRole shopFormRoleOf(ShopActor actor, bool adminShop);
 
-/// 按钮要做的事。`Buy` / `Sell` 都已接真实交易，`Manage` 等 06。
-enum class ShopFormAction : std::uint8_t { Buy, Sell, Manage };
+/// 按钮要做的事。
+///
+/// 每个动作一个值，**不靠按钮下标猜**：`SimpleForm` 回调给的是下标，下标随按钮顺序变，
+/// 停业时「管理商店」可能排在第 0 位也可能不在。
+enum class ShopFormAction : std::uint8_t {
+    Buy,             ///< 弹买入份数表单
+    Sell,            ///< 弹出份数表单
+    Manage,          ///< 进管理表单
+    ManageBuyPrice,  ///< 管理表单：改买入价
+    ManageSellPrice, ///< 管理表单：改卖出价（02）
+    ManageAmount,    ///< 管理表单：改每份件数（02）
+    ToggleClosed,    ///< 管理表单：停业 / 恢复营业（03）
+};
 
 struct ShopFormButton {
     std::string    label;
     ShopFormAction action = ShopFormAction::Buy;
 };
 
-/// 按钮列表：买家拿到购买/出售（缺哪边价格就没有哪个按钮），店主只有一个管理入口。
+/// 按钮列表：管理入口只看 `canManage`，买卖按钮只看 `role` 与 `unavailableReason`。
 ///
-/// 店主收不了钱时一个买卖按钮都不给：这不是「不行就不行」，而是提前把必然失败的
-/// 路径藏起来（DESIGN §8.5）。
+/// 两件事**故意分开**（spec D5）：
+/// - `canManage` 为真时**总是**给管理入口，与 `unavailableReason` 无关——否则管理员店一停业
+///   就一个按钮都没有，永远无法恢复营业（管理员店的 OP 在交易上是 `Visitor`）；
+/// - 买卖按钮仍然按 `role` 与 `unavailableReason` 给：店主收不了钱时一个买卖按钮都不给，
+///   这不是「不行就不行」，而是提前把必然失败的路径藏起来（DESIGN §8.5）。
+///
+/// 店主（`Manager`）不跟自己交易：除了管理入口不给买卖按钮（DESIGN §10.1）。
 ///
 /// 文案取自 DESIGN §10.1：`购买（1 份 N 个 / B 价）`、`出售（1 份 N 个 / S 价）`、`管理商店`。
-std::vector<ShopFormButton> shopFormButtons(ShopInfoData const& data, ShopFormRole role);
+std::vector<ShopFormButton> shopFormButtons(ShopInfoData const& data, ShopFormRole role, bool canManage);
 
 } // namespace ss::shop

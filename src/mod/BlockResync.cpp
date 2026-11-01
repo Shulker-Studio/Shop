@@ -1,13 +1,17 @@
 #include "mod/BlockResync.h"
 
+#include "ll/api/service/Bedrock.h"
+
 #include "mc/network/packet/BlockActorDataPacket.h"
 #include "mc/world/actor/player/Player.h"
 #include "mc/world/level/BlockSource.h"
+#include "mc/world/level/Level.h"
 #include "mc/world/level/block/actor/BlockActor.h"
 #include "mc/world/level/block/actor/BlockActorType.h"
 #include "mc/world/level/block/actor/SignBlockActor.h"
 
 #include <chrono>
+#include <memory>
 #include <optional>
 #include <string>
 
@@ -31,8 +35,8 @@ bool withinThrottleWindow(Player const& player, int dimension, BlockPos const& p
     constexpr auto kWindow = std::chrono::milliseconds{250};
     auto const&    xuid    = player.getXuid();
     auto const     now     = std::chrono::steady_clock::now();
-    bool const     same    = gLast.xuid == xuid && gLast.dimension == dimension
-                   && gLast.pos.x == pos.x && gLast.pos.y == pos.y && gLast.pos.z == pos.z;
+    bool const same = gLast.xuid == xuid && gLast.dimension == dimension && gLast.pos.x == pos.x && gLast.pos.y == pos.y
+                   && gLast.pos.z == pos.z;
     if (same && now - gLast.at < kWindow) {
         return true;
     }
@@ -72,6 +76,42 @@ void resyncBlockActor(Player& player, BlockSource& region, BlockPos const& pos) 
     if (auto packet = actor->_getUpdatePacket(region)) {
         player.sendNetworkPacket(*packet);
     }
+}
+
+void resyncBlockActorToDimension(BlockSource& region, BlockPos const& pos) {
+    auto* actor = region.getBlockEntity(pos);
+    if (actor == nullptr) {
+        return;
+    }
+    auto level = ll::service::bedrock::getLevel();
+    if (!level) {
+        return;
+    }
+
+    // 包只让原版生成，而且**只生成一次**，再广播给整维度：同一份数据不需要每名玩家重新构造
+    // （也不能：`_getUpdatePacket` 会把脏标志清掉，第二次就可能拿不到了）。
+    std::unique_ptr<BlockActorDataPacket> packet = actor->_getUpdatePacket(region);
+    if (!packet) {
+        // 没标脏时原版不给包：先 `onChanged` 把这一格标脏再问一次，仍拿不到就放弃。
+        // 绝不自己拼 NBT（理由见 `resyncBlockActor`：拼出来的包会让牌子显示空白且打不开）。
+        if (!actor->isTypeOrDerived(BlockActorType::Sign)) {
+            return;
+        }
+        static_cast<SignBlockActor&>(*actor).onChanged(region);
+        packet = actor->_getUpdatePacket(region);
+        if (!packet) {
+            return;
+        }
+    }
+
+    auto const dimension = region.getDimensionId();
+    level->forEachPlayer([&](Player& player) {
+        if (player.getDimensionId() != dimension) {
+            return true; // 不跳维度：别的维度里没有这一格
+        }
+        player.sendNetworkPacket(*packet);
+        return true;
+    });
 }
 
 } // namespace ss::shop

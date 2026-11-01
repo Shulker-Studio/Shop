@@ -126,7 +126,7 @@ TEST_CASE("表单正文：多行拼成一个字符串，行间是换行符") {
 }
 
 TEST_CASE("买家按钮：按 DESIGN §10.1 的文案给出购买与出售") {
-    auto const buttons = shopFormButtons(sampleShop(), ShopFormRole::Visitor);
+    auto const buttons = shopFormButtons(sampleShop(), ShopFormRole::Visitor, /*canManage=*/false);
 
     REQUIRE(buttons.size() == 2);
     CHECK(buttons[0].action == ShopFormAction::Buy);
@@ -138,23 +138,49 @@ TEST_CASE("买家按钮：按 DESIGN §10.1 的文案给出购买与出售") {
 TEST_CASE("买家按钮：只有一边价格时只给那一个按钮") {
     auto data = sampleShop();
     data.sellPrice.reset();
-    auto const buyOnly = shopFormButtons(data, ShopFormRole::Visitor);
+    auto const buyOnly = shopFormButtons(data, ShopFormRole::Visitor, /*canManage=*/false);
     REQUIRE(buyOnly.size() == 1);
     CHECK(buyOnly[0].action == ShopFormAction::Buy);
 
     data = sampleShop();
     data.buyPrice.reset();
-    auto const sellOnly = shopFormButtons(data, ShopFormRole::Visitor);
+    auto const sellOnly = shopFormButtons(data, ShopFormRole::Visitor, /*canManage=*/false);
     REQUIRE(sellOnly.size() == 1);
     CHECK(sellOnly[0].action == ShopFormAction::Sell);
 }
 
 TEST_CASE("店主按钮：只有一个管理入口，没有买卖按钮") {
-    auto const buttons = shopFormButtons(sampleShop(), ShopFormRole::Manager);
+    auto const buttons = shopFormButtons(sampleShop(), ShopFormRole::Manager, /*canManage=*/true);
 
     REQUIRE(buttons.size() == 1);
     CHECK(buttons[0].action == ShopFormAction::Manage);
     CHECK(buttons[0].label == "管理商店");
+}
+
+TEST_CASE("管理入口与「现在能不能交易」无关：停业的店仍给店主 / OP 一个入口") {
+    // spec D5：管理员店的 OP 在交易上是 Visitor，一停业就没按钮的话就永远恢复不了营业。
+    auto data              = sampleShop();
+    data.adminShop         = true;
+    data.unavailableReason = ownerOfflineReason();
+
+    auto const managed = shopFormButtons(data, ShopFormRole::Visitor, /*canManage=*/true);
+    REQUIRE(managed.size() == 1);
+    CHECK(managed[0].action == ShopFormAction::Manage);
+
+    // 没有管理身份的人：一个按钮都没有（买卖被原因藏起来，管理入口也不该给他）。
+    CHECK(shopFormButtons(data, ShopFormRole::Visitor, /*canManage=*/false).empty());
+}
+
+TEST_CASE("管理员店的 OP：买卖按钮与管理入口同时出现") {
+    // 交易上是 Visitor（对手方是系统账户），但它同时是这块牌的管理者。
+    auto data      = sampleShop();
+    data.adminShop = true;
+
+    auto const buttons = shopFormButtons(data, ShopFormRole::Visitor, /*canManage=*/true);
+    REQUIRE(buttons.size() == 3);
+    CHECK(buttons[0].action == ShopFormAction::Manage);
+    CHECK(buttons[1].action == ShopFormAction::Buy);
+    CHECK(buttons[2].action == ShopFormAction::Sell);
 }
 
 TEST_CASE("商店箱空了：正文写清原因，不给买卖按钮") {
@@ -165,7 +191,7 @@ TEST_CASE("商店箱空了：正文写清原因，不给买卖按钮") {
 
     CHECK(emptyBoxReason().find("没有货") != std::string::npos);
     CHECK(hasLine(shopInfoLines(data), "状态：" + emptyBoxReason()));
-    CHECK(shopFormButtons(data, ShopFormRole::Visitor).empty());
+    CHECK(shopFormButtons(data, ShopFormRole::Visitor, /*canManage=*/false).empty());
 }
 
 TEST_CASE("读不到店主余额的说法：讲的是余额，不是店主没钱") {
@@ -193,8 +219,7 @@ TEST_CASE("表单角色：普通店店主与 OP 拿管理入口，管理员店�
     CHECK(shopFormRoleOf(ShopActor::NoRecordedOwner, false) == ShopFormRole::Visitor);
 
     // 管理员店：对手方是系统账户（§7.4），店主不是交易的一侧，OP 也能买卖（票 11）
-    for (auto const actor :
-         {ShopActor::Owner, ShopActor::Operator, ShopActor::Other, ShopActor::NoRecordedOwner}) {
+    for (auto const actor : {ShopActor::Owner, ShopActor::Operator, ShopActor::Other, ShopActor::NoRecordedOwner}) {
         CHECK(shopFormRoleOf(actor, /*adminShop=*/true) == ShopFormRole::Visitor);
     }
 }
@@ -205,7 +230,7 @@ TEST_CASE("管理员店 + 后端当不了系统账户：正文写原因，买卖
     data.unavailableReason = noSystemAccountReason();
 
     CHECK(hasLine(shopInfoLines(data), "状态：" + noSystemAccountReason()));
-    CHECK(shopFormButtons(data, ShopFormRole::Visitor).empty());
+    CHECK(shopFormButtons(data, ShopFormRole::Visitor, /*canManage=*/false).empty());
 }
 
 TEST_CASE("表单正文：不能交易时写明原因，且不给买卖按钮") {
@@ -213,14 +238,14 @@ TEST_CASE("表单正文：不能交易时写明原因，且不给买卖按钮") 
     data.unavailableReason = "店主不在线，现在不能交易";
 
     CHECK(hasLine(shopInfoLines(data), "状态：店主不在线，现在不能交易"));
-    CHECK(shopFormButtons(data, ShopFormRole::Visitor).empty());
+    CHECK(shopFormButtons(data, ShopFormRole::Visitor, /*canManage=*/false).empty());
 
     data.unavailableReason = "服务器没有可用的经济后端，暂时不能交易";
-    CHECK(shopFormButtons(data, ShopFormRole::Visitor).empty());
+    CHECK(shopFormButtons(data, ShopFormRole::Visitor, /*canManage=*/false).empty());
 }
 
 TEST_CASE("表单按钮：能交易时买家拿到购买与出售两个按钮") {
-    auto const buttons = shopFormButtons(sampleShop(), ShopFormRole::Visitor);
+    auto const buttons = shopFormButtons(sampleShop(), ShopFormRole::Visitor, /*canManage=*/false);
 
     REQUIRE(buttons.size() == 2);
     CHECK(buttons[0].action == ShopFormAction::Buy);

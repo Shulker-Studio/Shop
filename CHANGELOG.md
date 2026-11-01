@@ -76,6 +76,10 @@
 - `checkTransfer` 改成问后端对象（`checkTransfer(provider, from, to, amount)`）：金额、空付款方（＝从系统付款，需要系统账户能力）、空收款方（＝销毁，销毁能力或系统账户能力任一）、自转自，四条校验与文案仍只有一份；基类 `transfer` 补上两个系统账户方向的实现（凭空记账 / 销毁）。
 - `tradeTaxPlan` 新增 `adminShop` 入参：管理员店两个方向都不收税。卖出份数表单在管理员店不再把「店主余额」写进上限来源（`UnitsForm` 的 `capHintOf`）。
 - `tests/shop/EconomyTest.cpp` / `TradePlanTest.cpp` / `SignProtectionTest.cpp` / `ShopInfoTest.cpp` / `UnitsFormTest.cpp` 补 6 个中文用例：系统账户的两个方向与能力组合、管理员店的资金侧纯函数、管理员店免税、表单角色、管理员店按钮与限额文案。
+- 管理表单（P1 票 01，`src/shop/ManageForm.*`、`src/mod/ShopForm.*`）：点牌后「管理商店」不再是一句「待实现」——点进去是管理表单，本票先接上「改买入价」：`CustomForm` 一个输入框（初值 = 当前买入价，只收非负整数或留空），提交后牌面第 3 行规范化回写，并把这一格发给整个维度（`resyncBlockActorToDimension`）。写入用 `setMessageForServerScripingOnly`，普通店传店主 XUID、管理员店传空串，归属不变。
+- 管理入口与交易角色解耦（`shopFormButtons(data, role, canManage)`）：`canManage` 为真时**总是**给管理入口，与 `unavailableReason` 无关（否则管理员店一停业就永久无法恢复营业）；买卖按钮仍只看 `role` 与 `unavailableReason`。
+- 管理表单的校验只在一处（`withBuyPrice`）：非负整数 / 留空、两侧都清空则拒绝（否则第 3 行变空、箱子失去保护）、改完后卖出价高于买入价则拒绝；判据与手写编辑共用新抽出的 `sellPriceHigherThanBuy`。失败只提示，牌面一字不改。
+- `tests/shop/ManageFormTest.cpp`（新）+ `ShopInfoTest.cpp`：改价合成（正常 / 留空 / 非法字符与溢出 / 两侧都空 / `S > B` / 配置关闭该限制）、管理表单正文与上蜡提示、管理入口与 `unavailableReason` 的四种组合，共 17 个中文用例。
 
 ### 变更
 
@@ -173,3 +177,8 @@
 - `config.json` 缺 `version` 不再被当成“解析失败”：`ll::config::loadConfig` 返回 `false` 的语义是
   “已用默认值补齐/Rewrite”，不是读失败。以前手写一份只填几个键的配置会直接让模组拒绝启用（报“config.json 解析失败”），
   现在改为打 warn、用补齐后的配置继续，并把带 `version` 的完整文件回写一次。
+- **「去两端空白」与「卖出价高于买入价怎么说」各收成一份实现**（`src/shop/Text.h`、`ShopSign::sellPriceAboveBuyMessage`）：
+  牌面解析、份数表单、管理表单原本各有一份 `trim`，`S > B` 的规则抽出来后文案还是两份。两份判断的后果是
+  同一段输入在一个入口能过、在另一个入口不能过，同一件事在两个入口有两种说法。
+- **放弃「自己拼 NBT 包」这条老路**（DESIGN §9.2 已改）：真机上拼出来的包会让牌子显示空白、编辑界面打不开，
+  客户端还会掉线。现在只让原版 `BlockActor::_getUpdatePacket` 出包，为空就先 `onChanged` 标脏再问一次，仍为空就放弃。

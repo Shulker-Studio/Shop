@@ -74,6 +74,22 @@ std::optional<int> parseAmountLine(std::string_view line, int maxAmount);
 /// - 负数、空段、多余冒号、无法识别的记号、溢出都返回 `std::nullopt`。
 std::optional<PricePair> parsePriceLine(std::string_view line);
 
+/// 这一对价格是否因为「卖出价高于买入价」而被配置拒绝（`blockSellPriceHigherThanBuy`）。
+///
+/// 手写编辑（`parseShopSign`）与管理表单改价共用这一条规则：规则写两遍，迟早变成
+/// 「手写放行、表单却拒绝」（或者反过来）。任一侧为空、或配置没开这条限制时恒为假。
+bool sellPriceHigherThanBuy(
+    std::optional<std::int64_t> buy,
+    std::optional<std::int64_t> sell,
+    ShopSignConfig const&       config
+);
+
+/// 被这条规则拒绝时给玩家的话。规则本身与「怎么说」也只有这一份。
+///
+/// 给得出两侧价格时把号码念出来（管理表单：玩家刚在输入框里改了价）；
+/// 给不出时（手写编辑的解析失败）只说规则。
+std::string sellPriceAboveBuyMessage(std::optional<std::int64_t> buy, std::optional<std::int64_t> sell);
+
 /// 管理员商店判定：第 1 行等于配置名，且编辑者是 OP。
 bool isAdminShop(std::string_view ownerLine, std::string_view adminShopName, bool editorIsOp);
 

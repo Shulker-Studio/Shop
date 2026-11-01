@@ -26,4 +26,14 @@ namespace ss::shop {
 /// 它在「没标脏」时可能返回空，退路是自己按“要发到网络”的语境存一份 NBT 再发。
 void resyncBlockActor(Player& player, BlockSource& region, BlockPos const& pos);
 
+/// 把一格的方块实体发给这个维度里的所有玩家，**不节流**。
+///
+/// **与 `resyncBlockActor` 的区别**：那个是「拦下了一个客户端预演过的动作」，只有动手的那个人
+/// 看到的东西需要回滚；这个是「服务端自己改写了方块实体」（管理表单改价，DESIGN §9.2），
+/// 改完谁都还画着旧文本，而旁边的人会对着旧价格谈生意。所以范围是整维度，理由：
+/// `forEachPlayer` 本来只跑同维度的玩家集合，算距离只是多一遍开销；改价是低频操作，几十个包不算事。
+///
+/// **也不吃 250ms 节流**：连改两次价时，第二次的重发不能被当成「同一动作的连点」吃掉。
+void resyncBlockActorToDimension(BlockSource& region, BlockPos const& pos);
+
 } // namespace ss::shop

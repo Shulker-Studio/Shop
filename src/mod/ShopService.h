@@ -83,7 +83,8 @@ struct ShopInteraction {
     ShopUnavailable unavailable = ShopUnavailable::None;
     /// 这个人是谁（ADR-0005 的判定，只算一次）。
     ShopActor actor = ShopActor::Other;
-    /// 表单角色，由 `canManageShop(actor)` 派生：店主与 OP 拿管理入口，其余拿买卖按钮。
+    /// 表单角色：只决定买卖这一侧的视角（店主不跟自己交易、管理员店人人都是买家）。
+    /// **管理入口不看它**，看 `canManageShop(actor)`（DESIGN §10.1）。
     ShopFormRole role = ShopFormRole::Visitor;
     /// 这块牌已经上蜡：原版去不掉蜡，连店主也改不了文本（DESIGN §9.2）。
     /// 上蜡只是编辑开关，不影响商店语义，交易照常。

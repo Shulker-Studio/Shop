@@ -124,21 +124,24 @@ ShopFormRole shopFormRoleOf(ShopActor actor, bool adminShop) {
     return canManageShop(actor) ? ShopFormRole::Manager : ShopFormRole::Visitor;
 }
 
-std::vector<ShopFormButton> shopFormButtons(ShopInfoData const& data, ShopFormRole role) {
+std::vector<ShopFormButton> shopFormButtons(ShopInfoData const& data, ShopFormRole role, bool canManage) {
+    std::vector<ShopFormButton> buttons;
+
+    // 管理入口先放：它对店主与 OP 恒存在，与「现在能不能交易」无关（spec D5）。
+    if (canManage) {
+        buttons.push_back({"管理商店", ShopFormAction::Manage});
+    }
+
+    // 店主不跟自己交易：管理入口之外没有买卖按钮（DESIGN §10.1）
     if (role == ShopFormRole::Manager) {
-        // 店主不跟自己交易：只给管理入口（DESIGN §10.1）
-        return {
-            ShopFormButton{"管理商店", ShopFormAction::Manage}
-        };
+        return buttons;
     }
 
     if (!data.unavailableReason.empty()) {
         // 必然失败的路径不摆在按钮上（DESIGN §8.5）；正文已经写了原因。
-        return {};
+        return buttons;
     }
 
-    std::vector<ShopFormButton> buttons;
-    buttons.reserve(2);
     auto const unitText = "1 份 " + std::to_string(data.amountPerUnit) + " 个";
 
     if (data.buyPrice) {

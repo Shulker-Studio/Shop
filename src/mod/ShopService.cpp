@@ -27,7 +27,8 @@ std::string messageFor(ShopSignError error, int maxShopAmount) {
     case ShopSignError::BadPrice:
         return "价格写法不对：写 B <买入价> : S <卖出价>，至少写一个";
     case ShopSignError::SellPriceAboveBuy:
-        return "卖出价不能高于买入价";
+        // 规则与措辞都归纯逻辑层（`sellPriceAboveBuyMessage`），这里只说规则、不念号码。
+        return sellPriceAboveBuyMessage(std::nullopt, std::nullopt);
     case ShopSignError::None:
     case ShopSignError::NotAShopSign:
         break;
