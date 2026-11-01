@@ -25,4 +25,19 @@ int tradeUnits(int requested, int stockUnits, int backpackUnits, int affordable)
 /// 件数为负、或每份件数 <= 0 时返回 0，不抛错——牌面写了 0 件的商店只是不能成交。
 int unitsFromItems(int itemCount, int amountPerUnit);
 
+/// 商店税（DESIGN §8.9）：`总额 × 税率`，**向下取整到整数**，余数留给店主。
+///
+/// 税额永远落在 `[0, total]`：税率为 0 / 负数 / NaN、总额非正时是 0，税率 >= 1 时封顶到 total
+/// （配置校验会拒掉这种值，这里只是不让它算出比成交额还大的税）。
+std::int64_t shopTax(std::int64_t total, double rate);
+
+/// 含商店税时，付款方手上的钱还能承受几份（向下取整，保守）。
+///
+/// 卖出方向是店主付钱，而商店税由店主承担（DESIGN §8.9）——店主实际要付出
+/// `总额 + 税`，所以份数上限必须按含税成本算，否则预校验会多算一份，
+/// 到第二笔收税时才失败（整笔回滚，白跑一趟）。
+///
+/// 买入方向按 0 传（买家总支出就是牌面总额，税是从店主的收入里扣的），结果与 `affordableUnits` 一致。
+int affordableUnitsWithTax(std::int64_t unitPrice, std::int64_t funds, double rate);
+
 } // namespace ss::shop

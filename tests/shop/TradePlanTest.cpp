@@ -363,3 +363,134 @@ TEST_CASE("卖：件数溢出或输入非法时拒绝，不给出回绕的件数
     noAmount.amountPerUnit = 0;
     CHECK(planTrade(noAmount).rejection == TradeRejection::InvalidRequest);
 }
+
+TEST_CASE("requireOwnerOnline=false：记分板不再因店主离线提前拒绝") {
+    auto request                   = soundBuy();
+    request.ownerOnline            = false;
+    request.backendSupportsOffline = false;
+
+    request.requireOwnerOnline = true;
+    CHECK(planTrade(request).rejection == TradeRejection::OwnerOffline);
+
+    // 关掉之后不再提前拦：这一笔会走到动钱那一步，由「读不到账户」失败
+    request.requireOwnerOnline = false;
+    CHECK(planTrade(request).ok());
+}
+
+TEST_CASE("requireOwnerOnline 对支持离线的后端没有意义") {
+    for (bool requireOwnerOnline : {true, false}) {
+        auto request                   = soundBuy();
+        request.ownerOnline            = false;
+        request.backendSupportsOffline = true;
+        request.requireOwnerOnline     = requireOwnerOnline;
+
+        auto const decision = planTrade(request);
+        REQUIRE(decision.ok());
+        CHECK(decision.plan->units == 1);
+    }
+}
+
+TEST_CASE("税字段由方向与后端能力决定（mod 层不再自己写 direction == Sell）") {
+    // 支持销毁（LegacyMoney）：两个方向都要收，税只压在卖出方向的店主身上
+    auto const buy = tradeTaxPlan(TradeDirection::Buy, 0.1, /*backendSupportsMoneySink=*/true);
+    CHECK(buy.taxRate == doctest::Approx(0.1));
+    CHECK_FALSE(buy.taxOnPayer);
+
+    auto const sell = tradeTaxPlan(TradeDirection::Sell, 0.1, true);
+    CHECK(sell.taxRate == doctest::Approx(0.1));
+    CHECK(sell.taxOnPayer);
+
+    // 收不走（记分板）：整笔不算，两个方向都归零
+    for (auto direction : {TradeDirection::Buy, TradeDirection::Sell}) {
+        auto const none = tradeTaxPlan(direction, 0.1, /*backendSupportsMoneySink=*/false);
+        CHECK(none.taxRate == 0.0);
+        CHECK_FALSE(none.taxOnPayer);
+    }
+
+    // 没开税：也归零
+    auto const off = tradeTaxPlan(TradeDirection::Sell, 0.0, true);
+    CHECK(off.taxRate == 0.0);
+    CHECK_FALSE(off.taxOnPayer);
+}
+
+TEST_CASE("付款方含税成本率：只有税压在付款方身上时才是税率") {
+    auto request  = soundBuy();
+    request.taxRate    = 0.1;
+    request.taxOnPayer = false;
+    CHECK(payerTaxRate(request) == 0.0); // 买家只付牌面总额
+
+    request.taxOnPayer = true;
+    CHECK(payerTaxRate(request) == doctest::Approx(0.1));
+}
+
+TEST_CASE("成交方案带出商店税：总额 × 税率向下取整") {
+    // 买入方向也要算税。注意这条用例只覆盖 `planTrade`（需要 `request.taxRate` 非 0），
+    // 「谁往 request 里填税率」由 `tradeTaxPlan` 那条用例钉住（`prepareCommon` 在 mod 层，测不到）。
+    auto request      = soundBuy();
+    request.requested = 3;
+    request.taxRate   = 0.1;
+
+    auto const decision = planTrade(request);
+    REQUIRE(decision.ok());
+    CHECK(decision.plan->total == std::int64_t{30});
+    CHECK(decision.plan->tax == std::int64_t{3});
+}
+
+TEST_CASE("税压在店主身上（买入）：买家的份数上限不受税影响") {
+    auto request      = soundBuy();
+    request.requested = 4;
+    request.unitPrice = 10;
+    request.payerFunds = 40; // 正好够 4 份牌面金额
+    request.goodsUnits = 4;
+    request.roomUnits  = 4;
+    request.taxRate    = 0.1;
+    request.taxOnPayer = false;
+
+    auto const decision = planTrade(request);
+    REQUIRE(decision.ok());
+    CHECK(decision.plan->units == 4); // 买家仍只付 40
+    CHECK(decision.plan->tax == std::int64_t{4});
+}
+
+TEST_CASE("税压在付款方身上（卖出）：份数上限含税") {
+    auto request       = soundSell();
+    request.unitPrice  = 10;
+    request.payerFunds = 40; // 店主只够 3 份含税成本（33），不够 4 份（44）
+    request.goodsUnits = 4;
+    request.roomUnits  = 4;
+    request.requested  = 4;
+    request.taxRate    = 0.1;
+    request.taxOnPayer = true;
+
+    auto const decision = planTrade(request);
+    REQUIRE(decision.ok());
+    CHECK(decision.plan->units == 3);
+    CHECK(decision.plan->total == std::int64_t{30});
+    CHECK(decision.plan->tax == std::int64_t{3});
+}
+
+TEST_CASE("税为 0 时方案里的税也是 0（不产生第二笔转账）") {
+    auto request      = soundBuy();
+    request.requested = 3;
+
+    auto const decision = planTrade(request);
+    REQUIRE(decision.ok());
+    CHECK(decision.plan->tax == std::int64_t{0});
+}
+
+TEST_CASE("卖出方向：份数上限按含税成本算，店主不会多卖一份再失败") {
+    auto request        = soundSell();
+    request.unitPrice   = 10;
+    request.payerFunds  = 100; // 店主余额
+    request.goodsUnits  = 10;
+    request.roomUnits   = 10;
+    request.requested   = 10;
+    request.taxRate     = 0.1; // 一份含税 11，100 块只够 9 份
+    request.taxOnPayer  = true;
+
+    auto const decision = planTrade(request);
+    REQUIRE(decision.ok());
+    CHECK(decision.plan->units == 9);
+    CHECK(decision.plan->total == std::int64_t{90});
+    CHECK(decision.plan->tax == std::int64_t{9});
+}

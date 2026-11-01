@@ -66,6 +66,12 @@ std::string playerFundsUnknownReason();
 /// 没有可用经济后端的原因。
 std::string noEconomyReason();
 
+/// 商店税没收到时的原因（DESIGN §8.9）。`detail` 是后端给的细节，前缀只写一次。
+std::string taxChargeFailureReason(std::string const& detail);
+
+/// 收商店税时钱已经动过且没能还原（§10.2 第 8 步的严重错误）。
+std::string taxBrokenReason(std::string const& detail);
+
 /// 商店箱空了的原因：没东西可卖，也看不出这家店收什么（商品权威是第一个非空槽位，DESIGN §5.3）。
 /// 牌面第 4 行仍作商品名显示（那是旧记录），所以这里只讲「现在没法交易」。
 std::string emptyBoxReason();

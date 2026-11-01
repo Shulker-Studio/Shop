@@ -7,6 +7,7 @@
 #include "mc/world/actor/player/Player.h"
 #include "mc/world/level/Level.h"
 #include "mc/world/scores/Objective.h"
+#include "mc/world/scores/ObjectiveCriteria.h"
 #include "mc/world/scores/PlayerScoreSetFunction.h"
 #include "mc/world/scores/ScoreInfo.h"
 #include "mc/world/scores/Scoreboard.h"
@@ -55,13 +56,34 @@ std::optional<ScoreTarget> resolveTarget(std::string const& objectiveName, econo
 
 ScoreboardEconomy::ScoreboardEconomy(std::string objectiveName) : mObjectiveName(std::move(objectiveName)) {}
 
-std::shared_ptr<ScoreboardEconomy> ScoreboardEconomy::create(std::string objectiveName) {
+std::shared_ptr<ScoreboardEconomy>
+ScoreboardEconomy::create(std::string objectiveName, bool createIfMissing, economy::ProbeIssue& issue) {
+    issue = economy::ProbeIssue::ObjectiveMissing;
     auto level = ll::service::bedrock::getLevel();
     if (!level) {
+        // 世界还没起来：调用方应该先确认过，这里只是不拿空 `Level` 去崩。
         return nullptr;
     }
-    if (level->getScoreboard().getObjective(objectiveName) == nullptr) {
-        return nullptr; // 目标不存在：调用方降级（自动建目标是 10 的事）
+
+    auto& scoreboard = level->getScoreboard();
+    if (scoreboard.getObjective(objectiveName) == nullptr) {
+        if (!createIfMissing) {
+            issue = economy::ProbeIssue::ObjectiveMissing;
+            return nullptr;
+        }
+        // 判据用原版现成的 `dummy`（`/scoreboard objectives add <名字> dummy` 同一个判据）：
+        // 自己造一个 `ObjectiveCriteria` 只能靠猜它的构造方式，而引擎自己的判据清单是权威。
+        std::string const criteriaName = "dummy";
+        ObjectiveCriteria* criteria     = scoreboard.getCriteria(criteriaName);
+        if (criteria == nullptr) {
+            issue = economy::ProbeIssue::ObjectiveCreateFailed;
+            return nullptr;
+        }
+        // 显示名就用目标名：这个目标不是给人看的榜单，是账本，名字对得上才查得清。
+        if (scoreboard.addObjective(objectiveName, objectiveName, *criteria) == nullptr) {
+            issue = economy::ProbeIssue::ObjectiveCreateFailed;
+            return nullptr;
+        }
     }
     return std::shared_ptr<ScoreboardEconomy>{new ScoreboardEconomy(std::move(objectiveName))};
 }

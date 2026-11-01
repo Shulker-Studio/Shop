@@ -60,6 +60,12 @@
 - `src/shop/ContentProtection.*`（新，纯逻辑）：`cellInDirection`（`facing_direction` 0 下 / 1 上 / 2 北 / 3 南 / 4 西 / 5 东 → 目标格，与 `neighboursOf` 共用同一张偏移表）、`cellAbove`、`shouldSkipContentTransfer`。方向几何与「跳不跳」都有 doctest 覆盖（`tests/shop/ContentProtectionTest.cpp`，5 个中文用例）。
 - `src/mod/ContainerFinderBds.*` 新增 `facingDirectionAt`：投掷器的朝向只能从方块状态读，状态名的命名空间差异复用既有的 `readIntState`，不另写一份查表。
 - `src/mod/HookSlots.*`（新）：把「一张 `HookSlot{name, attach, detach, attached}` 表 + 挂上 / 逆序解开」收成一份实现，08 的破坏防护与 09 的内容防偷共用；`currentShopConfig()` 也提到 `Shop.h`，两条保护路径的「配置缺失就放行」只有一处定义。
+- 经济后端探测（`src/shop/Economy.*`、`src/mod/EconomyService.*`）：`auto` 按 `legacy_money → scoreboard → null` 的完整顺序探测，每一级降级都带原因进日志（`配置 auto → 选用 scoreboard（跳过 legacy_money：进程里没有 LegacyMoney.dll）`）；候选顺序与「给定各候选可用性选中谁」是纯函数 `selectBackend`，有单测覆盖。`ServerStartedEvent` 监听在世界就绪后立刻探一次，首次动钱时还有兜底；结论（含「一个后端都没有」）会缓存，换环境后需重载模组。
+- LegacyMoney 后端（`src/mod/LegacyMoneyEconomy.*`）：用 `GetModuleHandleW(L"LegacyMoney.dll")` + `GetProcAddress` 解析 `LLMoney_Get/Set/Add/Reduce/Trans`，**不链接、不 include 它的 `LLMoney.h`**（那会在 `Shop.dll` 里留导入项，没装 LegacyMoney 的服务器直接加载失败；构建后已确认导入表里没有它）。每笔交易只走一次 `LLMoney_Trans`（SQLite 事务，天然原子，`pay_tax` 与第三方拦截都在它内部处理），`to` 为空 = 付给系统（销毁）。`LLMoney_Get` 的 `-1`（空 XUID / 数据库异常）按「读不到」处理；DLL 运行期被卸载时按「读不到 / 拒绝」处理并报一次 error，不去调悬空的函数指针。
+- 记分板目标可自动创建（`ScoreboardEconomy::create(name, createIfMissing, issue)`）：`economy.createObjectiveIfMissing`（默认 `false`）打开时用引擎自己的 `dummy` 判据（`Scoreboard::getCriteria` + `addObjective`）建目标，建不出来就打 `ObjectiveCreateFailed` 并降级。
+- 离线店主按后端能力判定（`economy::ownerUnreachable`，纯函数）：点牌时藏按钮、`prepareSell`、`planTrade` 三处共用同一个判据；`economy.requireOwnerOnline`（默认 `true`）只对不支持离线的记分板有意义，关掉并不会让记分板获得给离线玩家记账的能力。
+- 商店税（`tax.shopTaxRate`，默认 `0`）：店主承担，`总额 × 税率` 向下取整，税为 0 完全跳过第二笔。买入时从店主收入里扣（买家支出不变），卖出时店主另付一笔；收税排在物品那一步之后，所以任何失败点的补偿都精确，补偿再失败才升级为 `Broken`。税率只在能「把钱付给系统（销毁）」的后端上收得走（目前只有 LegacyMoney），记分板上不生效并在启动日志里说明。`shopTaxRate > 0` 时启动无条件 WARN 要求把 LegacyMoney 的 `pay_tax` 设为 0（那个值没有任何导出能读，只能提醒）。卖出方向的份数上限按含税成本算（`affordableUnitsWithTax`）。
+- `tests/shop/EconomyTest.cpp` / `TradePricingTest.cpp` / `TradePlanTest.cpp` 补 17 个中文用例：探测顺序与降级原因文案、探测计划、离线判据矩阵、转账参数校验、税率舍入与边界（含 NaN）、含税份数上限、成交方案里的税额与「税压在谁身上」的两种形状。
 
 ### 变更
 

@@ -2,7 +2,8 @@
 
 基岩版（LeviLamina）告示牌箱子商店，复刻 Java 版 [ChestShop-3](https://github.com/ChestShop-authors/ChestShop-3) 的核心玩法。
 
-> 当前状态：**模板初始化完成，功能未实现**。设计与实现计划见 [DESIGN.md](./DESIGN.md)。
+> 当前状态：P0 功能已落地（开店、买卖、牌面/容器/破坏/内容四层保护、经济后端与商店税），
+> 真机验收清单见 [DESIGN.md](./DESIGN.md) 第 13 节。
 
 ## 玩法（目标形态）
 
@@ -34,7 +35,33 @@ B 10 : S 5
 
 **iListenAttentively 是硬依赖**：Shop 链接它的 DLL 导入表，未安装时 BDS 会直接加载失败，不是"功能缺失"。
 
-经济后端按 `LegacyMoney → 记分板 → 空实现` 的顺序自动探测，见 `DESIGN.md` 第 8 节。
+### 经济后端
+
+按 `LegacyMoney → 记分板 → 空实现` 的顺序自动探测，最终选择了哪个会写进启动日志，见 `DESIGN.md` 第 8 节。
+
+- 装了 `LegacyMoney.dll`（装了 LegacyScriptEngine 的服务器会自带）就用它：支持离线店主，每笔交易一次原子转账。
+- 否则用记分板：余额是玩家在 `economy.scoreboardObjective`（默认 `money`）上的分值，**只支持在线店主**。
+  目标不存在时默认不会自动创建；想让模组自己建就把 `economy.createObjectiveIfMissing` 设为 `true`。
+- 两家都没有时会明确报「没有可用的经济后端」，交易按钮不出现。
+
+### 商店税（可选，默认关闭）
+
+`tax.shopTaxRate`（百分比，`0.05` = 5%）由**店主承担**：买家总支出不变，店主实收少一笔，差额被销毁。
+
+> **启用前必须把 LegacyMoney 配置里的 `pay_tax` 设为 `0`。** 本模组读不到那个值（LegacyMoney 没有导出它的
+> getter），只能启动时打一条 WARN 提醒；若 `pay_tax` 仍大于 0，每笔转账的收款方都会被再扣一次税，
+> 店主会被抽两次，退款补偿也会与实际到账不一致。
+>
+> 商店税只在**能把钱移出经济系统**的后端上生效（目前只有 LegacyMoney）。记分板没有这种账户，
+> 所以在记分板上 `tax.shopTaxRate` 不生效，启动日志会写明这一条。
+
+### 配置项（P0 已生效）
+
+`adminShopName`、`shopContainers`、`maxShopAmount`、`allowPartialTransactions`、`blockSellPriceHigherThanBuy`、
+`allowOwnerOpenChest`、`shopInteractionCooldownMs`、`ignoreCreativeMode`、`economy.backend`（`auto` /
+`legacy_money` / `scoreboard` / `null`）、`economy.scoreboardObjective`、`economy.createObjectiveIfMissing`、
+`economy.requireOwnerOnline`、`economy.currencySymbol`、`tax.shopTaxRate`。
+（`tax.taxDestination` 等仍留待 P1，见 `DESIGN.md` 第 15 节。）
 
 ## 构建
 

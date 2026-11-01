@@ -15,18 +15,32 @@ class Logger;
 namespace ss::shop {
 
 /// 经济后端配置（DESIGN §15 的 `economy` 块）。
-///
-/// 只放 04 真消费的键。探测顺序、目标自动创建（`createObjectiveIfMissing`）、
-/// `requireOwnerOnline` 都是 10 的勾选项，这里不提前铺。
 struct EconomyConfig {
-    /// 后端名，取值见 `economy::Backend`（`legacy_money` / `builtin` 在 10 才实现）。
-    /// 写成字符串而不是枚举：config.json 里的字面量就是这些名字，
-    /// 解析与校验统一走 `economy::parseBackend`。
+    /// 后端名，取值见 `economy::Backend`。写成字符串而不是枚举：config.json 里的字面量
+    /// 就是这些名字，解析与校验统一走 `economy::parseBackend`。
     std::string backend = "auto";
     /// 存余额的记分板目标名。
     std::string scoreboardObjective = "money";
+    /// 记分板目标不存在时自动建一个（DESIGN §8.4）。默认关：建目标会改变服务器的记分板，
+    /// 不该在服主不知情的时候发生。
+    bool createObjectiveIfMissing = false;
+    /// 店主不在线时是否提前拒绝。**只对不支持离线记账的后端（记分板）有意义**：
+    /// 关掉只是不再提前拦，并不会让记分板获得给离线玩家记账的能力（DESIGN §8.5）。
+    bool requireOwnerOnline = true;
     /// 货币符号，只在这里定义一次（表单与消息都从它取名）。
     std::string currencySymbol = "$";
+};
+
+/// 商店税配置（DESIGN §8.9 / §15 的 `tax` 块）。
+struct TaxConfig {
+    /// 税率（百分比：`0.05` = 5%），默认 0 表示不收税。由店主承担，向下取整到整数。
+    ///
+    /// 开启它等于要求服主把 LegacyMoney 的 `pay_tax` 手动设为 0：那个值没有任何导出能读，
+    /// 本模组只能启动时无条件 WARN（见 `initEconomyService`）。
+    double shopTaxRate = 0.0;
+    /// 税的去向。P0 只认 `void`（销毁），字段先占位：写别的值**不生效**，
+    /// 指向税收账户是 P1（DESIGN §8.9）。
+    std::string taxDestination = "void";
 };
 
 /// config.json 的内存形态。聚合体，字段名就是配置键名。
@@ -48,6 +62,7 @@ struct ShopConfig {
     /// 同一玩家对同一块商店牌的连点冷却（毫秒），对齐 DESIGN §10.4。
     int                      shopInteractionCooldownMs   = 250;
     EconomyConfig            economy;
+    TaxConfig                tax;
 };
 
 /// 读取并校验 config.json；文件不存在时按默认值写出一份。

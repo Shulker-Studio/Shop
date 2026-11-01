@@ -38,6 +38,8 @@ bool Shop::enable() {
     getSelf().getLogger().debug("Enabling...");
     if (mConfig) {
         initTradeService(*mConfig);
+        // 经济后端也是懒解析：现在世界往往还没起来，所以这里只挂启动监听 + 打税告警。
+        initEconomyService(*mConfig);
     }
     registerSignEditListener();
     registerSignInteractListener();

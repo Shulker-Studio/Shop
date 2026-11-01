@@ -221,10 +221,15 @@ inspectShop(BlockSource& region, BlockPos const& signPos, Player& viewer, ShopCo
             // 读不到就留空：正文写「暂时读不到」，不猜一个数字（DESIGN §10.1）。
             shop->info.balance = provider.get(viewer.getXuid());
             // 店主收不了钱时提前把买卖按钮藏起来（DESIGN §8.5）：只有不支持离线记账的
-            // 后端（记分板）才会碰到这个情况，支持离线的后端根本不用查店主在不在线。
+            // 后端（记分板）才会碰到这个情况，支持离线的后端根本不看店主在不在线。
             // 管理员店不受这条约束：它的资金端是系统账户（§8.5 表格的「同左」）。
-            if (!shop->info.adminShop && shop->info.unavailableReason.empty() && !provider.supportsOffline()
-                && onlinePlayer(shop->ownerXuid) == nullptr) {
+            // 判据与 `planTrade` / `prepareSell` 共用 `ownerUnreachable`（`requireOwnerOnline` 也在里面）。
+            if (!shop->info.adminShop && shop->info.unavailableReason.empty()
+                && economy::ownerUnreachable(
+                    onlinePlayer(shop->ownerXuid) != nullptr,
+                    provider.supportsOffline(),
+                    config.economy.requireOwnerOnline
+                )) {
                 shop->info.unavailableReason = ownerOfflineReason();
             }
         }

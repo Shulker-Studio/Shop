@@ -43,6 +43,12 @@ std::string noEconomyReason() { return "服务器没有可用的经济后端，�
 
 std::string emptyBoxReason() { return "商店箱里没有货，现在没法交易（补货后恢复）"; }
 
+std::string taxChargeFailureReason(std::string const& detail) { return "收取商店税失败（" + detail + "）"; }
+
+std::string taxBrokenReason(std::string const& detail) {
+    return "收取商店税时钱已经动过且没能还原（" + detail + "），请联系管理员";
+}
+
 std::string shopFormTitle(ShopInfoData const& data) {
     if (data.adminShop) {
         return "管理员商店";

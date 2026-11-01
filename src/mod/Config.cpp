@@ -41,23 +41,32 @@ bool validate(ShopConfig const& config, ll::io::Logger& logger) {
     auto const backend = economy::parseBackend(config.economy.backend);
     if (!backend) {
         logger.error(
-            "config.json 非法：economy.backend 只能是 {}（当前 \"{}\"）",
-            economy::backendNamesText(" / "),
+            "config.json 非法：economy.backend 只能是 {}（当前 \"{}\"；builtin 是 P1，暂不可用）",
+            economy::legalBackendNamesText(" / "),
             config.economy.backend
         );
         return false;
     }
-    if (*backend == economy::Backend::LegacyMoney || *backend == economy::Backend::Builtin) {
-        // 明确拒绝，而不是悄悄当 auto 用：服主写了 legacy_money 就是要 LegacyMoney 记账，
-        // 用记分板顶替会让余额落到一个他没在看的地方。
+    if (*backend == economy::Backend::Builtin) {
+        // `builtin`（自建账本）是 P1。明确拒，而不是悄悄当 auto 用：服主写了 builtin 就是
+        // 不想要 LegacyMoney 与记分板，拿它们顶替会把余额落到一个他没在看的地方。
         logger.error(
-            "config.json 非法：economy.backend = \"{}\" 还没实现（10），请先写 auto 或 scoreboard",
-            economy::backendName(*backend)
+            "config.json 非法：economy.backend = \"builtin\"（自建账本）是 P1 的计划，"
+            "P0 请用 auto / legacy_money / scoreboard / null"
         );
         return false;
     }
     if (isBlank(config.economy.scoreboardObjective)) {
         logger.error("config.json 非法：economy.scoreboardObjective 不能为空");
+        return false;
+    }
+    // 税率是百分比：0 <= rate < 1。>= 1 等于全额征税（店主一分不收），这种事不该靠
+    // 舍入悄悄生效；负税率会变成「给店主发钱」。
+    if (!(config.tax.shopTaxRate >= 0.0) || config.tax.shopTaxRate >= 1.0) {
+        logger.error(
+            "config.json 非法：tax.shopTaxRate 必须在 [0, 1) 之间（0.05 = 5%%，当前 {}）",
+            config.tax.shopTaxRate
+        );
         return false;
     }
     return true;
@@ -82,11 +91,12 @@ std::optional<ShopConfig> loadShopConfig(std::filesystem::path const& path, ll::
     }
 
     logger.info(
-        "配置已加载：每份最多 {} 件，可作容器的方块 {} 种，管理员店名 \"{}\"，经济后端 {}",
+        "配置已加载：每份最多 {} 件，可作容器的方块 {} 种，管理员店名 \"{}\"，经济后端 {}，商店税 {}",
         config.maxShopAmount,
         config.shopContainers.size(),
         config.adminShopName,
-        config.economy.backend
+        config.economy.backend,
+        config.tax.shopTaxRate
     );
     return config;
 }

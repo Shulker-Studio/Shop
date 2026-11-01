@@ -272,24 +272,29 @@ bool putItemsIntoShopBox(AttachedContainer const& attached, ItemStack const& pro
 
 /// 一次交易里「钱」的那一半：谁付、谁收、多少。
 ///
-/// 打包成一个类型是因为这三样在退款、补偿、日志里总是结伴出现。
-/// 角色按「谁付钱」定，不按买卖定：买入时付款方是买家，卖出时付款方是店主
-/// （DESIGN §8.5：卖出是店主付钱给买家）。
+/// 拆成两块是因为商店税（DESIGN §8.9）：`main` 是这次**真正转移的成交额**，
+/// `tax` 是店主要承担的商店税（从付款方另收一笔销毁）。
+/// 买入时 `main = 总额 - 税`，买家总支出仍是 `总额`；卖出时 `main = 总额`，
+/// 玩家收到的仍是牌面金额，店主要额外再付一笔税。
+/// 税额由 `planTrade` 算好（`TradePlan::tax`），这里不再乘一次税率。
 struct Payment {
     std::string  payer;
     std::string  receiver;
-    std::int64_t total = 0;
+    std::int64_t main = 0;
+    std::int64_t tax  = 0;
 };
 
-/// 把钱原路退回：从收钱方反向再走一次。成功返回空；失败返回原因，由调用方交给
-/// `broken()` 统一记日志。
+/// 把钱原路退回：从收钱方反向再走一次，金额就是已经移动过的 `main`。
+///
+/// 税不回退：它永远是最后一步（见 `chargeTax`），真正需要退款的时候它还没被收。
+/// 成功返回空；失败返回原因，由调用方交给 `broken()` 统一记日志。
 ///
 /// 这里**不**自己打日志：退款失败与补偿失败是同一次事故，日志只能留一条。
 std::optional<std::string> refund(economy::EconomyProvider& provider, Payment const& payment) {
-    if (payment.total <= 0) {
+    if (payment.main <= 0) {
         return std::nullopt;
     }
-    auto const back = provider.transfer(payment.receiver, payment.payer, payment.total);
+    auto const back = provider.transfer(payment.receiver, payment.payer, payment.main);
     if (back.ok()) {
         return std::nullopt;
     }
@@ -324,8 +329,8 @@ TradeResult undoAndRefund(TradeFrame& frame, bool restoreBackpack, std::string m
     }
     refreshShopBox(frame.region, frame.container);
 
-    // 免费店（`total == 0`）根本没动过钱，别在提示里编一个「钱已退回」。
-    if (frame.payment.total <= 0) {
+    // 免费店（`main == 0`）根本没动过钱，别在提示里编一个「钱已退回」。
+    if (frame.payment.main <= 0) {
         return reject(std::move(message) + "，这笔交易没有成交");
     }
     if (auto const failed = refund(frame.provider, frame.payment)) {
@@ -424,6 +429,13 @@ PreparedTrade prepareCommon(
     context.request.allowPartial           = config.allowPartialTransactions;
     context.request.ownerOnline            = onlinePlayer(context.shop.ownerXuid) != nullptr;
     context.request.backendSupportsOffline = context.provider->supportsOffline();
+    context.request.requireOwnerOnline     = config.economy.requireOwnerOnline;
+    // 商店税（DESIGN §8.9）：税从这笔生意里抽，两个方向都要算；收不走（没有系统账户）时整笔不算；
+    // 「压在谁身上」由方向决定（买入是店主少收，卖出是店主另付）。两个方向加后端能力的组合
+    // 由纯函数决定——这里不再自己写 `direction == Sell`。
+    auto const tax        = tradeTaxPlan(direction, config.tax.shopTaxRate, context.provider->supportsMoneySink());
+    context.request.taxRate    = tax.taxRate;
+    context.request.taxOnPayer = tax.taxOnPayer;
 
     return {.context = std::move(context), .error = {}};
 }
@@ -452,12 +464,15 @@ PreparedTrade prepareBuy(BlockSource& region, Cell const& sign, Player& buyer, S
     context.request.roomUnits  = backpackUnits(buyer.getInventory(), context.product, context.shop.info.amountPerUnit);
 
     // 上限 = maxShopAmount、可成交份数、余额、背包取最小（DESIGN §10.1 第 3 步）。
+    // 按 `payerTaxRate` 传：买入方向是 0（税从店主的收入里扣，买家只付牌面总额），
+    // 否则会把买家的份数上限按「总额 + 税」算，钱够的买家会被判「钱不够」。
     context.unitsAvailable = maxTradeUnits(
         context.request.maxUnits,
         context.request.goodsUnits,
         context.request.roomUnits,
         context.request.unitPrice,
-        context.request.payerFunds
+        context.request.payerFunds,
+        payerTaxRate(context.request)
     );
     return prepared;
 }
@@ -478,7 +493,12 @@ PreparedTrade prepareSell(BlockSource& region, Cell const& sign, Player& seller,
     if (!ownerFunds && *context.shop.info.sellPrice > 0) {
         // 不支持离线记账的后端（记分板）在店主离线时本来就读不到余额：
         // 真正的原因是「店主不在线」，报那一句才对得上号（DESIGN §8.5）。
-        if (!context.request.backendSupportsOffline && !context.request.ownerOnline) {
+        // 判据与表单藏按钮、`planTrade` 完全共用一个函数。
+        if (economy::ownerUnreachable(
+                context.request.ownerOnline,
+                context.request.backendSupportsOffline,
+                context.request.requireOwnerOnline
+            )) {
             return {.error = ownerOfflineReason()};
         }
         return {.error = ownerFundsUnknownReason()};
@@ -508,12 +528,14 @@ PreparedTrade prepareSell(BlockSource& region, Cell const& sign, Player& seller,
     context.shop.info.balance      = context.provider->get(seller.getXuid());
 
     // 上限 = maxShopAmount、手里有的份数、箱子还能装的份数、店主余额取最小（§10.3）。
+    // 店主余额带税算（`payerTaxRate` = 税率）：商店税是店主掏的，多卖一份就可能付不起那笔税。
     context.unitsAvailable = maxTradeUnits(
         context.request.maxUnits,
         context.request.goodsUnits,
         context.request.roomUnits,
         context.request.unitPrice,
-        context.request.payerFunds
+        context.request.payerFunds,
+        payerTaxRate(context.request)
     );
     return prepared;
 }
@@ -581,8 +603,9 @@ std::optional<TradeResult> moveMoney(
     Payment const&            payment,
     std::string const&        freeze
 ) {
-    // 免费店（`total == 0`）不产生任何账户操作，账户读不到也不该拦住成交。
-    if (payment.total <= 0) {
+    // 免费店（`main == 0`）不产生任何账户操作，账户读不到也不该拦住成交。
+    // （税按总额算，总额为 0 时税也必然是 0。）
+    if (payment.main <= 0) {
         return std::nullopt;
     }
     if (!accountsRecordable(provider, payment.payer, payment.receiver)) {
@@ -590,7 +613,7 @@ std::optional<TradeResult> moveMoney(
         // 所以走到这里的读不到，是另一头出了问题。
         return reject(direction == TradeDirection::Buy ? ownerFundsUnknownReason() : playerFundsUnknownReason());
     }
-    auto const paid = provider.transfer(payment.payer, payment.receiver, payment.total);
+    auto const paid = provider.transfer(payment.payer, payment.receiver, payment.main);
     if (paid.ok()) {
         return std::nullopt;
     }
@@ -599,6 +622,48 @@ std::optional<TradeResult> moveMoney(
     }
     // 买入是玩家付钱，卖出是店主付钱——失败原因得归到对的人头上。
     return reject(std::string{direction == TradeDirection::Buy ? "付款失败：" : "店主付款失败："} + paid.detail);
+}
+
+/// 收商店税时的失败（DESIGN §8.9）。
+struct TaxFailure {
+    bool        broken = false; ///< 钱可能已经动过且没还原：按 §10.2 第 8 步升级为严重错误
+    std::string detail;
+};
+
+/// 第 5 步的后半段：商店税（DESIGN §8.9）。成功（或本来就没有税）返回空。
+///
+/// **税放在物品那一步之后**，这一点偏离了 §8.9 字面上的「主交易后紧接着收税」，理由是
+/// 补偿：税一旦销毁就再也补不回来。若先收税、后面移物品才失败，退款只能退 `总额 - 税`，
+/// 买家凭空少一笔税，§10.2 的「任一步失败两边余额不变」就不成立了。
+/// 把收税挪到最后，任何失败点都只涉及已经移动过的 `payment.main`，补偿永远精确。
+///
+/// 税为 0 完全跳过第二笔（LegacyMoney 的 `val == 0` 是合法的，会白写一条 0 元流水）；
+/// 后端没有系统账户（记分板）时也跳过：店主本来就只收到 `总额 - 税`，
+/// 那笔税从来没记进任何人的账，效果一样。
+std::optional<TaxFailure> chargeTax(economy::EconomyProvider& provider, Payment const& payment) {
+    if (payment.tax <= 0 || !provider.supportsMoneySink()) {
+        return std::nullopt;
+    }
+    auto const collected = provider.transfer(payment.payer, economy::Account{}, payment.tax);
+    if (collected.ok()) {
+        return std::nullopt;
+    }
+    return TaxFailure{collected.broken(), collected.detail};
+}
+
+/// 收税的收尾（买卖共用）：税没收到就把物品与主交易一起退回。
+///
+/// 两个方向的差别只有「玩家这一侧的背包要不要写回」（收税发生在物品之后，两边都动过），
+/// 所以只需要一个参数，不必把整段补偿路径抄两遍——补偿一旦分叉，早晚有一边漏一步。
+std::optional<TradeResult> settleTax(TradeFrame& frame, std::string const& freeze) {
+    auto const failed = chargeTax(frame.provider, frame.payment);
+    if (!failed) {
+        return std::nullopt;
+    }
+    if (failed->broken) {
+        return broken(freeze, taxBrokenReason(failed->detail));
+    }
+    return undoAndRefund(frame, /*restoreBackpack=*/true, taxChargeFailureReason(failed->detail), freeze);
 }
 
 /// 「点买/卖 → 预校验 → 弹份数表单」的同一套外壳：两个方向只差 `prepare`。
@@ -657,14 +722,15 @@ void finishTrade(Player& player, Cell const& sign, TradeDirection direction, Tra
     player.sendMessage(result.message);
     if (result.done()) {
         Shop::getInstance().getSelf().getLogger().debug(
-            "{} 在 ({}, {}, {}) {}了 {} 份，金额 {}",
+            "{} 在 ({}, {}, {}) {}了 {} 份，金额 {}{}",
             player.getXuid(),
             sign.x,
             sign.y,
             sign.z,
             directionVerb(direction),
             result.plan.units,
-            result.plan.total
+            result.plan.total,
+            result.plan.tax > 0 ? "（其中商店税 " + std::to_string(result.plan.tax) + "）" : ""
         );
     }
 }
@@ -722,8 +788,10 @@ TradeResult buyUnits(
 
     auto&               provider = *context->provider;
     ShopInfoData const& info     = context->shop.info;
-    // 买入：买家付钱、店主收钱。
-    Payment const     payment{buyer.getXuid(), context->shop.ownerXuid, plan.total};
+    // 买入：买家付钱、店主收钱。商店税从店主的收入里扣（店主承担），买家总支出仍是 `total`：
+    // 主交易转 `total - tax`，税那一笔再由买家付给系统（DESIGN §8.9）。
+    // `plan.tax` 为 0（没开税、或后端收不走）时两者相等，第二笔整步跳过。
+    Payment const     payment{buyer.getXuid(), context->shop.ownerXuid, plan.total - plan.tax, plan.tax};
     std::string const freeze = freezeKey(buyer.getXuid(), sign);
 
     // 第 4 步：快照。物品与余额不在同一个事务里，失败时只能靠它反向写回。
@@ -769,6 +837,12 @@ TradeResult buyUnits(
             tradeRejectionMessage(TradeDirection::Buy, TradeRejection::NoRoomToReceive),
             freeze
         );
+    }
+
+    // 第 5 步的后半段：收商店税（DESIGN §8.9）。走到这里物品已经落进背包，税再失败
+    // 就把物品与主交易一起退回去——税在这一步之前一分都还没销毁，补偿因此是精确的。
+    if (auto const taxed = settleTax(frame, freeze)) {
+        return *taxed;
     }
 
     // 第 9 步刷新：背包推给客户端，商店箱（双箱两半）各自 refresh 一次
@@ -817,7 +891,8 @@ TradeResult sellUnits(
     auto&               provider = *context->provider;
     ShopInfoData const& info     = context->shop.info;
     // 卖出：店主付钱、玩家收钱（DESIGN §8.5 的表格）。所以付款方是店主。
-    Payment const     payment{context->shop.ownerXuid, seller.getXuid(), plan.total};
+    // 商店税同样由店主承担：玩家收到的仍是牌面金额 `total`，店主另付一笔 `tax`（§8.9）。
+    Payment const     payment{context->shop.ownerXuid, seller.getXuid(), plan.total, plan.tax};
     std::string const freeze = freezeKey(seller.getXuid(), sign);
 
     TradeFrame frame{
@@ -862,6 +937,12 @@ TradeResult sellUnits(
             tradeRejectionMessage(TradeDirection::Sell, TradeRejection::NoRoomToReceive),
             freeze
         );
+    }
+
+    // 第 5 步的后半段：店主另付商店税（DESIGN §8.9）。失败时物品与主交易一起退回，
+    // 此时税还没被销毁，所以退款金额就是玩家 / 店主真正移动过的 `plan.total`。
+    if (auto const taxed = settleTax(frame, freeze)) {
+        return *taxed;
     }
 
     seller.sendInventory(true);

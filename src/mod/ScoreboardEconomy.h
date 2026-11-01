@@ -16,14 +16,18 @@ namespace ss::shop {
 /// 不静默截断（DESIGN §8.2）。
 class ScoreboardEconomy final : public economy::EconomyProvider {
 public:
-    /// 目标不存在时返回空指针：调用方降级到空实现。
+    /// 目标不存在时按配置决定建不建（DESIGN §8.4 / §15 的 `createObjectiveIfMissing`）。
     ///
     /// 目标在这里（而不是构造函数里）解析：`enable()` 时世界往往还没起来，
-    /// 真正要用钱的时候才拿得到 `Level`。
+    /// 真正要用钱的时候才拿得到 `Level`（调用方先确认过 `getLevel()` 非空）。
     ///
-    /// **不自动建目标**：那是 10 的 `createObjectiveIfMissing`（DESIGN §8.4 / §15）。
-    /// 04 只认已经存在的目标，没有就让服主自己 `/scoreboard objectives add`。
-    static std::shared_ptr<ScoreboardEconomy> create(std::string objectiveName);
+    /// @param createIfMissing 目标不存在时是否用 `dummy` 判据建一个（`Scoreboard::getCriteria`
+    ///        + `Scoreboard::addObjective`，即原版 `/scoreboard objectives add <名字> dummy`）。
+    /// @param issue 拿不到时写明原因：没开自动创建是 `ObjectiveMissing`，
+    ///        开了但没建成（判据缺失 / 引擎拒绝）是 `ObjectiveCreateFailed`。
+    /// @return 空指针表示这个后端不可用，调用方降级到下一个候选。
+    static std::shared_ptr<ScoreboardEconomy>
+    create(std::string objectiveName, bool createIfMissing, economy::ProbeIssue& issue);
 
     std::string_view name() const override { return "scoreboard"; }
     bool             supportsOffline() const override { return false; }

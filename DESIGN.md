@@ -359,6 +359,11 @@ Java 版的 `uBlock.findConnectedContainer` 是「墙牌先看背面，然后按
 >    `TransferResult::Broken`，由调用方记严重日志、通知 OP 并冻结该次操作。
 > 4. `get` 返回 `std::optional<std::int64_t>`：**空 = 这个账户现在读不到**，`0` 就是真的 0 元。
 >    卖出方向（05）必须分清这两件事，否则会把「读不到店主余额」误报成「店主资金不足」（见 8.2）。
+>
+> 另外多了一个能力协商方法 `supportsMoneySink()`（默认 `false`）：能不能把一笔钱付给「系统」
+> ——账户键传空串。只有 LegacyMoney 支持（`LLMoney_Trans(from, "", n)` = 从 `from` 扣掉、谁都不加），
+> 商店税的「销毁」就落在这上面（见 8.9）。记分板没有这种账户，所以那个后端上商店税整笔不算
+> （不是「少一条流水」：钱还在买家身上，账目对不上）。
 
 ```cpp
 namespace ss::shop::economy {
@@ -418,16 +423,30 @@ public:
 | 原子转账 | 自己补偿 | **SQLite 事务**（begin/commit/rollback） | 交给后端，接口只保证"失败不变更" |
 | 税率 | 无 | `pay_tax`（转账时扣） | 不重复收税（见 8.7） |
 | 事件 | 无 | `LLMoney_ListenBeforeEvent/AfterEvent`（可拦截） | 不依赖，但需容忍被别人拦截 |
+| 销毁（税） | 无 | `LLMoney_Trans(from, "", n)` | `supportsMoneySink()` 声明；不支持就不发那一笔 |
 
 借鉴的是接口形状与调用方式，**不复制源码**（EconomyBridge 为 LGPL-3.0，LegacyMoney 的许可证需按其仓库为准；本工程 AGPL-3.0）。
 
 ### 8.4 后端探测顺序
 
-> **P0 阶段性现状（04 落地后）**：本模组目前只有 `ScoreboardEconomy` 与 `NullEconomy`。
-> `auto` 实际等价于「记分板目标存在就用它，否则降级为 Null 并报错」；
-> 显式写 `legacy_money` / `builtin` 属于**配置错误，拒绝加载**（而不是静默降级——
-> 服主写了那个名字就是要它记账，拿记分板顶替会把余额落到他没在看的地方）。
-> 下面的 1、2、3 是 ticket 10 的目标状态；`createObjectiveIfMissing` 同样在 10 才生效。
+> **P0 现状（10 落地后）**：第 1、2 条已按下面的顺序完整实现，`createObjectiveIfMissing`
+> 与 `requireOwnerOnline` 都已生效。
+>
+> - `auto` 的探测结论只由纯函数 `economy::selectBackend` 决定（`src/shop/Economy.cpp`），
+>   候选顺序（`legacy_money → scoreboard → null`）只有那一处定义，BDS 侧只负责探测两个候选
+>   并把事实填进去。
+> - 每一级降级都把原因带进日志，最终结论一行形如
+>   `配置 auto → 选用 scoreboard（跳过 legacy_money：进程里没有 LegacyMoney.dll）`。
+> - **显式写 `legacy_money` 也沿同一条链降级**（第 4 条「加载失败不 panic」）：服主点了名、
+>   但服务器上确实没装，能降级到记分板总比整服停摆好——降级原因会原样打在日志里。
+>   显式 `scoreboard` 不从 `legacy_money` 开始（服主不想要它记账），`builtin` 仍是配置错误（P1），
+>   非法值拒绝加载并列出全部合法取值。
+> - 探测结果**会缓存，包括「一个后端都没有」**：否则每次动钱都要重探、重刷日志。
+>   装好 LegacyMoney 或建好记分板目标之后需要重载模组才会重探。
+> - 探测时机：`Shop::enable()` 时世界往往还没起来，所以挂一个 `ServerStartedEvent` 监听在世界
+>   就绪后立刻探一次（结果进启动日志），首次真正要用钱时还会再兜一次。
+> - `/shop economy` 这类状态命令属于 P1（P0 没有命令基础设施），目前状态输出就是那条日志；
+>   表单里仍只显示余额，不显示后端名。
 
 1. 配置文件显式指定 `economy.backend`：`auto` / `legacy_money` / `scoreboard` / `builtin` / `null`。
 2. `auto` 的判定顺序：
@@ -435,7 +454,7 @@ public:
    2. 否则若记分板目标存在 → `ScoreboardEconomy`（仅在线）。
    3. 否则 → `NullEconomy` 并打警告（仅开发用；生产环境应视为配置错误）。
 3. `builtin`（自建 SQLite 账本）作为 P1，给不装 LegacyMoney 的服务器用；接口相同，`supportsOffline()` 返回 true。
-4. 加载失败不 panic：降级到下一个候选，并把最终选择写进日志与 `/shop info`。
+4. 加载失败不 panic：降级到下一个候选，并把最终选择写进日志（`/shop economy` 状态命令留到 P1）。
 
 > 生态事实：LegacyScriptEngine 的 `tooth.json` 依赖 `LegacyMoney`，所以**装了 LSE 的服务器一定有 LegacyMoney.dll**。`auto` 在多数生产服会直接命中它。
 
@@ -458,25 +477,28 @@ public:
 
 ### 8.6 P0 的实现清单
 
-1. `ScoreboardEconomy`：`Scoreboard::modifyPlayerScore` + `PlayerScoreSetFunction`，与 EconomyBridge 同路数；**写入前检查 `INT32` 范围**。
-2. `LegacyMoneyEconomy`：`GetProcAddress` 解析 `LLMoney_Get/Set/Add/Reduce/Trans`；UUID → XUID 用 `ll::service::PlayerInfo::fromUuid`。
-3. `NullEconomy`：全成功、不记账，仅开发。
-4. `EconomyManager`：探测、降级、日志、`/shop economy` 状态输出。
-5. `builtin` 与流水/均价留到 P1。
+- [x] `ScoreboardEconomy`：`Scoreboard::modifyPlayerScore` + `PlayerScoreSetFunction`，与 EconomyBridge 同路数；**写入前检查 `INT32` 范围**（`economy::toScoreValue`，超范围拒绝、不截断）。目标缺失时按 `createObjectiveIfMissing` 决定是否用 `dummy` 判据建一个。
+- [x] `LegacyMoneyEconomy`：`GetModuleHandleW` + `GetProcAddress` 解析 `LLMoney_Get/Set/Add/Reduce/Trans`；**键直接用 XUID**（`PlayerInfo::fromUuid` 那一步在本代码库里不需要，ADR-0005 的店主身份本来就是 XUID）。
+- [x] `NullEconomy`：全成功、不记账，仅开发；`available()` 为 false，交易一律拒绝而不是白送。
+- [x] `EconomyManager`：探测、降级、日志（`/shop economy` 状态输出留到 P1 的命令层）。
+- [ ] `builtin` 与流水/均价留到 P1。
 
 ### 8.7 LegacyMoney 对接细节（实现时必须遵守）
 
-1. **键是 XUID 不是 UUID**：`PlayerInfo::fromUuid(uuid).xuid`。查不到 XUID（从未进服的账号）时视为「无法记账」，交易失败并提示。
+1. **键是 XUID 不是 UUID**：本代码库的账户键（`economy::Account`）本来就是 XUID，不需要 `PlayerInfo::fromUuid`（ADR-0005 的店主身份也是 XUID）。空 XUID 视为「无法记账」。
 2. **必须用 `LLMoney_Trans` 完成买卖**，不要用 `Reduce` + `Add` 两条独立调用：
    - `LLMoney_Trans` 内部是 SQLite 事务，天然原子；
    - `LLMoney_Trans` 会应用 `pay_tax`，自己拼两条调用会漏税或重复扣税；
    - `Reduce`/`Add` 本身也是 `Trans` 的包装，`from == to` 会被拒（阻止店主自买自卖）。
-3. **`LLMoney_Get` 有写副作用**：查询不存在的 XUID 会插入 `def_money` 记录。所以 `get()` 不能当作纯读，不要在只读展示路径上频繁调用（缓存一次即可）。
-4. **`allowNegative` 无法支持**：LegacyMoney 永远拒绝负余额，`allowNegative = true` 时按 `false` 处理并记 debug 日志。商店不使用该参数。
-5. **可能被第三方拦截**：`LLMoney_ListenBeforeEvent` 允许其他插件取消转账，`LLMoney_Trans` 会返回 `false`。商店必须把 `false` 当作正常失败路径（提示"交易被服务器阻止"，无副作用）。
-6. **货币符号拿不到**：LegacyMoney 的 `currency_symbol` 在它自己的配置文件里，跨模组读不到。`getSymbol()` 用 Shop 自己的配置项（默认 `$`），与 LegacyMoney 配置保持一致由服主负责。
-7. **金额是 `long long`**，无 int32 问题；但 `Scoreboard` 后端有，`EconomyManager` 要按后端分别限制上限。
-8. **`pay_tax` 会被叠加且无法读取**：`LLMoney_Trans` 每次转账都从收款方扣 `pay_tax`，而 LegacyMoney 没有导出该配置的 getter。商店税与 `pay_tax` 同时开启会让店主被二次抽税、补偿金额漂移。P0 规则：`shopTaxRate > 0` 时无条件 WARN 要求服主手动设 `pay_tax = 0`，否则商店税按 0 处理（见 8.9）。
+3. **`LLMoney_Get` 有写副作用**：查询不存在的 XUID 会插入 `def_money` 记录并返回它。所以 `get()` 不能当作纯读，也不能把「新账户」理解成「读不到」；它的失败通道只有一条：**空 XUID 或数据库异常时返回 `-1`**（见其 `src/API.cpp`），本模组据此返回「读不到」。
+4. **`val == 0` 是合法的**：`LLMoney_Trans` 会照常提交一条 0 元流水。所以「税为 0」必须由调用方跳过，而不是靠后端忽略。
+5. **`allowNegative` 无法支持**：LegacyMoney 永远拒绝负余额，`allowNegative = true` 时按 `false` 处理并记 debug 日志。商店不使用该参数。
+6. **可能被第三方拦截**：`LLMoney_ListenBeforeEvent` 允许其他插件取消转账，`LLMoney_Trans` 会返回 `false`。商店必须把 `false` 当作正常失败路径（提示"交易被服务器阻止"，无副作用）。
+7. **货币符号拿不到**：LegacyMoney 的 `currency_symbol` 在它自己的配置文件里，跨模组读不到。`getSymbol()` 用 Shop 自己的配置项（默认 `$`），与 LegacyMoney 配置保持一致由服主负责。
+8. **金额是 `long long`**，无 int32 问题；但 `Scoreboard` 后端有，`EconomyManager` 要按后端分别限制上限。
+9. **`pay_tax` 会被叠加且无法读取**：`LLMoney_Trans` 只在**两边都非空**时给收款方加 `val - val * pay_tax`（`from` 或 `to` 为空时按全额），而 LegacyMoney 没有导出该配置的 getter。商店税与 `pay_tax` 同时开启会让店主被二次抽税、补偿金额漂移（反向 `Trans` 到账的也是 `val - val*pay_tax`）。P0 规则：`shopTaxRate > 0` 时**无条件 WARN** 要求服主手动设 `pay_tax = 0`；读不到就不猜，**不**自动禁用商店税（见 8.9）。
+10. **绝不链接 LegacyMoney、绝不 include 它的 `LLMoney.h`**：那个头里全是 `__declspec(dllimport)`，一引用就会在 `Shop.dll` 里留下导入项，没装 LegacyMoney 的服务器连加载都会失败——「可选后端」当场作废。只能用 `GetModuleHandleW(L"LegacyMoney.dll")` + `GetProcAddress`，函数指针 typedef 自己写。构建后应确认 `Shop.dll` 的导入表里没有 `LegacyMoney.dll`。
+11. **导出名不匹配就降级，不猜**：x64 的 C 导出是未修饰名（`LLMoney_Get` 这一组，已对照 `LegacyMoney.dll` 的导出表）；另一套 API 是 C++ 命名空间版（`LegacyMoney::LLMoney_Get`，返回 `ll::Expected`，mangled 符号）。`GetProcAddress` 拿不到未修饰名时判为「版本不兼容」（`ProbeIssue::ExportsMissing`）并降级，**不去猜 mangled 名字**。
 
 ### 8.8 LeviLamina 版本谱系（必须同步）
 
@@ -506,20 +528,38 @@ public:
 | 舍入 | 向下取整到整数，余数留给店主，不出现负税 |
 | 税为 0 | 完全跳过第二笔转账，不产生额外流水 |
 
-**实现**（LegacyMoney 后端）：
+**实现**（`src/mod/TradeService.cpp` 的 `moveMoney` + `chargeTax`；`T` = 总额，`X` = 税）：
 
 ```
-1. Trans(buyer, owner, total - shopTax)   // 主交易
-2. Trans(buyer, "", shopTax)              // 税：to 为空 = 系统回收
-3. 任一步失败 → 按确定金额反向补偿（见 10.2）
+买入：
+1. Trans(buyer, owner, T - X)   // 主交易：店主实收 T - X，买家稍后还要付 X
+2. 物品：商店箱 → 背包
+3. Trans(buyer, "", X)          // 税：to 为空 = 系统回收（X == 0 时整步跳过）
+卖出：
+1. Trans(owner, seller, T)      // 主交易：玩家收到的就是牌面金额
+2. 物品：背包 → 商店箱
+3. Trans(owner, "", X)          // 税由店主另付：店主总共付出 T + X
+4. 任一步失败 → 按已移动的金额反向补偿；补偿再失败才升级为 Broken（见 10.2）
 ```
+
+**为什么收税排在物品之后**（与本节早先版本的字面顺序不同，10 落地时的决定）：
+
+- 税一旦销毁就补不回来。若先收税、之后移物品那一步失败，退款只能退 `T - X`，
+  买家凭空少一笔税，§10.2 的「任一步失败两边余额不变」当场不成立。
+- 把收税挪到最后，任何失败点都只涉及已经移动过的金额（买入 `T - X`、卖出 `T`），
+  补偿永远是精确的；补偿本身失败才升级为 `Broken`。
+- 代价只有一个：物品已成交、税还没收到的那一小段时间里崩服，丢的是税而不是玩家的钱。
+- 后端没有系统账户（记分板）时，**整笔税都不算**（`EconomyProvider::supportsMoneySink()` 为 false 时
+  调用方直接把税率置 0）：税收不走，硬算下去只会让店主少收、买家少付，而没有任何地方记着这笔税，
+  账对不上也查不到。启动日志会明确写「商店税在这个后端上不生效，要收税请装 LegacyMoney」。
+- 卖出方向的份数上限按**含税成本**算（`affordableUnitsWithTax`），否则会多卖一份、到收税那一步才失败。
 
 **前提约束（P0 硬性要求）**：启用 `shopTaxRate > 0` 的前提是服主**手动把 LegacyMoney 的 `pay_tax` 设为 0**。
 
 - LegacyMoney 没有导出 `pay_tax` 的 getter，Shop **无法**在运行时读取或检测这个值。
 - 如果 `pay_tax > 0`，上面两笔 `Trans` 都会在收款方再抽一次：店主被抽两次（`total - tax` 再打折），且补偿金额会漂移（实际到账 ≠ 记账金额）。
 - 因此启动时只要 `shopTaxRate > 0` 就**无条件打 WARN**，文案明确要求确认 `pay_tax = 0`；README 与安装说明同步写这一条。
-- 若服主不关闭 `pay_tax`，P0 的行为是：`shopTaxRate` 被强制按 0 处理（禁用商店税），只保留 LegacyMoney 自己的税。
+- 若服主不关闭 `pay_tax`，P0 **不**自动禁用商店税（读不到就不猜，只打 WARN）：结果是店主被抽两次、补偿金额与实际到账不一致。前提由服主承担，风险登记在 §14。
 - 两笔 `Trans` **不是跨调用事务**：第二笔失败时第一笔已生效，必须按 `total - shopTax` 精确补偿；补偿本身也可能失败，按第 10.2 节升级为严重错误。
 
 ---
@@ -679,6 +719,8 @@ public:
   买入是先从箱子取货再塞背包（中间那一刻货两处都没有），卖出是先从背包取货再放进箱子
   （同样两处都没有）。这是一段「丢失窗口」，退路是快照回写 + 退款；反过来先给后扣，
   中间那一刻才是同一件货同时存在于两处——那才是复制。
+- 商店税（§8.9）是第 5 步的后半段，但**排在物品那一步之后**：税一旦销毁就补不回来，
+  先收税会让「物品失败」时的退款短一笔税。收税失败则把物品与主交易一起退回，款额按实际移动过的金额算。
 - 若后端不支持原子 `transfer`，用 `withdraw` + `deposit` 手动实现，并保证 `deposit` 失败时把 `withdraw` 的钱退回。
 - 补偿逻辑必须在同一次事件处理内完成，不依赖重启恢复。
 
@@ -739,7 +781,7 @@ public:
 
 ### P1
 
-- 空店清理、创建费、税、退款
+- 空店清理、创建费、退款；`tax.taxDestination` 指向税收账户（§8.9）
 - 管理员商店的无容器模式、服务器账户
 - shift 快捷成交（按单价重算任意数量，需引入小数价格）
 - 交易流水 + 平均价格
@@ -842,9 +884,13 @@ public:
 | 取消 `useItemOn` 能否阻止开箱/开牌 | 已绕开 | 开箱用 `PlayerOpenContainerBeforeEvent`；开牌用 `PlayerInteractBlockEvent` |
 | 基岩版单行字符数 | 待实测 | 商品名可能被截断，全名在表单里显示；不影响交易（商品来自容器） |
 | 双箱配对时机 | 待实测 | 配对失败按单箱处理 |
-| 经济后端 | 接口已定，后端待实现 | LegacyMoney 优先，记分板兜底；离线店主按 8.5 处理 |
+| 经济后端 | 已落地（10） | LegacyMoney 优先、记分板兜底、空实现垫底；离线店主按 8.5 处理。真实行为待 12 验收 |
 | LeviLamina 目标版本 | 已定 `26.51.8`（兼容 `>=26.51.7 <26.60.0`） | iListenAttentively 0.17.0、行为以实际头文件为准 |
-| 商店税与 `pay_tax` 双重扣税 | 已知，**无法程序化检测** | `shopTaxRate > 0` 时无条件 WARN；服主不关 `pay_tax` 则商店税按 0 处理（见 8.9） |
+| 商店税与 `pay_tax` 双重扣税 | 已知，**无法程序化检测** | `shopTaxRate > 0` 时无条件 WARN 要求设 `pay_tax = 0`；不关就接受「店主被抽两次、补偿漂移」，P0 不自动禁用商店税（见 8.9） |
+| `LLMoney_Get` 的失败通道 | 已核实（LegacyMoney `src/API.cpp`） | 空 XUID 或数据库异常返回 `-1`，本模组据此返回「读不到」；从未上账的 XUID 会被它插入一行 `def_money` 再返回，所以「新账户」读到的是默认金额而不是「读不到」 |
+| LegacyMoney 导出名 / 版本不匹配 | 已核实 | x64 的 C 导出是未修饰名（`LLMoney_Get` 这一组，已对照 `LegacyMoney.dll` 导出表）。拿不到就判 `ExportsMissing` 并降级，**不猜 mangled 名**（另一套是 C++ 命名空间版） |
+| 没装 LegacyMoney 的服务器加载失败 | 已解决 | 绝不 `add_packages("legacymoney")`、绝不 include 它的 `LLMoney.h`（`dllimport` 会在 `Shop.dll` 留导入项）；只用 `GetModuleHandleW` + `GetProcAddress`，构建后确认 `Shop.dll` 导入表里没有 LegacyMoney |
+| LegacyMoney 运行期被卸载 | 已知，**无法彻底防** | 每次动钱前重新 `GetModuleHandleW`：不在了就按「读不到 / 拒绝」处理并报一次 error，不去调悬空的函数指针。检查与调用之间仍有理论窗口 |
 | H2/H3 自定义 hook 的符号漂移 | 已知 | 每个 LeviLamina 大版本回归一次；符号在 26.51.8 头文件中已确认存在 |
 | 凋灵逐格剔除的落点 | 待实测 | 逐格剔除只能落在 `Level::$destroyBlock`（`_destroyBlocks` 只给整个 `AABB`）。若凋灵的销毁不走这条路径，商店箱会被毁；退路是回到提前返回（代价：凋灵范围内旁的方块不毁），见 §6.2 H3c |
 | 依附方块的物理掉落 | 待实测 | 拆掉商店牌依附的方块后，牌子是否真的由原版物理打落（以及掉落物是否尊重 `doTileDrops`）；若不打落，则「店主拆时与拆牌等价」不成立，需改成拆方块时显式打牌 |
@@ -901,11 +947,17 @@ public:
 
 > 草案里的键随对应 ticket 落地。没有被实现读取的键（`protectShopChest`、`preventHopperExtraction`、
 > `allowMultipleShopsAtOneBlock`、`allowOneContainerPerShop`、`itemNameLocalized`、`removeInvalidShopSign`、
-> `dropSignOnCreationFailure`、`economy.createObjectiveIfMissing`、`economy.requireOwnerOnline`、`tax` 等）
-> 目前**不生效**——写进 `config.json` 也不会改变行为。`preventHopperExtraction` 尤其要注意：内容防偷（09）**不读这个键**，因为 §9.2 规定漏斗 / 铜傀儡 / 投掷器对商店箱一律阻止（含店主与 OP），没有「关掉就不再防」的开关。已生效的键：`adminShopName`、`shopContainers`、
-> `maxShopAmount`、`allowPartialTransactions`、`blockSellPriceHigherThanBuy`、`allowOwnerOpenChest`、
-> `shopInteractionCooldownMs`、`ignoreCreativeMode`、`economy.backend`、`economy.scoreboardObjective`、
-> `economy.currencySymbol`。
+> `dropSignOnCreationFailure`、`tax.taxDestination` 等）目前**不生效**——写进 `config.json` 也不会改变行为。
+> `preventHopperExtraction` 尤其要注意：内容防偷（09）**不读这个键**，因为 §9.2 规定漏斗 / 铜傀儡 / 投掷器对商店箱一律阻止（含店主与 OP），没有「关掉就不再防」的开关。
+>
+> 已生效的键：`adminShopName`、`shopContainers`、`maxShopAmount`、`allowPartialTransactions`、
+> `blockSellPriceHigherThanBuy`、`allowOwnerOpenChest`、`shopInteractionCooldownMs`、`ignoreCreativeMode`、
+> `economy.backend`（`auto` / `legacy_money` / `scoreboard` / `null`；`builtin` 是 P1，写它会拒绝加载）、
+> `economy.scoreboardObjective`、`economy.createObjectiveIfMissing`、`economy.requireOwnerOnline`、
+> `economy.currencySymbol`、`tax.shopTaxRate`。
+>
+> 两条配套约束：`economy.createObjectiveIfMissing` 会真的在服务器的记分板上建一个目标（默认 `false`）；
+> `tax.shopTaxRate > 0` 要求服主同时把 LegacyMoney 的 `pay_tax` 设为 0（本模组读不到那个值，只能启动时 WARN）。
 
 ---
 
@@ -1007,7 +1059,7 @@ public:
 | D17 | `levilamina` 目标提到 26.51 | 对齐 LSE 0.22.3 / EconomyBridge；最终定为 26.51.7+（见 D22） |
 | D18 | 商店自己收一道税，不依赖 `pay_tax` | 服主可单独配置商店税率（见 8.9） |
 | D19 | 商店税默认销毁（`taxDestination = void`） | 不引入额外账户；需要税收账户时 P1 再加 |
-| D20 | `shopTaxRate > 0` 时无条件 WARN，要求手动设 `pay_tax = 0` | LegacyMoney 无公开 getter，无法程序化检测；不关闭则商店税按 0 处理 |
+| D20 | `shopTaxRate > 0` 时无条件 WARN，要求手动设 `pay_tax = 0` | LegacyMoney 无公开 getter，无法程序化检测；读不到就不猜，**不**自动禁用商店税，双重抽税的风险由服主承担（见 8.9 / 14） |
 | D21 | 事件层依赖 iListenAttentively（不照抄源码） | 官方维护、跟随 LL 升级；未安装则拒绝启用（见 6.4） |
 | D22 | `levilamina` 目标 `26.51.7+` | 同时满足 iListenAttentively / LSE / EconomyBridge 的下限 |
 | D23 | 数量语义为「份」：牌上第 2 行 = 一份的件数，牌上价格 = 一份的总价 | 对齐 Java 版默认语义；表单选份数，总价恒为整数。例外：价格行允许小数，向下取整后再参与计算（见 5.2），因此仍然不会出现非整数总价 |

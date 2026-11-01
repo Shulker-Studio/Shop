@@ -37,11 +37,34 @@ enum class TradeRejection : std::uint8_t {
     InvalidRequest,  ///< 请求份数、份价或每份件数非法
 };
 
+/// 商店税在这笔交易里的样子（DESIGN §8.9）。两个字段直接装进 `TradeRequest`。
+struct TradeTaxPlan {
+    /// 这笔生意要被抽多少税（= `total × taxRate`）。后端收不走时是 0。
+    double taxRate = 0.0;
+    /// 这份税要不要**额外压在付款方身上**（卖出方向的店主）。买入方向是 false：
+    /// 买家只付牌面总额，税从店主的收入里扣。
+    bool taxOnPayer = false;
+};
+
+/// 按方向与后端能力算出这两个字段（DESIGN §8.9）。**mod 层不要自己写 `direction == Sell`**：
+/// 一个方向判断写错，结果要么买入一分税都不收，要么把买家的份数上限按含税价算
+/// （买家明明只付牌面总额，却被判「钱不够」）——这两种错都真的发生过，所以把判断收到这里。
+///
+/// `backendSupportsMoneySink` 是 `EconomyProvider::supportsMoneySink()`：没有「付给系统」的账户
+/// （记分板）时，这道税收不走——算出来只会让店主少收、买家少付，而没有任何地方记着它，所以整笔不算。
+TradeTaxPlan tradeTaxPlan(TradeDirection direction, double configuredRate, bool backendSupportsMoneySink);
+
 /// 成交方案：份数、件数、金额三者一致，都由这里算出来，别处不再乘一遍。
 struct TradePlan {
     int          units = 0; ///< 实际成交份数
     int          items = 0; ///< 实际搬运件数 = units × 每份件数
-    std::int64_t total = 0; ///< 实际金额 = 一份价 × units
+    std::int64_t total = 0; ///< 实际金额（牌面金额）= 一份价 × units
+    /// 总额里的商店税（DESIGN §8.9），已向下取整，永远不超过 `total`。
+    ///
+    /// 店主承担：买入时店主实收 `total - tax`（买家仍付 `total`），
+    /// 卖出时店主在 `total` 之外另付一笔 `tax`（玩家仍收 `total`）。
+    /// 后端没有「能把钱付给系统」的账户时这里恒为 0——`taxRate` 由调用方按后端能力置 0。
+    std::int64_t tax = 0;
 };
 
 /// 一笔交易的全部输入（DESIGN §10.1 第 3 步 / §10.3）。**买卖共用这一个结构**：
@@ -67,7 +90,24 @@ struct TradeRequest {
     bool allowPartial           = true;  ///< `allowPartialTransactions`
     bool ownerOnline            = true;  ///< 店主此刻在不在线
     bool backendSupportsOffline = false; ///< `EconomyProvider::supportsOffline()`
+    /// `requireOwnerOnline`（DESIGN §8.5）：只对不支持离线记账的后端有意义。
+    bool requireOwnerOnline = true;
+    /// 商店税率（DESIGN §8.9）：这笔交易的税 = `total × taxRate`，向下取整。
+    /// **两个方向都要传**——税是从这笔生意里抽的，与谁承担那一笔无关。
+    /// 后端不能销毁余额（记分板）时由调用方填 0：那样税根本收不走，算出来只会让账对不上。
+    double taxRate = 0.0;
+    /// 这笔税是否**额外压在付款方身上**：卖出方向是 true（店主另付 `tax`），
+    /// 买入方向是 false（税从店主的收入里扣，买家总支出不变）。
+    ///
+    /// 它只影响「付款方还付得起几份」，不影响税额本身。两件事混成一个字段的话，
+    /// 买入方向会把税率当成 0，结果一分税都不收（10 的评审正好抓到过这个）。
+    /// 填什么由 `tradeTaxPlan(direction, rate, supportsMoneySink)` 决定。
+    bool taxOnPayer = false;
 };
+
+/// 付款方的含税成本率：只有 `taxOnPayer` 为 true 时才是税率，否则 0。
+/// `planTrade` 与两个方向的份数上限都用它，别在别处再写一次这个三元。
+double payerTaxRate(TradeRequest const& request);
 
 struct TradeDecision {
     std::optional<TradePlan> plan;
@@ -79,8 +119,21 @@ struct TradeDecision {
 /// 这次最多能成交几份：`min(maxUnits, goodsUnits, roomUnits, 付款方余额能付的份数)`
 /// （DESIGN §10.1 第 3 步）。
 ///
+/// `taxRate` 非 0 时按**含税成本**算付款方的份数上限（见 `affordableUnitsWithTax`），
+/// 调用方只为「要额外掏这份税」的付款方传非 0（卖出方向的店主）。
 /// 份数表单显示的上限与交易执行的上限都调它，别在两处各自 `std::min` 一遍。
-int maxTradeUnits(int maxUnits, int goodsUnits, int roomUnits, std::int64_t unitPrice, std::int64_t payerFunds);
+int maxTradeUnits(
+    int          maxUnits,
+    int          goodsUnits,
+    int          roomUnits,
+    std::int64_t unitPrice,
+    std::int64_t payerFunds,
+    double       taxRate = 0.0
+);
+
+/// 同上，但「付款方能承受几份」已经算好了（`planTrade` 要拿它区分是哪一条上限挡住的，
+/// 自己算一次再传进来，免得同一个二分跑两三遍）。
+int maxTradeUnits(int maxUnits, int goodsUnits, int roomUnits, int affordableUnits);
 
 /// 算出这次能成交几份、搬几件、多少钱；不能成交就说明是哪一条上限挡住的。
 ///

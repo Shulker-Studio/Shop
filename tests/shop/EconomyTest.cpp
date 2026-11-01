@@ -189,4 +189,157 @@ TEST_CASE("后端名与枚举一一对应：配置里写的名字只有一张表
 TEST_CASE("后端名清单文本用于错配置提示") {
     auto const text = backendNamesText(" / ");
     CHECK(text == "auto / legacy_money / scoreboard / builtin / null");
+    // 配置校验只该列「现在能写」的取值：builtin 是 P1，写它会单独报错
+    CHECK(legalBackendNamesText(" / ") == "auto / legacy_money / scoreboard / null");
+}
+
+namespace {
+
+BackendProbe usable() { return BackendProbe{true, ProbeIssue::None}; }
+
+BackendProbe missing(ProbeIssue issue) { return BackendProbe{false, issue}; }
+
+} // namespace
+
+TEST_CASE("auto 探测顺序：LegacyMoney 优先，其次记分板，最后空实现") {
+    // 两家都在：LegacyMoney 胜出，连跳过的理由都不该有
+    auto selection = selectBackend(Backend::Auto, {usable(), usable()});
+    CHECK(selection.chosen == Backend::LegacyMoney);
+    CHECK(selection.skipped.empty());
+
+    // 没有 LegacyMoney：降级到记分板，原因带上
+    selection = selectBackend(Backend::Auto, {missing(ProbeIssue::ModuleMissing), usable()});
+    CHECK(selection.chosen == Backend::Scoreboard);
+    REQUIRE(selection.skipped.size() == 1);
+    CHECK(selection.skipped[0].first == Backend::LegacyMoney);
+    CHECK(selection.skipped[0].second == ProbeIssue::ModuleMissing);
+
+    // 导出不全也算 LegacyMoney 不可用（版本不兼容）
+    selection = selectBackend(Backend::Auto, {missing(ProbeIssue::ExportsMissing), usable()});
+    CHECK(selection.chosen == Backend::Scoreboard);
+    CHECK(selection.skipped[0].second == ProbeIssue::ExportsMissing);
+
+    // 两家都没有：空实现，两个跳过原因都留下
+    selection = selectBackend(Backend::Auto, {missing(ProbeIssue::ModuleMissing), missing(ProbeIssue::ObjectiveMissing)});
+    CHECK(selection.chosen == Backend::Null);
+    REQUIRE(selection.skipped.size() == 2);
+    CHECK(selection.skipped[0].first == Backend::LegacyMoney);
+    CHECK(selection.skipped[1].first == Backend::Scoreboard);
+}
+
+TEST_CASE("显式后端：点了名但探测不到就降级，不整服停摆") {
+    // legacy_money：优先它，失败才往下走
+    auto selection = selectBackend(Backend::LegacyMoney, {usable(), usable()});
+    CHECK(selection.chosen == Backend::LegacyMoney);
+
+    selection = selectBackend(Backend::LegacyMoney, {missing(ProbeIssue::ModuleMissing), usable()});
+    CHECK(selection.chosen == Backend::Scoreboard);
+    CHECK(selection.skipped[0].first == Backend::LegacyMoney);
+
+    // scoreboard：不从 LegacyMoney 开始（服主不想要它记账）
+    selection = selectBackend(Backend::Scoreboard, {usable(), usable()});
+    CHECK(selection.chosen == Backend::Scoreboard);
+    CHECK(selection.skipped.empty());
+
+    selection = selectBackend(Backend::Scoreboard, {usable(), missing(ProbeIssue::ObjectiveMissing)});
+    CHECK(selection.chosen == Backend::Null);
+    REQUIRE(selection.skipped.size() == 1);
+    CHECK(selection.skipped[0].first == Backend::Scoreboard);
+
+    // null 不需要探测任何候选：即使两个后端都可用也依旧选它
+    selection = selectBackend(Backend::Null, {usable(), usable()});
+    CHECK(selection.chosen == Backend::Null);
+    CHECK(selection.skipped.empty());
+
+    // builtin（P1）同理：配置校验已经拒了它，漏到这儿也不许拿记分板顶替
+    selection = selectBackend(Backend::Builtin, {usable(), usable()});
+    CHECK(selection.chosen == Backend::Null);
+    CHECK(selection.skipped.empty());
+}
+
+TEST_CASE("探测计划：哪些候选值得探，只由配置决定") {
+    auto const autoProbes = probesFor(Backend::Auto);
+    CHECK(autoProbes.legacyMoney);
+    CHECK(autoProbes.scoreboard);
+
+    // 显式 legacy_money 也要探记分板（它是降级候选）
+    auto const legacyProbes = probesFor(Backend::LegacyMoney);
+    CHECK(legacyProbes.legacyMoney);
+    CHECK(legacyProbes.scoreboard);
+
+    // 显式 scoreboard 不去碰 LegacyMoney
+    auto const scoreboardProbes = probesFor(Backend::Scoreboard);
+    CHECK_FALSE(scoreboardProbes.legacyMoney);
+    CHECK(scoreboardProbes.scoreboard);
+
+    // 空实现与 builtin 谁都不探
+    for (auto backend : {Backend::Null, Backend::Builtin}) {
+        auto const probes = probesFor(backend);
+        CHECK_FALSE(probes.legacyMoney);
+        CHECK_FALSE(probes.scoreboard);
+    }
+}
+
+TEST_CASE("探测结果文案：说清选中了谁、跳过了谁") {
+    CHECK(backendSelectionText(Backend::Auto, selectBackend(Backend::Auto, {usable(), usable()}))
+          == "配置 auto → 选用 legacy_money");
+
+    auto const text = backendSelectionText(
+        Backend::Auto,
+        selectBackend(Backend::Auto, {missing(ProbeIssue::ModuleMissing), usable()})
+    );
+    CHECK(text.find("选用 scoreboard") != std::string::npos);
+    CHECK(text.find("legacy_money") != std::string::npos);
+    CHECK(text.find(probeIssueText(ProbeIssue::ModuleMissing)) != std::string::npos);
+
+    // 每个失败原因都有中文说明，不能是空串（日志里会变成「跳过 x：」）
+    for (auto issue : {
+             ProbeIssue::None,
+             ProbeIssue::ModuleMissing,
+             ProbeIssue::ExportsMissing,
+             ProbeIssue::ObjectiveMissing,
+             ProbeIssue::ObjectiveCreateFailed,
+         }) {
+        CHECK_FALSE(probeIssueText(issue).empty());
+    }
+}
+
+TEST_CASE("店主离线判据：支持离线的后端不看店主在不在线") {
+    // 支持离线的后端（LegacyMoney / builtin）：四种组合（在线与否 × 配置开关）全部不拦
+    for (bool ownerOnline : {true, false}) {
+        for (bool requireOwnerOnline : {true, false}) {
+            CHECK_FALSE(ownerUnreachable(ownerOnline, /*backendSupportsOffline=*/true, requireOwnerOnline));
+        }
+    }
+
+    // 记分板（不支持离线）：默认（requireOwnerOnline）时店主不在线就拦，店主在线不拦
+    CHECK(ownerUnreachable(/*ownerOnline=*/false, /*backendSupportsOffline=*/false, /*requireOwnerOnline=*/true));
+    CHECK_FALSE(ownerUnreachable(true, false, true));
+
+    // 关掉 requireOwnerOnline：不再提前拦，让这一笔走到动钱那一步再失败
+    CHECK_FALSE(ownerUnreachable(false, false, false));
+    CHECK_FALSE(ownerUnreachable(true, false, false));
+}
+
+TEST_CASE("转账：不支持系统账户的后端拒绝「付给空账户」") {
+    FakeEconomy backend; // 默认 supportsMoneySink() == false
+    backend.set("buyer", 100);
+
+    auto const result = backend.transfer("buyer", "", 10);
+    CHECK(result.status == TransferStatus::Rejected);
+    CHECK_FALSE(result.broken());
+    CHECK(backend.get("buyer") == 100);
+}
+
+TEST_CASE("转账参数校验只有一份：金额、空付款方、自转自、系统账户") {
+    CHECK_FALSE(checkTransfer("a", "b", 10, /*supportsMoneySink=*/false).has_value());
+
+    CHECK(checkTransfer("a", "b", 0, false)->status == TransferStatus::Rejected);
+    CHECK(checkTransfer("a", "b", -1, false)->status == TransferStatus::Rejected);
+    CHECK(checkTransfer("", "b", 10, false)->status == TransferStatus::Rejected);
+    CHECK(checkTransfer("a", "a", 10, false)->status == TransferStatus::Rejected);
+
+    // 空收款方 = 付给系统：只有声明支持销毁的后端才放行
+    CHECK_FALSE(checkTransfer("a", "", 10, /*supportsMoneySink=*/true).has_value());
+    CHECK(checkTransfer("a", "", 10, /*supportsMoneySink=*/false)->status == TransferStatus::Rejected);
 }
