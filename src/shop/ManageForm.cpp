@@ -6,30 +6,40 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <utility>
 
 namespace ss::shop {
 namespace {
 
-constexpr std::string_view kBuyPriceHint = "改价只写数字：留空表示这一侧不做生意，至少要留一侧价格";
+constexpr std::string_view kInputHint = "改价与件数只写数字：价格留空表示这一侧不做生意，但至少要留一侧价格";
 
-constexpr std::string_view kNotAnIntegerReason = "买入价只能写非负整数（例如 10），或者留空表示这一侧不做生意";
-
-constexpr std::string_view kBothEmptyReason = "至少要留一侧价格，否则这块牌就不再是商店牌（箱子会失去保护）";
+constexpr std::string_view kBothEmptyReason =
+    "至少要留一侧价格，否则这块牌就不再是商店牌（箱子会失去保护）。想关店请拆牌，或者停业（牌子与库存都留着）";
 
 /// 输入框里那个价格：只认「空」或「一个非负整数」。
-struct BuyPriceInput {
+struct PriceInput {
     /// 输入框里写了东西（去空白后非空）。`false` = 留空 = 这一侧不做生意。
     bool given = false;
     /// `given` 且能解析成一非负整数时才有值；`given && !price` 就是「输入不合法」。
     std::optional<std::int64_t> price;
 };
 
+/// 改哪一侧的价格。两侧的解析与校验一模一样，只有提示里的名字与落到哪个字段不同。
+enum class PriceSide { Buy, Sell };
+
+constexpr std::string_view priceLabelOf(PriceSide side) { return side == PriceSide::Buy ? "买入价" : "卖出价"; }
+
+/// 某一侧价格写错了。两侧共用这句话，只有名字不同。
+std::string notAnIntegerReason(PriceSide side) {
+    return std::string{priceLabelOf(side)} + "只能写非负整数（例如 10），或者留空表示这一侧不做生意";
+}
+
 /// 空串（含只有空白）= 没填。
 ///
 /// `from_chars` 必须把整串吃完：`1.5` / `1K` / `1 0` 都会停在中间，一律算非法而不是取前缀。
 /// 负数它能解析出来，所以要单独拒绝。`int64` 溢出返回 `result_out_of_range`，同样算非法。
-BuyPriceInput parseBuyPrice(std::string_view text) {
+PriceInput parsePriceInput(std::string_view text) {
     const std::string_view trimmed = trimView(text);
     if (trimmed.empty()) {
         return {};
@@ -42,6 +52,48 @@ BuyPriceInput parseBuyPrice(std::string_view text) {
     return {.given = true, .price = value};
 }
 
+/// 价格改动的收尾：改完的定义能不能写进牌面。
+///
+/// 两侧都空 → 第 3 行没有 `B`/`S` → `looksLikeShopSign` 为假 → 牌与箱子整体失去保护（spec D6）；
+/// 卖出价高于买入价 → 与手写编辑同一条规则（`sellPriceHigherThanBuy`）。
+/// 只有两个价格函数用它：改件数造不出这两种状态（件数一个字段都不碰价）。
+ManageEdit validatedEdit(ShopSpec next, ShopSignConfig const& config) {
+    if (!next.buyPrice && !next.sellPrice) {
+        return {.spec = std::nullopt, .error = std::string{kBothEmptyReason}};
+    }
+    if (sellPriceHigherThanBuy(next.buyPrice, next.sellPrice, config)) {
+        return {.spec = std::nullopt, .error = sellPriceAboveBuyMessage(next.buyPrice, next.sellPrice)};
+    }
+    return {.spec = std::move(next), .error = {}};
+}
+
+ManageEdit withPrice(ShopSpec const& current, PriceSide side, std::string_view input, ShopSignConfig const& config) {
+    auto const parsed = parsePriceInput(input);
+    if (parsed.given && !parsed.price) {
+        return {.spec = std::nullopt, .error = notAnIntegerReason(side)};
+    }
+
+    ShopSpec next  = current;
+    auto&    price = side == PriceSide::Buy ? next.buyPrice : next.sellPrice;
+    price          = parsed.price;
+    return validatedEdit(std::move(next), config);
+}
+
+/// 管理表单上一个带当前值的按钮：`改买入价（现在 $ 10 / 份）`。
+/// `emptyWord` 是这一侧现在不做生意时的说法（买入价「不出售」、卖出价「不收购」）。
+std::string priceButtonLabel(
+    std::string_view            title,
+    std::optional<std::int64_t> price,
+    std::string const&          currencySymbol,
+    std::string_view            emptyWord
+) {
+    std::string label{title};
+    label += "（现在";
+    label += price ? moneyText(currencySymbol, *price) + " / 份" : std::string{emptyWord};
+    label += "）";
+    return label;
+}
+
 } // namespace
 
 std::string shopManageFormContent(ShopInfoData const& data, bool waxed) {
@@ -50,34 +102,41 @@ std::string shopManageFormContent(ShopInfoData const& data, bool waxed) {
         // 蜡不可逆（DESIGN §9.2）：不写这句，店主会以为改价彻底没路了。
         appendLine(content, "这块牌上了蜡：手写编辑仍被锁，这里可以直接改");
     }
-    appendLine(content, std::string{kBuyPriceHint});
+    appendLine(content, std::string{kInputHint});
     return content;
 }
 
 std::vector<ShopFormButton> shopManageFormButtons(ShopInfoData const& data) {
-    std::string label  = "改买入价（现在";
-    label             += data.buyPrice ? moneyText(data.currencySymbol, *data.buyPrice) + " / 份" : "不出售";
-    label             += "）";
     return {
-        ShopFormButton{std::move(label), ShopFormAction::ManageBuyPrice}
+        {priceButtonLabel("改买入价", data.buyPrice, data.currencySymbol, "不出售"), ShopFormAction::ManageBuyPrice},
+        {priceButtonLabel("改卖出价", data.sellPrice, data.currencySymbol, "不收购"), ShopFormAction::ManageSellPrice},
+        {"改每份件数（现在 " + std::to_string(data.amountPerUnit) + " 个）", ShopFormAction::ManageAmount},
     };
 }
 
 ManageEdit withBuyPrice(ShopSpec const& current, std::string_view input, ShopSignConfig const& config) {
-    auto const parsed = parseBuyPrice(input);
-    if (parsed.given && !parsed.price) {
-        return {.spec = std::nullopt, .error = std::string{kNotAnIntegerReason}};
+    return withPrice(current, PriceSide::Buy, input, config);
+}
+
+ManageEdit withSellPrice(ShopSpec const& current, std::string_view input, ShopSignConfig const& config) {
+    return withPrice(current, PriceSide::Sell, input, config);
+}
+
+ManageEdit withAmount(ShopSpec const& current, std::string_view input, ShopSignConfig const& config) {
+    // 件数的文法（只收 ASCII 十进制、落在 1..maxShopAmount）只有一份，就是牌面第 2 行那个
+    // `parseAmountLine`：表单只是允许输入框两端带空白（与买卖价一致），拿走之后的字串没区别。
+    // 手写编辑那条路不接受空白，因为它读的是牌面：“牌面第 2 行是权威整数”（DESIGN §5.1）。
+    //
+    // 与价格那边唯一的宽严差异：`parseAmountLine` 会先剥颜色码，所以 `§a16` 在这里能认出成 16，
+    // 而价格框会把它当非法。牌面上颜色码是常态，不该反过来让店主在输入框里卡死。
+    auto const amount = parseAmountLine(trimCopy(input), config.maxShopAmount);
+    if (!amount) {
+        return {.spec = std::nullopt, .error = amountOutOfRangeMessage(config.maxShopAmount)};
     }
 
     ShopSpec next = current;
-    next.buyPrice = parsed.price;
-
-    if (!next.buyPrice && !next.sellPrice) {
-        return {.spec = std::nullopt, .error = std::string{kBothEmptyReason}};
-    }
-    if (sellPriceHigherThanBuy(next.buyPrice, next.sellPrice, config)) {
-        return {.spec = std::nullopt, .error = sellPriceAboveBuyMessage(next.buyPrice, next.sellPrice)};
-    }
+    next.amount   = *amount;
+    // 件数不碰价：改完不会造出「两侧都空」或「S > B」，而现在的牌已经过了 `parseShopSignText`。
     return {.spec = std::move(next), .error = {}};
 }
 

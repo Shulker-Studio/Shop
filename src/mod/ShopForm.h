@@ -25,10 +25,12 @@ void openShopForm(Player& viewer, Cell const& sign, ShopInfoData const& data, Sh
 /// 重新判一次管理身份，然后弹管理表单。
 void requestManageForm(Player& viewer, Cell const& sign);
 
-/// 管理表单上「改买入价」的入口：一张只有一个输入框的 `CustomForm`。
+/// 管理表单上「改一项」的入口：一张只有一个输入框的 `CustomForm`。
 ///
-/// 提交时重新解析牌面、重新鉴权；成功则写正面的价格行并把这一格发给整维度（DESIGN §9.2）。
-void requestBuyPriceForm(Player& viewer, Cell const& sign);
+/// `action` 只能是 `ManageBuyPrice` / `ManageSellPrice` / `ManageAmount`（其他动作没有输入框）。
+/// 提交时重新解析牌面、重新鉴权；成功则写正面并把这一格发给整维度（DESIGN §9.2）。
+/// 三个入口共用同一条提交链，差别只在表单文案与合成函数。
+void requestManageInputForm(Player& viewer, Cell const& sign, ShopFormAction action);
 
 /// 打开「几份」表单（DESIGN §10.1 第 3 步）。买卖共用同一张表单：档位与上限都是「份数」的事。
 ///

@@ -216,6 +216,10 @@ std::optional<int> parseAmountLine(std::string_view line, int maxAmount) {
     return static_cast<int>(value);
 }
 
+std::string amountOutOfRangeMessage(int maxShopAmount) {
+    return "一份的件数要写 1 到 " + std::to_string(maxShopAmount) + " 之间的整数";
+}
+
 std::optional<PricePair> parsePriceLine(std::string_view line) {
     const std::string      plain = stripColorCodes(line);
     const std::string_view text  = trimView(plain);

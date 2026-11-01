@@ -134,6 +134,179 @@ TEST_CASE("改买入价：配置关掉「卖出价不得高于买入价」后照
     CHECK(result.spec->sellPrice == 5);
 }
 
+TEST_CASE("改卖出价：只换卖出价，其余字段原样带过去") {
+    auto const result = withSellPrice(sampleSpec(), "7", ShopSignConfig{});
+
+    REQUIRE(result.ok());
+    CHECK(result.spec->sellPrice == 7);
+    CHECK(result.spec->buyPrice == 10);
+    CHECK(result.spec->amount == 64);
+}
+
+TEST_CASE("改卖出价：留空 = 这一侧不收购（第 3 行只剩 B 10）") {
+    auto const result = withSellPrice(sampleSpec(), "", ShopSignConfig{});
+
+    REQUIRE(result.ok());
+    CHECK_FALSE(result.spec->sellPrice.has_value());
+    CHECK(result.spec->buyPrice == 10);
+
+    auto const lines = formatShopSign(*result.spec, "Alex", "钻石");
+    CHECK(lines[SignLine::PriceLine] == "B 10");
+}
+
+TEST_CASE("改卖出价：只写空白也算留空") {
+    auto const result = withSellPrice(sampleSpec(), "  ", ShopSignConfig{});
+
+    REQUIRE(result.ok());
+    CHECK_FALSE(result.spec->sellPrice.has_value());
+}
+
+TEST_CASE("改卖出价：0 是合法的价格（免费收货），不是「没填」") {
+    auto const result = withSellPrice(sampleSpec(), "0", ShopSignConfig{});
+
+    REQUIRE(result.ok());
+    REQUIRE(result.spec->sellPrice.has_value());
+    CHECK(*result.spec->sellPrice == 0);
+}
+
+TEST_CASE("改卖出价：输入解析与买入价同一套，非负整数之外一律不收") {
+    for (auto const* input : {"S 5", "B 10", "free", "1.5", "1K", "-1", "abc", "0x10", "10,000"}) {
+        auto const result = withSellPrice(sampleSpec(), input, ShopSignConfig{});
+        CHECK_MESSAGE(!result.ok(), "这个输入不该被当成卖出价：" << input);
+        // 原因要说清是哪一侧写错了，不能说成「买入价」。
+        CHECK(mentions(result.error, "卖出价"));
+        CHECK_FALSE(mentions(result.error, "买入价只能"));
+    }
+}
+
+TEST_CASE("改卖出价：卖出价高于买入价要拒，并把两个价念出来") {
+    auto const blocked = withSellPrice(sampleSpec(), "12", ShopSignConfig{});
+    CHECK_FALSE(blocked.ok());
+    CHECK(mentions(blocked.error, "卖出价不能高于买入价"));
+    CHECK(mentions(blocked.error, "12"));
+    CHECK(mentions(blocked.error, "10"));
+
+    // 相等是允许的（B 5 : S 5）。
+    auto const equal = withSellPrice(sampleSpec(), "10", ShopSignConfig{});
+    REQUIRE(equal.ok());
+    CHECK(equal.spec->sellPrice == 10);
+}
+
+TEST_CASE("改卖出价：买入价为空时没有可比的价，随便写") {
+    ShopSpec spec;
+    spec.amount    = 64;
+    spec.sellPrice = 5; // 只收购的店：没有买入价
+
+    auto const result = withSellPrice(spec, "999", ShopSignConfig{});
+    REQUIRE(result.ok());
+    CHECK(result.spec->sellPrice == 999);
+}
+
+TEST_CASE("改卖出价：两侧都清空要拒绝，并指出想关店是拆牌或停业") {
+    ShopSpec spec;
+    spec.amount    = 64;
+    spec.sellPrice = 5; // 只有卖出价的店：把它留空就什么都不剩了
+
+    auto const result = withSellPrice(spec, "", ShopSignConfig{});
+    CHECK_FALSE(result.ok());
+    CHECK(mentions(result.error, "至少要留一侧价格"));
+    CHECK(mentions(result.error, "失去保护"));
+    CHECK(mentions(result.error, "拆牌"));
+    CHECK(mentions(result.error, "停业"));
+}
+
+TEST_CASE("改每份件数：只换件数，价格与其余字段原样带过去") {
+    auto const result = withAmount(sampleSpec(), "16", ShopSignConfig{});
+
+    REQUIRE(result.ok());
+    CHECK(result.spec->amount == 16);
+    CHECK(result.spec->buyPrice == 10);
+    CHECK(result.spec->sellPrice == 5);
+}
+
+TEST_CASE("改每份件数：两端空白不影响取值") {
+    auto const result = withAmount(sampleSpec(), " 16 ", ShopSignConfig{});
+
+    REQUIRE(result.ok());
+    CHECK(result.spec->amount == 16);
+}
+
+TEST_CASE("改每份件数：1 与 maxShopAmount 都在范围内") {
+    ShopSignConfig config;
+    config.maxShopAmount = 64;
+
+    auto const one = withAmount(sampleSpec(), "1", config);
+    REQUIRE(one.ok());
+    CHECK(one.spec->amount == 1);
+
+    auto const max = withAmount(sampleSpec(), "64", config);
+    REQUIRE(max.ok());
+    CHECK(max.spec->amount == 64);
+
+    // 默认配置的上限也不是一个「不能用」的边界。
+    ShopSignConfig const defaults;
+    auto const           defaultMax = withAmount(sampleSpec(), std::to_string(defaults.maxShopAmount), defaults);
+    REQUIRE(defaultMax.ok());
+    CHECK(defaultMax.spec->amount == defaults.maxShopAmount);
+}
+
+TEST_CASE("改每份件数：0 与 maxShopAmount+1 越界要拒并说出范围，不夹到边界") {
+    ShopSignConfig config;
+    config.maxShopAmount = 64;
+
+    for (auto const* input : {"0", "65", "999"}) {
+        auto const result = withAmount(sampleSpec(), input, config);
+        CHECK_MESSAGE(!result.ok(), "这个件数不该被接受：" << input);
+        CHECK_FALSE(result.spec.has_value());
+        CHECK(mentions(result.error, "一份的件数要写 1 到 64"));
+    }
+}
+
+TEST_CASE("改每份件数：留空 / 非整数 / 负数 / 小数都不收（件数没有「不做生意」这一档）") {
+    for (auto const* input : {"", "   ", "1.5", "-1", "abc", "64 个", "1K", "99999999999999999999"}) {
+        auto const result = withAmount(sampleSpec(), input, ShopSignConfig{});
+        CHECK_MESSAGE(!result.ok(), "这个输入不该被当成件数：" << input);
+        CHECK(mentions(result.error, "一份的件数要写 1 到"));
+    }
+}
+
+TEST_CASE("改完之后 formatShopSign 的输出与手写编辑同格式") {
+    ShopSignConfig const config;
+
+    // 手写编辑那张牌、按同一套规范化拼出来的文本，就是管理表单应该写出来的样子。
+    auto const handwritten = parseShopSignText("Alex\n64\nB 10 : S 7\n钻石", /*editorIsOp=*/false, config);
+    REQUIRE(handwritten.ok());
+    auto const expected = joinSignText(formatShopSign(*handwritten.spec, "Alex", "钻石"));
+
+    auto const edited = withSellPrice(sampleSpec(), "7", config);
+    REQUIRE(edited.ok());
+    CHECK(joinSignText(formatShopSign(*edited.spec, "Alex", "钻石")) == expected);
+
+    // 件数也走同一条规范化：手写 16 个一份与表单改成 16 必须一字不差。
+    auto const handwrittenAmount = parseShopSignText("Alex\n16\nB 10 : S 5\n钻石", /*editorIsOp=*/false, config);
+    REQUIRE(handwrittenAmount.ok());
+    auto const expectedAmount = joinSignText(formatShopSign(*handwrittenAmount.spec, "Alex", "钻石"));
+
+    auto const amountEdited = withAmount(sampleSpec(), "16", config);
+    REQUIRE(amountEdited.ok());
+    CHECK(joinSignText(formatShopSign(*amountEdited.spec, "Alex", "钻石")) == expectedAmount);
+}
+
+TEST_CASE("改完的牌面仍然是商店牌（卖出价留空不会让保护失效）") {
+    ShopSignConfig const config;
+
+    auto const edited = withSellPrice(sampleSpec(), "", config);
+    REQUIRE(edited.ok());
+
+    auto const text     = joinSignText(formatShopSign(*edited.spec, "Alex", "钻石"));
+    auto const reparsed = parseShopSignText(text, /*editorIsOp=*/false, config);
+
+    REQUIRE(reparsed.ok());
+    CHECK(reparsed.spec->buyPrice == 10);
+    CHECK_FALSE(reparsed.spec->sellPrice.has_value());
+    CHECK(reparsed.spec->amount == 64);
+}
+
 TEST_CASE("管理表单正文：复用信息表单的内容，不重算库存") {
     auto const content = shopManageFormContent(sampleShop(), /*waxed=*/false);
 
@@ -156,13 +329,21 @@ TEST_CASE("管理表单正文：上蜡的牌补一句，免得店主以为改不
     CHECK_FALSE(mentions(plain, "上了蜡"));
 }
 
-TEST_CASE("管理表单按钮：本票只有「改买入价」，并带上当前值") {
+TEST_CASE("管理表单按钮：三个入口都带上当前值") {
     auto const buttons = shopManageFormButtons(sampleShop());
 
-    REQUIRE(buttons.size() == 1);
+    REQUIRE(buttons.size() == 3);
     CHECK(buttons[0].action == ShopFormAction::ManageBuyPrice);
     CHECK(mentions(buttons[0].label, "改买入价"));
     CHECK(mentions(buttons[0].label, "$ 10"));
+
+    CHECK(buttons[1].action == ShopFormAction::ManageSellPrice);
+    CHECK(mentions(buttons[1].label, "改卖出价"));
+    CHECK(mentions(buttons[1].label, "$ 5"));
+
+    CHECK(buttons[2].action == ShopFormAction::ManageAmount);
+    CHECK(mentions(buttons[2].label, "改每份件数"));
+    CHECK(mentions(buttons[2].label, "64 个"));
 }
 
 TEST_CASE("管理表单按钮：没有买入价时说「不出售」，不显示一个假价格") {
@@ -170,7 +351,20 @@ TEST_CASE("管理表单按钮：没有买入价时说「不出售」，不显示
     data.buyPrice.reset();
 
     auto const buttons = shopManageFormButtons(data);
-    REQUIRE(buttons.size() == 1);
+    REQUIRE(buttons.size() == 3);
     CHECK(mentions(buttons[0].label, "不出售"));
     CHECK_FALSE(mentions(buttons[0].label, "$"));
+    // 另一侧照常显示：一侧不做生意不影响另一侧。
+    CHECK(mentions(buttons[1].label, "$ 5"));
+}
+
+TEST_CASE("管理表单按钮：没有卖出价时说「不收购」") {
+    auto data = sampleShop();
+    data.sellPrice.reset();
+
+    auto const buttons = shopManageFormButtons(data);
+    REQUIRE(buttons.size() == 3);
+    CHECK(mentions(buttons[1].label, "不收购"));
+    CHECK_FALSE(mentions(buttons[1].label, "$"));
+    CHECK(mentions(buttons[0].label, "$ 10"));
 }

@@ -115,8 +115,8 @@ enum class ShopFormAction : std::uint8_t {
     Sell,            ///< 弹出份数表单
     Manage,          ///< 进管理表单
     ManageBuyPrice,  ///< 管理表单：改买入价
-    ManageSellPrice, ///< 管理表单：改卖出价（02）
-    ManageAmount,    ///< 管理表单：改每份件数（02）
+    ManageSellPrice, ///< 管理表单：改卖出价
+    ManageAmount,    ///< 管理表单：改每份件数
     ToggleClosed,    ///< 管理表单：停业 / 恢复营业（03）
 };
 

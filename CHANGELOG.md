@@ -80,6 +80,10 @@
 - 管理入口与交易角色解耦（`shopFormButtons(data, role, canManage)`）：`canManage` 为真时**总是**给管理入口，与 `unavailableReason` 无关（否则管理员店一停业就永久无法恢复营业）；买卖按钮仍只看 `role` 与 `unavailableReason`。
 - 管理表单的校验只在一处（`withBuyPrice`）：非负整数 / 留空、两侧都清空则拒绝（否则第 3 行变空、箱子失去保护）、改完后卖出价高于买入价则拒绝；判据与手写编辑共用新抽出的 `sellPriceHigherThanBuy`。失败只提示，牌面一字不改。
 - `tests/shop/ManageFormTest.cpp`（新）+ `ShopInfoTest.cpp`：改价合成（正常 / 留空 / 非法字符与溢出 / 两侧都空 / `S > B` / 配置关闭该限制）、管理表单正文与上蜡提示、管理入口与 `unavailableReason` 的四种组合，共 17 个中文用例。
+- 管理表单接上「改卖出价」与「改每份件数」（P1 票 02）：管理表单变成三个入口，按钮文案带当前值（`改卖出价（现在 $ 5 / 份）`、没有卖出价时写「不收购」、`改每份件数（现在 64 个）`）。卖出价留空 = 这一侧不收购（第 3 行只剩 `B 10`）；件数只收 `1..maxShopAmount`，越界直接给「一份的件数要写 1 到 N」的原因，**不悄悄夹到边界**。
+- `withSellPrice` / `withAmount` 与 `withBuyPrice` 共用同一套输入解析与同一份收尾校验：买卖两侧走 `parsePriceInput` + `validatedEdit`（两侧都清空拒绝、卖出价高于买入价拒绝），换一侧只换「落到哪个字段」与提示里的名字；件数直接问牌面第 2 行那份 `parseAmountLine`（“什么叫合法件数”只有一份），范围文案由新的 `amountOutOfRangeMessage` 供手写编辑与管理表单共用。两侧都清空的提示补上「想关店请拆牌，或者停业（牌子与库存都留着）」，并说明箱子会失去保护（spec D6）。
+- 三张单输入框表单与提交链只有一份（`src/mod/ShopForm.cpp` 的 `manageInputField` / `openManageInputForm` / `submitManageEdit`）：控件名、三句文案与初值按 `action` 取，`重新取牌 → 重新解析 → 重新鉴权 → 写牌 → 发整维度` 是同一段（提交只接「合成函数 + 成功提示」，不把表单文案带进去），`ManageSellPrice` / `ManageAmount` 不再在 `onButton` 里占位返回。输入读回仍只走 `get_if<std::string>`，读不到报「读不到这个输入框的值」而不是当 0 / 当留空。
+- `tests/shop/ManageFormTest.cpp` 补 16 个中文用例：卖出价正常改 / 留空 / 只写空白 / 非法输入 / `S > B`（两边相等放行、买入价为空时不比）/ 两侧都空、件数 `1` 与 `maxShopAmount` / `0` 与 `maxShopAmount+1` / 留空与非整数、改完 `formatShopSign` 与手写编辑同格式、改完仍是商店牌、三个按钮的当前值与缺价文案。
 
 ### 变更
 

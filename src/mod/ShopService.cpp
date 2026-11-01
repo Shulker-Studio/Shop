@@ -23,7 +23,8 @@ std::string messageFor(ShopSignError error, int maxShopAmount) {
     case ShopSignError::EmptyOwnerName:
         return "第 1 行不能空着（服务器会把它换成你的名字，随便写点什么）";
     case ShopSignError::BadAmount:
-        return "一份的件数要写 1 到 " + std::to_string(maxShopAmount) + " 之间的整数";
+        // 规则与措辞都归纯逻辑层（`amountOutOfRangeMessage`）：管理表单改件数说的是同一句。
+        return amountOutOfRangeMessage(maxShopAmount);
     case ShopSignError::BadPrice:
         return "价格写法不对：写 B <买入价> : S <卖出价>，至少写一个";
     case ShopSignError::SellPriceAboveBuy:
