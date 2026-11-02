@@ -174,3 +174,48 @@
 - `./build/windows/x64/release/ShopTests.exe`：**312 cases / 3464 assertions，全绿**
   （审查前 311 / 3464：新增 `isoDateOf` 用例 +1 case；断言数因为 `fail`/`frozen` 换成完整快照、
   去掉 `reason` 键后的结构调整而变化）
+
+### 真机反馈后的修复（`transactionLog` 让老配置整个加载失败）
+
+**现象**：装上新构建、用升级前的 `config.json` 启动，模组直接拒绝加载：
+
+```
+ERR [Shop] config.json 读取失败：./plugins/Shop/config/config.json
+           （missing required field "transactionLog" when deserializing）
+ERR [Shop] 配置不可用，Shop 拒绝加载
+```
+
+**根因**（不是配置写错，是加载方式错了）：`ll::config::loadConfig` 只在**文件缺 `version`、
+或 `version` 与代码里的不同**时才调 `defaultConfigUpdater` 用默认值补齐（一次 `merge_patch`），
+其余情况直接 `ll::reflection::deserialize` 严格反序列化——少任何一个键就抛
+`missing required field`。老文件带着 `version: 1`、代码里也是 `1`，于是跳过了补齐这一步。
+
+票 03 当时给 `ShopConfig` 加了 `transactionLog` 却没有 bump `version`，又没在真机上验「老配置能不能起」，
+所以整份配置判为非法。这不是「下次记得 bump 版本」能解决的：服主手写配置漏掉一个块、
+或者删掉某个键调默认值，都会同样炸掉。
+
+**修法（一劳永逸）**：加载改成**无条件补齐**，把「默认值打底 + 用户值覆盖」做成纯函数。
+
+- 新增纯逻辑 `src/shop/ConfigPatch.*`（8 个用例）：
+  - `mergeConfigDefaults(defaults, user)`：对象递归合并、数组整体替换；`version` 一律取代码里的值
+    （文件里的版本号只用来报警，不能让内存版本漂移）；`user` 里的 `null` 当作「没写」而不是
+    「删掉这个键」（否则等价于又造一个缺字段——同一个 bug 换个入口）；`user` 不是对象时直接用默认值。
+  - `missingConfigKeys` / `unknownConfigKeys`：点分路径列出「补了什么」与「哪些键拼错了不生效」。
+- `src/mod/Config.cpp` 的 `loadShopConfig` 不再调 `ll::config::loadConfig`，自己走
+  `readFile → parse → serialize(默认值) → merge → deserialize_to<ShopConfig>`：
+  - 缺键：按默认值跑，**并回写一份完整文件**，日志写明 `config.json 已补齐并回写（补上默认值：transactionLog）`；
+  - 拼错的键：WARN 列出被忽略的键（它们既不生效也不报错，比缺键难查得多）；
+  - 文件版本比模组新：WARN；
+  - JSON 语法错：**拒绝加载且不覆盖用户文件**（那可能是服主正在手改，盖掉等于吃掉他的内容）；
+  - 值非法（`maxShopAmount: 0`、税率越界、`compressAfterDays` 负数）：仍走原来的 `validate`，日志写明哪一项。
+- `ShopConfig::version` 的注释改成「只记录结构版本，加字段不需要改它」——它不再是加载路径的开关。
+
+**顺带修掉的第二个 bug（同一份真机日志暴露的）**：日志目录写成了
+`getConfigDir() / "logs"` = `plugins/Shop/config/logs/`，而票面、spec、README 与 `/shop status`
+一直说的是 `plugins/Shop/logs/`。`getConfigDir()` 是配置文件所在那一层（截图里的
+`./plugins/Shop/config/config.json` 就是它），日志应该挂在 `getModDir()`（= `plugins/Shop`）下。
+已改 `logDirectory()`，并把 `LogFile.h` 里写错的注释一并纠正。
+
+**这一条验不了单测**（要 BDS 才能跑 `ll::reflection` + `saveConfig`），所以列进了验收清单的
+第 0.5 条「升级路径」，必验项：老配置能加载、日志出现「已补齐并回写」、文件里多出
+`transactionLog` 且原值一个没变、重启一次不再补。

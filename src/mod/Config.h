@@ -63,8 +63,11 @@ struct TransactionLogConfig {
 
 /// config.json 的内存形态。聚合体，字段名就是配置键名。
 struct ShopConfig {
-    /// 配置结构版本。`ll::config::loadConfig` 用它判断是否需要做默认值迁移，
-    /// 所以它是契约的一部分，不能删。
+    /// 配置结构版本：只用来记录「这份文件是哪一版结构」，以及将来做**语义**迁移时分支用。
+    ///
+    /// **加字段不需要改它**：加载时一律拿默认值补齐（`mergeConfigDefaults`），
+    /// 缺的键按默认值跑并回写，所以「忘了 bump 版本」不会再让模组拒绝加载。
+    /// 反过来说，也不要指望它拦住手写错的配置——那是 `validate` 的事。
     int                      version                     = 1;
     std::string              adminShopName               = "Admin Shop";
     std::vector<std::string> shopContainers              = {"minecraft:chest", "minecraft:trapped_chest"};

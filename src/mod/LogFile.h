@@ -7,10 +7,12 @@
 
 namespace ss::shop {
 
-/// 流水的落盘目录：`plugins/Shop/logs/`（业务流水与销毁留档都在这里）。
+/// 日志的落盘目录：`plugins/Shop/logs/`（业务流水与销毁留档都在这里）。
 ///
-/// 用 `getConfigDir()`（= 模组的 `plugins/Shop`）拼，别自己写 `plugins/Shop`：
-/// 服主怎么装模组由加载器决定。
+/// 用 `getModDir()`（= 模组目录 `plugins/Shop`）拼，**不是** `getConfigDir()`：
+/// 后者是 `plugins/Shop/config`（配置文件所在的那一层），拿它拼会变成
+/// `plugins/Shop/config/logs/` —— 与 README、票面和服主的预期都不一样。
+/// 也不自己写死 `plugins/Shop`：模组装在哪由加载器决定。
 std::filesystem::path logDirectory();
 
 /// 把一批**已经是完整 NDJSON 行**的文本追加到 `dir / fileName`。

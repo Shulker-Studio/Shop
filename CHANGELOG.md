@@ -192,6 +192,15 @@
 
 ### 修复
 
+- **升级后配置里少一个新块，整个模组拒绝加载**：`ll::config::loadConfig` 只在文件缺 `version`
+  或 `version` 与代码不同时才用默认值补齐，否则严格反序列化——给 `ShopConfig` 加 `transactionLog`
+  之后，老 `config.json` 直接报 `missing required field "transactionLog"`，`Shop` 拒绝启用。
+  现在加载一律**默认值打底 + 文件值覆盖**（纯逻辑 `src/shop/ConfigPatch.*`，8 个用例），
+  缺的键按默认值跑并回写完整文件、启动日志写明补了什么；键名拼错会 WARN 列出被忽略的键；
+  JSON 语法错仍拒绝加载且**不覆盖**用户文件。加新配置字段不再需要 bump `version`。
+- **日志目录与文档不一致**：`logDirectory()` 用了 `getConfigDir()`（= `plugins/Shop/config`），
+  流水实际落在 `plugins/Shop/config/logs/`，而 README/spec/`/shop status` 一直说的是
+  `plugins/Shop/logs/`。改用 `getModDir() / "logs"`。
 - **告示牌没有「除蜡」这回事**：早期把 Java 版铜块的规则套到了告示牌上，判出「斧头 = 除蜡」并在提示里教玩家「先拿斧头除蜡才能改」。实际原版告示牌上蜡后没有任何去除手段（Mojira MC-261313 判 Works As Intended；Wiki 写「若要修改则需破坏后重新放置」），
   所以那条 `SignTouch::Axe` 分支在基岩版永远不会被原版触发，提示也是错的。现在斧头就是**普通物品**（点牌等于空手点牌），
   上蜡的牌对所有人只读，改价只能拆牌重立或走将来的管理表单（`DESIGN §9.2` 的「上蜡不可逆」）。

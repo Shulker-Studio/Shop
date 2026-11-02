@@ -163,7 +163,10 @@ void compressOldLogs(std::filesystem::path const& dir, std::string const& today,
 
 } // namespace
 
-std::filesystem::path logDirectory() { return Shop::getInstance().getSelf().getConfigDir() / "logs"; }
+std::filesystem::path logDirectory() {
+    // `getModDir()` = `plugins/<模组名>`，与配置目录（`plugins/<模组名>/config`）平级。
+    return Shop::getInstance().getSelf().getModDir() / "logs";
+}
 
 bool appendLogLines(
     std::filesystem::path const&    dir,

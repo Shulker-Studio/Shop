@@ -109,6 +109,21 @@ duckdb -c "SELECT owner.name, sum(total) AS 营业额 FROM read_json_auto('plugi
 `transactionLog.enabled`（默认 `true`）、`transactionLog.compressAfterDays`（默认 `7`，`0` = 永不压缩）。
 （`tax.taxDestination` 等仍留待 P1，见 `DESIGN.md` 第 15 节。）
 
+### 配置文件与补齐规则
+
+配置文件在 `plugins/Shop/config/config.json`（日志在 `plugins/Shop/logs/`，两者是**不同**的两层目录）。
+
+**缺键不会让模组拒绝加载。** 加载时永远拿本版的默认值打底、用文件里的值覆盖，所以：
+
+- 升级后新增的配置块（例如 `transactionLog`）在旧文件里没有 → 按默认值生效，启动日志会写明
+  `config.json 已补齐并回写（补上默认值：transactionLog）`，文件随即被补成完整的一份。
+- 手写配置漏了一个块或一个键 → 同上，按默认值跑；不需要为了加一个开关把整个文件重写一遍。
+- 键名拼错（`transactionlog`、`scoreboardObjectiv`）→ 那个键**不生效**，启动时 WARN 列出被忽略的键。
+- 文件不是合法 JSON（少了逗号、多了注释外的括号）→ **拒绝加载且不覆盖你的文件**，
+  日志里给出出错位置；修好再启动。
+- 值非法（`maxShopAmount: 0`、`tax.shopTaxRate: 1.5`、`compressAfterDays: -1` …）→ 拒绝加载，
+  日志写明哪一项不合法——这跟缺键是两回事，缺键是「没写」，写错是「写了但不合理」。
+
 ## 构建
 
 ```bash

@@ -13,7 +13,16 @@
 | 权限 | 至少一个 OP 账号 |
 | 商店 | ① 一个**普通店**（玩家建、箱里有货、有买入价与卖出价）；② 一个**管理员店**（OP 建，第 1 行是 `config.adminShopName`） |
 | 玩家 | 两个：`A`（有钱、要测买卖）、`B`（**故意没钱**，测 `no_money`） |
-| 配置 | `plugins/Shop/config.json` 里**没有** `transactionLog` 块也算对：缺键按默认 `enabled=true`、`compressAfterDays=7` 生效（老配置不会自动补键，生效值只能从 `/shop status` 看） |
+| 配置 | `plugins/Shop/config/config.json`（**不是** `plugins/Shop/config.json`）。老文件没有 `transactionLog` 块是正常的：加载时按默认 `enabled=true`、`compressAfterDays=7` 补齐并回写 |
+
+**目录布局**（两者是不同层，容易记混）：
+
+```
+plugins/Shop/
+├── config/config.json          ← 配置在这里
+└── logs/transactions-*.jsonl   ← 流水在这里（本模组建）
+    logs/discarded-*.jsonl
+```
 
 **日志目录**：服务器根目录下 `plugins/Shop/logs/`（不是本机仓库里的）。
 后面所有命令都在这个目录里跑（Git Bash；PowerShell 用 `Get-Content` / `Select-String` 等价替换）。
@@ -36,6 +45,23 @@ cd "<服务器根目录>/plugins/Shop/logs"   # 第一次交易后它才会出�
 ```
 
 关掉时是 `交易流水：关（业务流水与 discarded 一起停）`；`compressAfterDays=0` 时括号里是 `（永不压缩）`。
+
+---
+
+## 0.5 升级路径：老配置必须能加载（**本次实测报错的那一条**）
+
+用**升级前那份 `config.json`**（没有 `transactionLog` 块、`version: 1`）直接启动。
+
+- [ ] 模组**加载成功**，控制台没有 `missing required field "transactionLog"`、没有「配置不可用，Shop 拒绝加载」
+- [ ] 有一行 `config.json 已补齐并回写（补上默认值：transactionLog）：…`
+- [ ] 打开 `plugins/Shop/config/config.json`，已经多出 `transactionLog` 块（`enabled: true`、`compressAfterDays: 7`），**你原来的值一个没变**
+- [ ] 再重启一次：不再出现「已补齐」那行（不需要反复补）
+
+顺手验三条宽容规则（可选，但很快）：
+
+- [ ] 手写删掉某一个键（例如 `economy.createObjectiveIfMissing`）→ 能加载，日志说补上了它
+- [ ] 把 `transactionLog` 拼成 `transactionlog` → 能加载，日志 WARN「有 1 个不认识的键，已忽略：transactionlog」，实际按默认值开
+- [ ] 故意删掉一个逗号 → **拒绝加载**，日志说 JSON 不合法，且**你的文件没有被覆盖**
 
 ---
 
@@ -180,7 +206,7 @@ duckdb -c "select result, count(*) from read_json_auto('transactions-*.jsonl*') 
 
 ## 7. `compressAfterDays = 0` → 不压（票 03 第 2 条）
 
-1. `plugins/Shop/config.json` 里把 `transactionLog` 写成 `{"enabled": true, "compressAfterDays": 0}`。
+1. `plugins/Shop/config/config.json` 里把 `transactionLog` 写成 `{"enabled": true, "compressAfterDays": 0}`。
 2. `/ll reload Shop` 或重启服务器（配置只在 `load()` 读一次）。
 3. 重新造一个 8 天前的文件 → 交易一笔。
 
@@ -238,6 +264,6 @@ grep -c . transactions-*.jsonl | head                           # 行数
 ## 测完要做的事
 
 1. `/shop debug off`。
-2. `config.json` 的 `transactionLog` 改回 `{"enabled": true, "compressAfterDays": 7}`，重启。
+2. `plugins/Shop/config/config.json` 的 `transactionLog` 改回 `{"enabled": true, "compressAfterDays": 7}`，重启。
 3. 删掉造的假文件（`transactions-<8 天前>.jsonl` 及其 `.gz`）。
 4. 把每条没过的情况贴回来：`jq` 输出 + 控制台 warn/fatal 原文 + `/shop status` 那几行。

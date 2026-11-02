@@ -1,12 +1,27 @@
 #include "mod/Config.h"
 #include "ll/api/Config.h"
+#include "ll/api/io/FileUtils.h"
 #include "ll/api/io/Logger.h"
+#include "shop/ConfigPatch.h"
 
+#include <cstdint>
 #include <exception>
 #include <string_view>
 
 namespace ss::shop {
 namespace {
+
+/// 把键列表拼成日志里的一行（`transactionLog、economy.backend`）。
+std::string joinKeys(std::vector<std::string> const& keys) {
+    std::string out;
+    for (auto const& key : keys) {
+        if (!out.empty()) {
+            out += "、";
+        }
+        out += key;
+    }
+    return out;
+}
 
 bool isBlank(std::string const& text) { return text.find_first_not_of(" \t\r\n") == std::string::npos; }
 
@@ -94,39 +109,96 @@ bool validate(ShopConfig const& config, ll::io::Logger& logger) {
 } // namespace
 
 std::optional<ShopConfig> loadShopConfig(std::filesystem::path const& path, ll::io::Logger& logger) {
-    ShopConfig config;
-    try {
-        // loadConfig 返回 false 的含义是「文件缺 version 或内容为空，已经用默认值补齐到内存」，
-        // 不是读失败：它只在抛出异常/JSON 语法错时算失败。手写一份只填几个键的 config.json
-        // 属于前者（缺 version），不能因此判配置非法。
-        if (!ll::config::loadConfig(config, path)) {
-            logger.warn(
-                "config.json 缺少 version 或为空，已按默认值补齐（本次按补齐后的配置运行）：{}",
-                path.string()
-            );
-            // 回写一份补上 version 的完整文件，避免每次启动都重跑迁移。
-            if (!ll::config::saveConfig(config, path)) {
-                logger.warn("config.json 回写失败，下次启动仍会重新迁移默认值：{}", path.string());
-            }
+    ShopConfig const defaults; // 结构默认值 = 这一版配置的完整形状
+
+    std::error_code ec;
+    if (!std::filesystem::exists(path, ec)) {
+        // 首次运行：写一份完整的默认配置。
+        if (!ll::config::saveConfig(defaults, path)) {
+            logger.error("config.json 写不出来，无法生成默认配置：{}", path.string());
+            return std::nullopt;
         }
-    } catch (std::exception const& e) {
-        logger.error("config.json 读取失败：{}（{}）", path.string(), e.what());
+        logger.info("config.json 不存在，已按默认值生成：{}", path.string());
+    }
+
+    auto const content = ll::file_utils::readFile(path);
+    if (!content) {
+        logger.error("config.json 读取失败（权限或磁盘）：{}", path.string());
         return std::nullopt;
     }
 
-    if (!validate(config, logger)) {
+    // 语法坏的配置文件不覆盖：那可能是服主正在手改，盖掉等于把他的内容吃掉。
+    // 能解析但缺字段是另一回事（下面一律用默认值补），不必弄死整个模组。
+    nlohmann::ordered_json user;
+    try {
+        user = nlohmann::ordered_json::parse(*content, nullptr, /*allow_exceptions=*/true, /*ignore_comments=*/true);
+    } catch (std::exception const& e) {
+        logger.error("config.json 不是合法 JSON，保持原样不动：{}（{}）", path.string(), e.what());
         return std::nullopt;
+    }
+    if (!user.is_object()) {
+        logger.error("config.json 顶层必须是一个对象：{}", path.string());
+        return std::nullopt;
+    }
+
+    auto const defaultsJson = ll::reflection::serialize<nlohmann::ordered_json>(defaults);
+    if (!defaultsJson) {
+        logger.error("默认配置序列化失败（模组内部错误）：{}", defaultsJson.error().message());
+        return std::nullopt;
+    }
+
+    // 拼错的键先报：它们既不会生效也不报错，比缺键难查得多。
+    if (auto const unknown = unknownConfigKeys(*defaultsJson, user); !unknown.empty()) {
+        logger.warn("config.json 里有 {} 个不认识的键，已忽略：{}", unknown.size(), joinKeys(unknown));
+    }
+    if (user.contains("version") && user["version"].is_number_integer()
+        && user["version"].get<std::int64_t>() > defaults.version) {
+        logger.warn(
+            "config.json 的 version（{}）比本模组（{}）新：可能来自更新的版本，本次按本模组的字段解析",
+            user["version"].get<std::int64_t>(),
+            defaults.version
+        );
+    }
+
+    // **无条件**补齐：默认值打底、用户值覆盖。
+    // 不能指望 `ll::config::loadConfig`：它只在文件缺 `version` 或 version 与代码不同时
+    // 才 merge 默认值，否则直接严格反序列化——少一个键就抛 `missing required field`，
+    // 整个模组拒绝加载。那等于「每加一个配置字段都必须记得 bump version」，忘了就全服起不来。
+    auto const merged = mergeConfigDefaults(*defaultsJson, user);
+
+    auto config = ll::reflection::deserialize_to<ShopConfig>(merged);
+    if (!config) {
+        logger.error("config.json 反序列化失败：{}（{}）", path.string(), config.error().message());
+        return std::nullopt;
+    }
+
+    if (!validate(*config, logger)) {
+        return std::nullopt;
+    }
+
+    if (merged != user) {
+        // 补过东西（新字段 / 手写漏键 / version 升级）：回写一份完整文件。
+        // 回写后服主能在文件里看到新字段，下次启动也不必再补。
+        auto const missing = missingConfigKeys(*defaultsJson, user);
+        if (!ll::config::saveConfig(*config, path)) {
+            logger.warn("config.json 回写失败，本次按补齐后的配置运行，下次启动会再补：{}", path.string());
+        } else if (!missing.empty()) {
+            logger.info("config.json 已补齐并回写（补上默认值：{}）：{}", joinKeys(missing), path.string());
+        } else {
+            logger.info("config.json 已按本版结构回写（version = {}）：{}", config->version, path.string());
+        }
     }
 
     logger.info(
-        "配置已加载：每份最多 {} 件，可作容器的方块 {} 种，管理员店名 \"{}\"，经济后端 {}，商店税 {}",
-        config.maxShopAmount,
-        config.shopContainers.size(),
-        config.adminShopName,
-        config.economy.backend,
-        config.tax.shopTaxRate
+        "配置已加载：每份最多 {} 件，可作容器的方块 {} 种，管理员店名 \"{}\"，经济后端 {}，商店税 {}，交易流水 {}",
+        config->maxShopAmount,
+        config->shopContainers.size(),
+        config->adminShopName,
+        config->economy.backend,
+        config->tax.shopTaxRate,
+        config->transactionLog.enabled ? "开" : "关"
     );
-    return config;
+    return std::move(*config);
 }
 
 ShopSignConfig toSignConfig(ShopConfig const& config) {
