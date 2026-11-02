@@ -149,6 +149,47 @@
 - 模板箱语义写进 DESIGN §7.4 / §5.3：不参与库存增减、卖进来的物品销毁（留档）、其余格子忽略、
   不做持久化（换商品 = 换第一格）；GLOSSARY 新增「样品槽」。
 
+### 新增（P1 票 01：每笔成交落一行流水）
+
+- 新增纯逻辑 `src/shop/TradeRecord.*`：`TradeRecord` + `composeTradeRecord` / `tradeRecordJson` /
+  `transactionLogFileName` / `tradeRecordProblem`。一行一个 JSON 对象，键序固定
+  `ts` / `event` / `result` / `dir` / `shop{dim,x,y,z}` / `owner{xuid,name}` / `admin` / `backend` /
+  `player{xuid,name}` / `item{id,aux,name}` / `units` / `items` / `unitPrice` / `gross` / `tax` / `total`，
+  结尾一个 `\n`、UTF-8 无 BOM、中文不转义——`jq -c .` 与 `duckdb read_json_auto` 都能直读，不需要先处理。
+- `TradeResult` 带 `logFacts`（事实）+ `logReason`（原因短名），`finishTrade` 一个漏斗里按下
+  `Done → ok` / `Rejected → fail` / `Broken → frozen`（`NeedsConfirm` 不是终态，不写），
+  在 `player.sendMessage` 之后、DiscardLog 之前落盘到 `plugins/Shop/logs/transactions-YYYY-MM-DD.jsonl`。
+- 新依赖 `nlohmann_json 3.12.0`（header-only；LeviLamina 不传递它，`Shop` 与 `ShopTests` 两个 target 各自声明）。
+  `src/shop/JsonLine.*` 是唯一的单行 NDJSON 出口（`dump(-1, ' ', false, replace)` + `\n`）。
+
+### 新增（P1 票 02：失败与冻结也留痕）
+
+- 拒绝与冻结也各是一行：`reason` 是可查询的英文短名（`no_money` / `no_stock` / `no_space` /
+  `owner_offline` / `shop_closed` / `over_limit` / `invalid_request`，以及只存在于适配层的
+  `shop_missing` / `frozen_pair` / `compensation_failed` …），**中文文案（会变）不进流水**。
+  `frozen` 行与 `fatal` 日志必然成对（同一个 `broken()` 里写），同一对「玩家 + 商店」被冻结后的后续提交
+  记 `fail` + `frozen_pair`，不会把一次事故记成两次。
+- 免费店（0 元成交）仍是一行 `ok`：它证明那次交接真的发生过；一份都没成交的 `fail` 行里份数与金额写 `0`，
+  而不是省掉字段。
+- `DiscardRecord` 的 JSON 拼装从手写转义改成 `nlohmann::ordered_json` + 共享的 `jsonLine`，
+  与业务流水共用同一份转义规则（既有 5 条快照断言逐字节未变，改动因此是可验证的）。
+- 新增 `src/mod/LogFile.*`：`transactions-*` 与 `discarded-*` 的**唯一**落盘入口（`appendLogLines`），
+  建目录 / 追加 / `flush` / 关文件失败只 `warn` 且同类失败同进程只提示一次，交易照常成功。
+
+### 新增（P1 票 03：压缩与配置，永不删除）
+
+- `config.json` 新增 `transactionLog`：`enabled`（默认 `true`）、`compressAfterDays`（默认 `7`，`0` = 永不压缩，
+  负数加载即拒绝）。`enabled = false` 时 `transactions-*` 与 `discarded-*` **一起停**（开关只在一个入口判）。
+- 新增纯逻辑 `src/shop/LogRotation.*`：从文件名解析日期（真实日历校验，闰年不靠手算）、
+  `shouldCompress(fileDate, today, days)`、`compressedLogFileName`（已 `.gz` 原样返回，因此幂等）、
+  `isoDateOf`（「`ts` 前 10 位就是日期」只有这一份实现）。
+- 压缩用 zlib 流式读写成 `*.jsonl.gz`（新依赖 `zlib 1.3.2`，只挂在 `Shop` 上——纯逻辑测试不需要 zlib）。
+  **永不删除**：只压不删，清盘得服主自己 `rm`；顺序是「写 `.part` → 关好 → 原子改名为 `.jsonl.gz` → 删原文件」，
+  中途崩服只会留下 `.part`（扫描认得 `.jsonl`，认不出它），不会出现「截断的 .gz 被当成已压过、原文件被删」。
+  压缩失败保留原文件、下一轮重试；写成功之后顺手检查一遍目录，不额外开线程、不做定时任务。
+- `/shop status` 多一行「交易流水：开 / 关（compressAfterDays=N，目录 …）」；`README.md` 新增「交易流水」一节
+  （字段含义、两个文件的分工、`jq` / `zcat` / `duckdb` 三个示例、两个配置项）。
+
 ### 修复
 
 - **告示牌没有「除蜡」这回事**：早期把 Java 版铜块的规则套到了告示牌上，判出「斧头 = 除蜡」并在提示里教玩家「先拿斧头除蜡才能改」。实际原版告示牌上蜡后没有任何去除手段（Mojira MC-261313 判 Works As Intended；Wiki 写「若要修改则需破坏后重新放置」），
