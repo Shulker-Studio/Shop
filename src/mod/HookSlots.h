@@ -13,7 +13,10 @@ struct HookSlot {
     char const* name;
     int (*attach)();
     bool (*detach)();
-    bool attached = false; ///< 已经挂过了，不重复挂、也不漏反注册（不代表「挂成功了」）
+    bool attached = false; ///< 当前挂着，不重复挂、也不漏反注册（**不代表**「attach 成功了」）
+    /// 是否**尝试过**注册。一旦尝试就不再回退：`detachHooks` 会把 `attached` 置回 false，
+    /// 单看 `attached` 会把「挂过又解开」说成「从未注册」——那正是排查符号漂移时最需要区分的一格。
+    bool attempted = false;
     /// 最近一次 `attach()` 的返回值。**同样不代表成功**（见上），只给 `/shop status` 对照
     /// 符号漂移用：同一个二进制上返回码从 0 变成非 0，就是符号或版本变了。
     int lastReturn = 0;
@@ -24,6 +27,10 @@ struct HookSlot {
 /// **返回值不拿来判成败**：`ll::memory::hook` 只是把 `pl::hook` 的 int 转发出去，
 /// 0 还是 1 代表成功在 LL 文档里没写（参考实现 ChestLock 直接忽略）。非 0 只记一条 warn
 /// 供真机排查「符号漂移」，真正的判据是功能是否生效。几条各自独立：一条不响不该拖垮其他几条。
+///
+/// **非 0 返回不在下一次 enable 重试**（这是明确决策，不是遗漏）：返回值不是契约，
+/// 第一次可能其实挂上了，重试就会双挂（同一条路径被拦两次）。所以只把它记进
+/// `lastReturn` / `attempted`，由启动 WARN 与 `/shop status` 暴露给人看。
 void attachHooks(std::span<HookSlot> slots);
 
 /// 按注册的逆序解开已经挂上的那几条（没挂上的不动）。

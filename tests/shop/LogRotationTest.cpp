@@ -25,21 +25,20 @@ TEST_CASE("流水轮转：新布局的文件名（日期就在开头）也能解
     CHECK_FALSE(logFileDate("notes.jsonl").has_value());
 }
 
-TEST_CASE("流水轮转：日期从文件名解析（不看 mtime）") {
-    // 文件被复制、备份还原、`touch` 过之后 mtime 不代表记录是哪天的；文件名是写记录时定下的。
-    CHECK(dateIs("transactions-2026-11-01.jsonl", "2026-11-01"));
-    CHECK(dateIs("discarded-2026-11-01.jsonl", "2026-11-01"));
-    CHECK(dateIs("transactions-2024-02-29.jsonl", "2024-02-29")); // 闰年
+TEST_CASE("流水轮转：旧布局的名字不归压缩管（只由搬家处理）") {
+    // `transactions-2026-11-01.jsonl` / `discarded-…` 是搬家（`relocatedLogFile`）的活。
+    // 压缩只认裸日期：否则服主放进日志目录的 `backup-2026-11-01.jsonl` 会被当成我们的文件
+    // 压掉并删原文件。
+    CHECK_FALSE(logFileDate("transactions-2026-11-01.jsonl").has_value());
+    CHECK_FALSE(logFileDate("discarded-2026-11-01.jsonl").has_value());
+    CHECK_FALSE(logFileDate("backup-2026-11-01.jsonl").has_value());
 
-    // 已经压过的不再压（否则会变成 .gz.gz）
-    CHECK_FALSE(logFileDate("transactions-2026-11-01.jsonl.gz").has_value());
     // 不认识的不要碰：「猜一个日期把它压掉」比留着一个大文件糟得多
     CHECK_FALSE(logFileDate("config.json").has_value());
-    CHECK_FALSE(logFileDate("transactions-.jsonl").has_value());
-    CHECK_FALSE(logFileDate("transactions-2026-13-01.jsonl").has_value()); // 没有 13 月
-    CHECK_FALSE(logFileDate("transactions-2026-02-30.jsonl").has_value()); // 2026 不是闰年
-    CHECK_FALSE(logFileDate("transactions-2026-11-01.jsonl.bak").has_value());
-    CHECK_FALSE(logFileDate("transactions-2026-11-01").has_value());      // 没有 .jsonl 后缀
+    CHECK_FALSE(logFileDate("2026-13-01.jsonl").has_value()); // 没有 13 月
+    CHECK_FALSE(logFileDate("2026-02-30.jsonl").has_value()); // 2026 不是闰年
+    CHECK_FALSE(logFileDate("2026-11-01.jsonl.bak").has_value());
+    CHECK_FALSE(logFileDate("2026-11-01").has_value());                  // 没有 .jsonl 后缀
     CHECK_FALSE(logFileDate("transactions2026-11-01.jsonl").has_value()); // 少了分隔用的 `-`
 }
 

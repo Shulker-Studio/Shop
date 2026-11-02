@@ -2,6 +2,7 @@
 
 #include "shop/SampleSlot.h"
 
+#include "mod/Shop.h"
 #include "mod/ShopOwner.h"
 
 #include "mc/deps/core/string/HashedString.h"
@@ -388,7 +389,15 @@ attachedShopSignsAt(BlockSource& region, BlockPos const& containerPos, ShopConfi
         return {};
     }
 
-    auto const                 signConfig = toSignConfig(config);
+    // 牌面配置用 `Shop` 里缓存的那一份：这个函数在漏斗/投掷器的路径上每 tick 都会走到，
+    // 而 `toSignConfig` 每次都要拷一个 `std::string`。缓存没有时（模组没加载）退回现算，
+    // 于是这个函数在单测/半启动状态下仍然可用。
+    ShopSignConfig fallback;
+    auto const*    signConfig = currentSignConfig();
+    if (signConfig == nullptr) {
+        fallback   = toSignConfig(config);
+        signConfig = &fallback;
+    }
     std::vector<AttachedShopSign> bound;
 
     forEachSignAround(region, container->ref, [&](BlockPos const& signPos, SignRef const& geometry) {
@@ -404,7 +413,7 @@ attachedShopSignsAt(BlockSource& region, BlockPos const& containerPos, ShopConfi
             return;
         }
 
-        if (auto owner = shopSignOwnerHere(region, signPos, signConfig)) {
+        if (auto owner = shopSignOwnerHere(region, signPos, *signConfig)) {
             bound.push_back(AttachedShopSign{geometry, *owner});
         }
     });
@@ -412,12 +421,24 @@ attachedShopSignsAt(BlockSource& region, BlockPos const& containerPos, ShopConfi
 }
 
 std::optional<ShopOwner> shopSignOwnerAt(BlockSource& region, BlockPos const& signPos, ShopConfig const& config) {
-    return shopSignOwnerHere(region, signPos, toSignConfig(config));
+    // 同上：走缓存。爆炸的方块列表动辄上百格，每一格都会问到这里。
+    ShopSignConfig fallback;
+    auto const*    signConfig = currentSignConfig();
+    if (signConfig == nullptr) {
+        fallback   = toSignConfig(config);
+        signConfig = &fallback;
+    }
+    return shopSignOwnerHere(region, signPos, *signConfig);
 }
 
 std::vector<AttachedShopSign>
 shopSignsWithAttachedCell(BlockSource& region, BlockPos const& attachedCell, ShopConfig const& config) {
-    auto const signConfig = toSignConfig(config);
+    ShopSignConfig fallback;
+    auto const*    signConfig = currentSignConfig();
+    if (signConfig == nullptr) {
+        fallback   = toSignConfig(config);
+        signConfig = &fallback;
+    }
 
     // 先拿到六个邻居里能读出几何的（残牌、侧挂的悬挂牌读不出来，直接跳过）
     std::vector<SignRef> geometries;
@@ -430,7 +451,7 @@ shopSignsWithAttachedCell(BlockSource& region, BlockPos const& attachedCell, Sho
     // 「谁的附着格是这一格」的几何口径在纯逻辑层，这里不另算一份偏移
     std::vector<AttachedShopSign> attached;
     for (SignRef const& sign : signsAttachedTo(toCell(attachedCell), geometries)) {
-        if (auto owner = shopSignOwnerHere(region, toBlockPos(sign.pos), signConfig)) {
+        if (auto owner = shopSignOwnerHere(region, toBlockPos(sign.pos), *signConfig)) {
             attached.push_back(AttachedShopSign{sign, *owner});
         }
     }
@@ -450,6 +471,25 @@ bool isShopBlockAt(BlockSource& region, BlockPos const& pos, ShopConfig const& c
         return false;
     }
     return shopSignOwnerAt(region, pos, config).has_value() || !attachedShopSignsAt(region, pos, config).empty();
+}
+
+bool isShopContainerBlockAt(BlockSource& region, BlockPos const& pos, ShopConfig const& config) {
+    // 两层粗筛，按「便宜的先」排。漏斗每 tick 都跑 
+    // `ContentProtectionHooks` 那四条 hook，这条路径上省下的每一次 `getBlockEntity`
+    // 都要乘上「漏斗数 × 20」。
+    //
+    // 1. 没方块实体：一定不是（空气、泥土、作物、世界边界……）。
+    // 2. 不是箱子/木桶：一定不是（漏斗、漏斗矿车、熔炉、投掷器自身）。
+    //    **这一句是最重要的一句**：漏斗链（漏斗上方是另一个漏斗）非常常见，
+    //    只靠第 1 层的话它会一路走到「扫 6 个邻居 + 2 次 `toSignConfig` 的字符串拷贝」。
+    // 3. 才付 `attachedShopSignsAt` 的代价（六邻居扫描 + 牌面解析）。
+    if (region.getBlockEntity(pos) == nullptr) {
+        return false;
+    }
+    if (!containerAt(region, pos)) {
+        return false;
+    }
+    return !attachedShopSignsAt(region, pos, config).empty();
 }
 
 } // namespace ss::shop

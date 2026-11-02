@@ -211,7 +211,12 @@ std::string stripColorCodes(std::string_view text) {
         if (static_cast<unsigned char>(text[i]) == 0xC2 && i + 1 < text.size()
             && static_cast<unsigned char>(text[i + 1]) == 0xA7) {
             i += 2;
-            if (i < text.size()) {
+            // 只有后面跟的是 **ASCII** 格式码（`0`-`9`、`a`-`f`、`k`-`o`、`r`、`x` 等）才一并吃掉。
+            //
+            // 若跟的是多字节字符的首字节（>= 0x80），说明这个 `§` 后面根本没有格式码：
+            // 再跳一个字节会切掉一个 CJK 字符的高位，剩下半个非法 UTF-8，
+            // 而这段文本后面要流进牌面解析、消息与流水。
+            if (i < text.size() && static_cast<unsigned char>(text[i]) < 0x80) {
                 ++i;
             }
             continue;

@@ -171,7 +171,19 @@ std::optional<int> facingDirectionAt(BlockSource& region, BlockPos const& pos);
 ///
 /// 实现上先看「有没有方块实体」：商店牌与箱子/木桶都必有，没方块实体的格子一定不是。
 /// 爆炸的方块列表动辄上百格，这一句能挡掉大部分，不必每格都解析牌面文本。
+///
+/// **高频路径（漏斗 / 投掷器 / 铜傀儡）不要用它**，用 `isShopContainerBlockAt`：
+/// 那些 hook 只关心容器，而这一支还要判「是不是商店牌」，多出来的成本要乘上
+/// 「漏斗数 × 20」——见下一个函数。
 bool isShopBlockAt(BlockSource& region, BlockPos const& pos, ShopConfig const& config);
+
+/// 这一格是不是**商店箱**（绑着商店牌的容器）。漏斗 / 投掷器 / 铜傀儡专用。
+///
+/// 与 `isShopBlockAt` 的差别只有两点，但都是为高频路径量的：
+/// 1. 不认「商店牌本身」——那几个 hook 只往容器里搬，牌子不是容器，永远搬不进去；
+/// 2. 在六邻居扫描之前多一道「这一格是不是箱子/木桶」的粗筛。漏斗链、熔炉、
+///    另一只漏斗都会在这里被挡掉，不必付 `attachedShopSignsAt` 的字符串与牌面解析。
+bool isShopContainerBlockAt(BlockSource& region, BlockPos const& pos, ShopConfig const& config);
 
 /// 这一格告示牌是不是一块商店牌；是的话返回它的店主。
 ///

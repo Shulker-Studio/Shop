@@ -68,6 +68,13 @@ enum class ChangeReason : std::uint8_t {
 std::string
 unitsConfirmContent(TradeDirection direction, ShopInfoData const& data, TradePlan const& plan, ChangeReason reason);
 
+/// 份数 → 件数：`units × amountPerUnit`。
+///
+/// 用 `int64` 算再夹到 `int`：`maxShopAmount` 已经有上界（32768，见 `Config.cpp` 的校验），
+/// 但表单与提交链是玩家看到的第一屏，不该在合法配置范围内算出一个回绕值。
+/// 份数表单的「共 N 个」与提交时的 `expectedItems` 共用这一个算式。
+int itemsForUnits(int units, int amountPerUnit);
+
 /// 提交时的解析结果：`units` 为空时 `error` 是给玩家看的中文原因。
 struct RequestedUnits {
     std::optional<int> units;

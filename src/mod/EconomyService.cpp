@@ -213,16 +213,24 @@ void ensureResolved() {
 }
 
 void warnTaxConflict(ShopConfig const& config) {
-    if (config.tax.shopTaxRate <= 0.0 || gTaxWarned) {
+    if (gTaxWarned) {
+        return;
+    }
+    // 只有 legacy_money 才受 `pay_tax` 影响：记分板不经过 LegacyMoney。
+    //
+    // **不以 `shopTaxRate > 0` 为前提**：即使不开商店税，每一笔转账（含补偿退款）
+    // 都会被 LegacyMoney 的 `pay_tax` 再抽一次——而退款是按原金额反向转的，
+    // 收款方到账少了那一截，于是「钱货两清」在账上就永远差一笔。
+    // 这个值没有任何导出能读（DESIGN §8.7 第 8 条），只能无条件提醒。
+    if (config.economy.backend != "legacy_money") {
         return;
     }
     gTaxWarned = true;
-    // `pay_tax` 在 LegacyMoney 自己的配置里，没有任何导出能读它（DESIGN §8.7 第 8 条），
-    // 所以这里只能无条件提醒：两笔转账都会被它再抽一次，店主被二次抽税、补偿金额还会漂移。
     Shop::getInstance().getSelf().getLogger().warn(
-        "tax.shopTaxRate = {}：商店税已开启。请确认 LegacyMoney 的配置里 pay_tax 已设为 0——"
-        "本模组读不到那个值；若 pay_tax 仍大于 0，每笔转账的收款方都会被再扣一次税，"
-        "店主会被抽两次，补偿金额也会与实际到账不一致（DESIGN §8.9）",
+        "economy.backend = legacy_money：请确认 LegacyMoney 的 pay_tax 已设为 0。"
+        "本模组读不到那个值；若它大于 0，每笔转账的收款方都会被再扣一次税——"
+        "不仅商店税收不准，**补偿退款也会让一方固定亏一截**（退款按原金额反向转，但到账少了税）。"
+        "当前 tax.shopTaxRate = {}，无论开不开都要确认这一条",
         config.tax.shopTaxRate
     );
 }
@@ -321,6 +329,9 @@ void resetEconomy() {
     gNoBackendWarned = false;
     gTaxWarned       = false;
     gTaxBackendWarned = false;
+    // 选型文本也必须清：`/ll reload Shop` 之后、第一次动钱之前，
+    // `/shop status` 不该再显示上一份配置选中的后端（那会让服主以为新配置已经生效）。
+    gSelectionText.clear();
 }
 
 } // namespace ss::shop

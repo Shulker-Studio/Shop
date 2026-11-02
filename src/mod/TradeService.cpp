@@ -46,17 +46,27 @@ std::optional<TradeGate> gSubmitGate;
 /// 被冻结的「玩家 + 商店」。
 ///
 /// 补偿失败意味着钱或货可能已经错位（DESIGN §10.2 第 8 步），这时候让玩家重试只会把
-/// 事故扩大，所以在内存里钉住这一对，后续提交直接拒绝。名单只在模组关闭时清空：
-/// 事故需要人工核对，重启前一直有效是更安全的默认。
+/// 事故扩大，所以在内存里钉住这一对，后续提交直接拒绝。
+///
+/// **生命周期**：`disable()` 不再主动清（以前会，于是 `/ll reload` 等于静默解冻）。
+/// 但这**不等于**它一定能跨 reload 活下来：加载器若把 DLL 整块卸载再载入，静态对象仍会随之重置。
+/// 要真跨过那个边界只能落盘（目前未做），所以卸载时打一条 WARN 给出冻结对数。
 /// 买卖共用这一份名单：一次失败冻结的是这一对「玩家 + 商店」，不是某个方向。
 std::set<std::string> gFrozenTrades;
 
-std::string freezeKey(std::string_view xuid, Cell const& sign) {
-    return std::string{xuid} + "@" + std::to_string(sign.x) + "," + std::to_string(sign.y) + ","
-         + std::to_string(sign.z);
+/// 冻结键 = 玩家 + 维度 + 牌位。
+///
+/// 维度必须进键：`Cell` 只有整数坐标，主世界与下界/末地可能各有一块同坐标的商店牌，
+/// 少了它，一次主世界的补偿失败会让玩家在下界那家完全无关的店也交易不了，
+/// 而提示写的是「上一次交易未完成」——玩家根本想不起来是哪一次。
+std::string freezeKey(std::string_view xuid, int dimensionId, Cell const& sign) {
+    return std::string{xuid} + "@" + std::to_string(dimensionId) + "@" + std::to_string(sign.x) + ","
+         + std::to_string(sign.y) + "," + std::to_string(sign.z);
 }
 
-bool isFrozen(std::string_view xuid, Cell const& sign) { return gFrozenTrades.contains(freezeKey(xuid, sign)); }
+bool isFrozen(std::string_view xuid, int dimensionId, Cell const& sign) {
+    return gFrozenTrades.contains(freezeKey(xuid, dimensionId, sign));
+}
 
 /// 把这一格的方块实体刷给客户端（DESIGN §10.2 第 9 步）。
 ///
@@ -604,7 +614,7 @@ PreparedTrade prepareCommon(
             return {.error = "不能跟自己交易", .reason = rejectReasonName(RejectReason::SelfTrade)};
         }
     }
-    if (isFrozen(trader.getXuid(), sign)) {
+    if (isFrozen(trader.getXuid(), trader.getDimensionId(), sign)) {
         // 上一次补偿失败还挂着：这次的「钱货一致」没人能保证，别再放行
         // （DESIGN §10.2 第 8 步的「冻结该玩家本次操作，不自动重试」）。
         // 被冻结的后续提交是 `fail` + `frozen_pair`，**不是**又一条 `frozen`：
@@ -815,23 +825,45 @@ PreparedTrade prepareSell(BlockSource& region, Cell const& sign, Player& seller,
 ///
 /// 表单回调在哪个线程跑是不确定的（DESIGN §14 待验），所以回调里一个世界状态都不碰：
 /// 只捕获「谁的 XUID、在哪个维度、哪块牌」，执行时再重新解析玩家与商店。
-/// 玩家可能在排队期间下线或换维度，两种情况都直接放弃这一次。
+///
+/// 玩家可能在排队期间下线或换维度，两种情况都必须留下痕迹：一行日志、或**能发给玩家的一句提示**。
+/// 曾经这两条都是静默 `return`，玩家的反馈是「点了购买没有任何反应」——排障时既无日志也无提示。
 template <class Fn>
 void onServerThread(Player& player, Cell const& sign, bool useCooldown, Fn&& fn) {
     std::string const xuid      = player.getXuid();
     int const         dimension = player.getDimensionId();
 
     ll::thread::ServerThreadExecutor::getDefault().execute([xuid, dimension, sign, useCooldown, fn] {
+        auto& logger       = Shop::getInstance().getSelf().getLogger();
         auto const& config = Shop::getInstance().config();
         if (!config) {
+            // 模组正在关闭（`/ll reload`）：没有任何配置能拿来执行，只能留一行痕迹
+            logger.debug("{} 的表单提交被丢弃：配置已不可用（模组正在关闭？）", xuid);
             return;
         }
         Player* resolved = onlinePlayer(xuid);
-        if (resolved == nullptr || resolved->getDimensionId() != dimension) {
+        if (resolved == nullptr) {
+            // 下线了，消息发不出去：至少让日志能对上「玩家说点了没反应」
+            logger.debug("{} 的表单提交被丢弃：玩家已离线", xuid);
             return;
         }
-        if (useCooldown && gSubmitGate && !gSubmitGate->allow(xuid, sign, monotonicNowMs())) {
-            return; // 250ms 内重复提交：忽略（DESIGN §10.4）
+        if (resolved->getDimensionId() != dimension) {
+            // 换维度：那块牌子已经不在他眼前，继续执行会操作一个他看不到的商店。
+            // 必须说一句——曾经这里是静默 `return`，玩家只看到「点了没反应」。
+            resolved->sendMessage("你已经不在那家店所在的维度，请回到店里再操作");
+            return;
+        }
+        if (useCooldown && gSubmitGate && !gSubmitGate->allow(xuid, dimension, sign, monotonicNowMs())) {
+            // 250ms 内重复提交：忽略（DESIGN §10.4）。这里**故意不**给玩家消息：
+            // 连点两下只该成交一笔，弹一句「太快了」反而会让人以为第一笔没成功。
+            // 但它不是完全无声的：debug 打开时留一行，排障时能对上。
+            if (shopDebugEnabled()) {
+                shopDebugEventThrottled(
+                    "submit_cooldown",
+                    {dbgField("player", xuid), dbgField("pos", dbgPos(dimension, sign.x, sign.y, sign.z))}
+                );
+            }
+            return;
         }
         fn(*resolved, sign, *config);
     });
@@ -1142,7 +1174,7 @@ TradeResult buyUnits(
     // 主交易转 `total - tax`，税那一笔再由买家付给系统（DESIGN §8.9）。
     // `plan.tax` 为 0（没开税、后端收不走、或管理员店）时两者相等，第二笔整步跳过。
     Payment const     payment = paymentFor(TradeDirection::Buy, info, context->shop.ownerXuid, buyer.getXuid(), plan);
-    std::string const freeze  = freezeKey(buyer.getXuid(), sign);
+    std::string const freeze  = freezeKey(buyer.getXuid(), region.getDimensionId(), sign);
 
     // 第 4 步：快照。物品与余额不在同一个事务里，失败时只能靠它反向写回。
     // 主交易金额 = 玩家与店那一侧之间真正移动的那一笔（买入带税时是 `总额 - 税`）。
@@ -1272,7 +1304,7 @@ TradeResult sellUnits(
     // 管理员店是系统账户（§7.4）：钱凭空记到玩家账上，所以不读也不限制「店主余额」。
     // 商店税同样由店那一侧承担：玩家收到的仍是牌面金额 `total`，店主另付一笔 `tax`（§8.9）。
     Payment const     payment = paymentFor(TradeDirection::Sell, info, context->shop.ownerXuid, seller.getXuid(), plan);
-    std::string const freeze  = freezeKey(seller.getXuid(), sign);
+    std::string const freeze  = freezeKey(seller.getXuid(), region.getDimensionId(), sign);
 
     // 主交易金额：卖出方向玩家收到的就是牌面额（税是店主另付的），所以它等于 `总额`。
     facts.gross = payment.main;
@@ -1423,7 +1455,12 @@ void initTradeService(ShopConfig const& config) {
 
 void resetTradeService() {
     gSubmitGate.reset();
-    gFrozenTrades.clear();
+    // 冻结名单**不在这里清**：`/ll reload Shop` 与关闭进程都走 disable()，
+    // 在这里清等于让一次无关重载把「钱货还没对上」的交易对静默解冻。
+    // 注意它只能挡住「disable() 主动清」这一条路——加载器若整块卸载 DLL，静态对象仍会消失。
+    // 要真跨过那个边界必须落盘（未做）；卸载时的 WARN 是最低限度的提示。
 }
+
+std::size_t frozenTradeCount() { return gFrozenTrades.size(); }
 
 } // namespace ss::shop

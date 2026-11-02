@@ -5,6 +5,7 @@
 #include "shop/TradePlan.h"
 #include "shop/TradeRecord.h"
 
+#include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -121,7 +122,15 @@ void submitSell(Player& seller, Cell const& sign, TradeSubmission const& submiss
 /// 按配置准备提交冷却（`shopInteractionCooldownMs`）。重复调用无副作用。
 void initTradeService(ShopConfig const& config);
 
-/// 模组关闭时调用：清冷却与冻结名单。
+/// 模组关闭时调用：只清提交冷却。
+///
+/// **冻结名单不在这里清**：`/ll reload Shop` 与关闭进程在我们的 `disable()` 里是同一条路径，
+/// 用它清名单等于让运维为了改一个无关配置重载一次，就把「钱货还没对上」的交易对静默解冻了。
+/// 但这只挡住了「主动清」：加载器若把 DLL 整块卸载再载入，静态对象仍会消失。
+/// 要真跨过那个边界必须把冻结记录落盘（未做）；关闭时的 WARN 是最低限度的提示。
 void resetTradeService();
+
+/// 当前被冻结的「玩家 + 商店」对数。给关闭时的告警与将来的 `/shop unfreeze` 用。
+[[nodiscard]] std::size_t frozenTradeCount();
 
 } // namespace ss::shop

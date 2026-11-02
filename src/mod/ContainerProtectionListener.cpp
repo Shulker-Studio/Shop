@@ -232,15 +232,24 @@ void onDestroyBlock(DestroyBlockEvent& event) {
 } // namespace
 
 void registerContainerProtectionListener() {
-    if (gOpenContainerListener || gAttackBlockListener || gDestroyBlockListener) {
-        return;
+    auto& bus    = ll::event::EventBus::getInstance();
+    auto& logger = Shop::getInstance().getSelf().getLogger();
+
+    // **逐条判空**：三条保护面（开箱 / 左键 / 拆除）互相独立，一条挂了另外两条照样要有。
+    // 以前是一个 `||` 守卫：只要有任意一条非空就整体跳过，于是部分失败之后
+    // 缺的那几条永远不会被重试（"右键能开箱、左键不能挖"这种半边保护）。
+    if (!gOpenContainerListener) {
+        gOpenContainerListener = bus.emplaceListener<OpenContainerBeforeEvent>(onOpenContainer);
     }
-    auto& bus              = ll::event::EventBus::getInstance();
-    gOpenContainerListener = bus.emplaceListener<OpenContainerBeforeEvent>(onOpenContainer);
-    gAttackBlockListener   = bus.emplaceListener<AttackBlockBeforeEvent>(onAttackBlock);
-    gDestroyBlockListener  = bus.emplaceListener<DestroyBlockEvent>(onDestroyBlock);
+    if (!gAttackBlockListener) {
+        gAttackBlockListener = bus.emplaceListener<AttackBlockBeforeEvent>(onAttackBlock);
+    }
+    if (!gDestroyBlockListener) {
+        gDestroyBlockListener = bus.emplaceListener<DestroyBlockEvent>(onDestroyBlock);
+    }
+
     if (!gOpenContainerListener || !gAttackBlockListener || !gDestroyBlockListener) {
-        Shop::getInstance().getSelf().getLogger().error("注册商店箱保护监听失败");
+        logger.error("注册商店箱保护监听失败：某一条没挂上（下次 enable 会只补缺的那几条）");
     }
 }
 

@@ -33,6 +33,16 @@ std::filesystem::path discardLogDirectory();
 /// 那个目录里服主自己放的东西不会被碰。
 void migrateLegacyLogs();
 
+/// 启动时把过期的日志文件压成 `.gz`（`transactionLog.compressAfterDays`）。
+///
+/// **只在启动时调一次**，不在写日志的路径上：早先每落一行流水就扫两个目录、
+/// 必要时当场做一次同步 gzip，那笔 CPU 与磁盘 I/O 全落在「玩家刚成交」那一拍的 tick 线程上。
+/// 压缩不需要那么准时——一天一次就够，而启动时服主本来就在等。
+///
+/// 只在 `transactionLog.enabled` 时做（关掉流水的服主不会期望模组去动他的目录）。
+/// 失败只 `warn` 且不删原文件，下次启动重试。
+void compressOldLogsOnStartup();
+
 /// 把一批**已经是完整 NDJSON 行**的文本追加到 `dir / fileName`。
 ///
 /// 这是**所有日志文件的唯一出路**（业务流水与销毁留档都走它），
@@ -42,8 +52,10 @@ void migrateLegacyLogs();
 /// 2. **落盘**：每次调用都「建目录 → 开 → 写 → flush → 关」，**不缓存句柄**——文件按天轮转
 ///    （跨天就是另一个名字），缓存「当前文件」就要额外维护「跨天了没有」「上次开失败了要不要重开」
 ///    两种状态，而这里一天最多写几次；
-/// 3. **轮转**：写成功之后顺手看一眼有没有过了 `compressAfterDays` 的文件要压（spec D4）。
-///    不额外开线程、不做定时任务；每一轮都真扫，这样上一轮压缩失败的文件下一轮就会重试。
+/// 3. **回滚**：写入失败（磁盘满、盘被拔）时截回写入前的大小，不让半行 JSON 把当天的流水弄成读不出来。
+///
+/// **不在这里做压缩**：压缩是启动时的一次活（`compressOldLogsOnStartup`），
+/// 不该让落一行流水去付 gzip 与目录扫描的账。
 ///
 /// 失败只 `warn`，而且按失败种类**同一进程只提示一次**：日志不是交易的一部分，磁盘满了也
 /// 必须让生意成交；但每笔交易刷一条 warn 会把真正的信息淹掉（spec 的决定）。
@@ -55,5 +67,11 @@ bool appendLogLines(
     std::string const&              fileName,
     std::vector<std::string> const& lines
 );
+
+/// 清掉「这一种失败已经提示过」的进程级记录。
+///
+/// 模组重载（`/ll reload Shop`）时调：重载通常意味着服主正在动手修（改了盘、改了权限），
+/// 这时候再看到一次新的 warn 是有用的——否则旧记录会把同路径的新失败也吃掉。
+void resetLogWarnings();
 
 } // namespace ss::shop

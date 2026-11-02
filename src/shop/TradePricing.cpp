@@ -1,6 +1,7 @@
 #include "shop/TradePricing.h"
 
 #include <algorithm>
+#include <cmath>
 #include <limits>
 
 namespace ss::shop {
@@ -68,7 +69,24 @@ std::int64_t shopTax(std::int64_t total, double rate) {
         return total;
     }
     // `total` 与 `rate` 都是正的，`raw` 落在 (0, total) 里，截断即向下取整。
-    return static_cast<std::int64_t>(raw);
+    std::int64_t const truncated = static_cast<std::int64_t>(raw);
+    // **税额下限 1**：不足 1 的税按 1 收。
+    //
+    // 否则小额交易一分钱税都不用交，把一笔大单拆成若干小单就能把税拆没——
+    // 而拆单对交易双方都是有利可图的。下限 1 让「拆单」变成不划算。
+    // 金额为正、税率 < 1 时 `truncated <= total - 1`，所以这里不会超过总额。
+    return std::max<std::int64_t>(truncated, 1);
+}
+
+bool isTaxRateOnGrid(double rate) {
+    // 越界不归这里管（`validate` 另有一条报错）；这里只回答「精度对不对」。
+    if (!(rate >= 0.0) || rate >= 1.0) {
+        return false;
+    }
+    // 容差是必要的：`0.29 / 0.001` 在二进制浮点里是 289.99999999999994，
+    // 直接比较会把一个合法税率判成非法。
+    double const scaled = rate / kTaxRateStep;
+    return std::abs(scaled - std::round(scaled)) <= 1e-6;
 }
 
 int affordableUnitsWithTax(std::int64_t unitPrice, std::int64_t funds, double rate) {

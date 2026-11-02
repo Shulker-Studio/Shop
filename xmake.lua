@@ -24,11 +24,20 @@ end
 -- 这是 DESIGN「纯逻辑不得依赖引擎」的构建期断言，Shop 与 ShopTests 都会调它。
 function check_pure_logic_headers()
     -- 注意：os.files 的 `|` 交替写法只匹配到第一种，所以分开扫再拼起来
+    -- 三类都禁：mc/ 是引擎、ll/ 是 LeviLamina、mod/ 是本模组的适配层。
+    -- 只查直接包含：传递包含需要真的过一遍预处理，那是构建期而不是脚本能干的。
+    local forbidden = {
+        ['mc/'] = '[#]%s*include%s*[<"]mc/',
+        ['ll/'] = '[#]%s*include%s*[<"]ll/',
+        ['mod/'] = '[#]%s*include%s*[<"]mod/',
+    }
     local files = table.join(os.files("src/shop/**.h"), os.files("src/shop/**.cpp"))
     for _, file in ipairs(files) do
         local content = io.readfile(file) or ""
-        if content:find('[#]%s*include%s*[<"]mc/') then
-            raise("纯逻辑模块不允许包含 mc/ 头：" .. file)
+        for name, pattern in pairs(forbidden) do
+            if content:find(pattern) then
+                raise("纯逻辑模块不允许包含 " .. name .. " 头：" .. file)
+            end
         end
     end
 end

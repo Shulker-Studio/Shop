@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <array>
 #include <cstdint>
+#include <limits>
 
 namespace ss::shop {
 namespace {
@@ -136,6 +137,11 @@ int choiceIndexForOption(UnitsFormModel const& model, std::string_view optionTex
     return -1;
 }
 
+int itemsForUnits(int units, int amountPerUnit) {
+    auto const items = static_cast<std::int64_t>(units) * static_cast<std::int64_t>(amountPerUnit);
+    return static_cast<int>(std::min<std::int64_t>(items, std::numeric_limits<int>::max()));
+}
+
 std::string unitsFormContent(TradeDirection direction, ShopInfoData const& data, UnitsFormModel const& model) {
     Wording const& words = wordingOf(direction);
 
@@ -173,7 +179,7 @@ std::string unitsFormContent(TradeDirection direction, ShopInfoData const& data,
             continue;
         }
         append(
-            "选 " + std::to_string(choice.units) + " 份 → 共 " + std::to_string(choice.units * data.amountPerUnit)
+            "选 " + std::to_string(choice.units) + " 份 → 共 " + std::to_string(itemsForUnits(choice.units, data.amountPerUnit))
             + " 个 / " + totalPriceText(data, direction, choice.units)
         );
     }

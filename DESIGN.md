@@ -653,11 +653,11 @@ public:
 | 项 | 规则 |
 | --- | --- |
 | 税基 | 成交总额 `单价 × 实际数量`（部分成交按实际数量算） |
-| 税率 | `shopTaxRate`，默认 `0`（百分比，`0.05` = 5%） |
+| 税率 | `shopTaxRate`，默认 `0`（百分比，`0.05` = 5%）；**只支持千分位**（`0.001` = 0.1%）。越界或精度超出时**不拒绝加载**：WARN 一次，本次运行按 `0` 处理（这个配置失效），交易与保护照常 |
 | 承担方 | **店主承担**：买家总支出仍是 `total`，店主实收 `total - tax`，差额被系统回收 |
 | 流向 | 默认**销毁**（从经济系统移除）；P1 可配 `taxDestination` 指向税收账户 |
 | 管理员店 | **不收**：对手方是系统账户（7.4），没有「店主收入」这一侧可抽；`tradeTaxPlan` 对管理员店直接返回 0 |
-| 舍入 | 向下取整到整数，余数留给店主，不出现负税 |
+| 舍入 | 向下取整，余数留给店主，不出现负税；**不足 1 时按 1 收**（见下方「税额下限」） |
 | 税为 0 | 完全跳过第二笔转账，不产生额外流水 |
 
 **实现**（`src/mod/TradeService.cpp` 的 `moveMoney` + `chargeTax`；`T` = 总额，`X` = 税）：
@@ -673,6 +673,11 @@ public:
 3. Trans(owner, "", X)          // 税由店主另付：店主总共付出 T + X
 4. 任一步失败 → 按已移动的金额反向补偿；补偿再失败才升级为 Broken（见 10.2）
 ```
+
+**税额下限 1**：`shopTax` 在向下取整之后取 `max(1, ...)`。没有下限时，把一笔大单拆成若干笔小单
+就能把税拆到 0——而拆单对买卖双方都是有利可图的（商店箱本来就支持分批买）。下限 1 让拆单
+不划算：100 元 5% 应缴 5，拆成 20 笔 5 元则每笔按 1 收、共 20。代价是极小额的交易税额等于总额
+（1 元的交易税 1 元，店主实收 0），这是有意的取舍。
 
 **为什么收税排在物品之后**（与本节早先版本的字面顺序不同，10 落地时的决定）：
 
@@ -986,7 +991,7 @@ public:
 | --- | --- | --- |
 | 5 金额 | 买家 → 店主 | 店主 → 卖家（玩家） |
 | 6 物品 | 商店箱 → 玩家背包 | 玩家背包 → 商店箱 |
-| 8 冻结键 | 买家 XUID + 牌子坐标 | 卖家 XUID + 牌子坐标 |
+| 8 冻结键 | 买家 XUID + 维度 + 牌子坐标 | 卖家 XUID + 维度 + 牌子坐标 |
 
 原则：
 
@@ -1197,7 +1202,7 @@ public:
 | H1 告示牌编辑提交捕获 | **已验证可行** | iListenAttentively 的 `PlayerEditSignBeforeEvent` 已实现，NBT/时序/取消语义全部明确（见 6.1） |
 | 牌子文本被改写的安全阀 | 设计约束 | `removeInvalidShopSign` 默认 false，解析失败只提示，不删牌 |
 | 第三方 mod 依赖 | 已接受 | 未装 iListenAttentively 或版本不足时，`Shop.dll` 在加载阶段失败（ADR-0003），不做降级 |
-| 补偿失败（金额或物品） | 设计约束 | 严重日志 + 通知 OP + 冻结该次操作，不自动重试 |
+| 补偿失败（金额或物品） | 设计约束 | 严重日志 + 通知 OP + 冻结该次操作，不自动重试。冻结键含维度；`disable()` 不再主动清除（重载与关服走同一条路径）。**注意**：加载器若整块卸载 DLL，静态对象仍会消失，跨 reload 持久化需落盘，尚未实现 |
 | 取消 `useItemOn` 能否阻止开箱/开牌 | 已绕开 | 开箱用 `PlayerOpenContainerBeforeEvent`；开牌用 `PlayerInteractBlockEvent` |
 | 基岩版单行字符数 | 待实测 | 商品名可能被截断，全名在表单里显示；不影响交易（商品来自容器） |
 | 双箱配对时机 | 待实测 | 配对失败按单箱处理 |
@@ -1231,6 +1236,10 @@ public:
 | 漏斗 `attachedFace` 的方向口径 | 待实测 | 沿用 ChestLock 的读法：`position` 是装置自己、`attachedFace` 是搬运方向。若真机发现漏斗往商店箱里塞货仍然成功，说明这一口径反了，把 `cellInDirection` 的入参取反即可（一处改动） |
 | 漏斗矿车与方块漏斗的同一性 | 待实测 | 票面要求一条 hook 同时覆盖两种形态（两者共用 `Hopper` actor 的逻辑）。这条假设来自头文件里 `Hopper::mIsEntity` 与两种形态共用同一批抽取/推出函数，需要真机各验一次 |
 | 「贴牌占箱子」 | 已知，P0 接受 | 保护从牌子推导（ADR-0002），P0 不记录箱子原主；任何人给尚未绑定的箱子贴一块像商店的牌，就能把它变成自己的商店箱，原主只能找 OP。与 Java 版 ChestShop 同为生态行为，P1 可考虑开店收费 / 领地插件 |
+| 保护 hook 的 `thread_local` 状态 | 待实测（2026-11-02 复查） | `DestructionProtectionHooks` 的凋灵破坏深度与 `ContentProtectionHooks` 的投掷器守卫都是 `thread_local`。若引擎的 `Level::destroyBlock` / `DropperBlockActor::pushOutItems` 不在同一线程，保护会**静默失效**（当前没有「没命中守卫线程」的诊断）。真机要各验一次；确认跨线程时改成进程级状态 + `BlockSource` 校验 |
+| 冻结记录跨 reload | 已知限制（2026-11-02） | `disable()` 不再主动清冻结名单，但加载器若把 DLL 整块卸载再载入，静态对象仍会重置。跨 reload 保留需要把「玩家 + 维度 + 牌位」落盘，并配一条 `/shop unfreeze`；在此之前卸载时只有一条 WARN |
+| 表单回调线程 | 待验证（2026-11-02 收窄） | 回调里现在只读 XUID 与维度两个纯标量，所有发包与方块操作都切回服务端线程（`onSignServerThread`）。仍需确认「读这两个标量」在 LL 的回调线程上安全；若是，可进一步改成回调只带回表单结果 |
+| 配置校验的集成验证 | 需手工验收 | 三个新上界（`maxShopAmount` / `shopInteractionCooldownMs` / `compressAfterDays`）、`taxDestination` 的 WARN、回写前 `.bak`、未知键不再触发回写——都在 `src/mod/Config.cpp`，依赖 `ll::config` 与 logger，单测覆盖不到；按 `.scratch/p1-transaction-log/acceptance-checklist.md` 的方式手工过一遍 |
 
 ## 15. 配置草案
 
@@ -1279,7 +1288,16 @@ public:
 >
 > 两条配套约束：`economy.createObjectiveIfMissing` 会真的在服务器的记分板上建一个目标（默认 `true`，
 > 选了 `scoreboard` 就是想要记分板记账，为了一个 `dummy` 目标再让服主手打命令没有收益）；
-> `tax.shopTaxRate > 0` 要求服主同时把 LegacyMoney 的 `pay_tax` 设为 0（本模组读不到那个值，只能启动时 WARN）。
+> 只要用了 `legacy_money`，服主就必须把 LegacyMoney 的 `pay_tax` 设为 0（本模组读不到那个值，只能启动时
+> 无条件 WARN——不开商店税也一样，因为补偿退款按原金额反向转，被抽税就会差一截）。
+>
+> **上界**：`maxShopAmount ≤ 32768`（它同时限制「一份的件数」，再大表单里 `份数 × 件数` 会溢出 int）、
+> `shopInteractionCooldownMs ≤ 60000`（再大等于把所有交易静默拦下）、`transactionLog.compressAfterDays ≤ 3650`。
+> `tax.taxDestination` 写 `void` 以外的值不生效，但启动时会 WARN（不再静默）。
+>
+> **回写规则**：只有「缺键 / `version` 与本版不同」才回写（不再用 `merged != user`，那个条件会被
+> 用户写的 `null` 触发）；回写前把原文件备份成 `config.json.bak`。回写序列化的是 `ShopConfig`，
+> 所以**同时存在缺键与拼错的键**时，那个拼错的键会随着回写消失（启动时已 WARN）。
 >
 > **文件生成与迁移**：`config.json` 不存在时 `ll::config::loadConfig` 会先写一份带 `version` 的全默认文件再读回来。
 > 手写一份只填几个键的文件是可以的，但**必须带 `"version": 1`**：缺这个键时 `loadConfig`

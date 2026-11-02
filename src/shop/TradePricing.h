@@ -30,11 +30,25 @@ int tradeUnits(int requested, StockView stock, StockView room, int affordable);
 /// 件数为负、或每份件数 <= 0 时返回 0，不抛错——牌面写了 0 件的商店只是不能成交。
 int unitsFromItems(int itemCount, int amountPerUnit);
 
-/// 商店税（DESIGN §8.9）：`总额 × 税率`，**向下取整到整数**，余数留给店主。
+/// 税率的步长：千分之一（0.001 = 0.1%）。
+///
+/// 配置里只接受这个网格上的值。更细的粒度在小额交易上本来就会被「税额下限 1」吃掉，
+/// 只会让 `/shop status` 与流水里出现 `0.00049999` 这种没法读的数字。
+inline constexpr double kTaxRateStep = 0.001;
+
+/// 商店税（DESIGN §8.9）：`总额 × 税率`，**向下取整**，余数留给店主；
+/// **但不足 1 时按 1 收**。
+///
+/// 下限 1 是为了堵住「拆单免税」：没有下限时，把一笔大单拆成若干笔小单就能把税拆没。
 ///
 /// 税额永远落在 `[0, total]`：税率为 0 / 负数 / NaN、总额非正时是 0，税率 >= 1 时封顶到 total
 /// （配置校验会拒掉这种值，这里只是不让它算出比成交额还大的税）。
 std::int64_t shopTax(std::int64_t total, double rate);
+
+/// 税率是否落在千分位网格上（`kTaxRateStep` 的整数倍）。
+///
+/// 只回答精度问题；越界（< 0 或 >= 1）由调用方的范围检查负责，这里一律返回 false。
+bool isTaxRateOnGrid(double rate);
 
 /// 含商店税时，付款方手上的钱还能承受几份（向下取整，保守）。
 ///

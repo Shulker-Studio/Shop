@@ -72,22 +72,31 @@ void onButton(Player& player, Cell const& sign, ShopFormAction action) {
     }
 }
 
-/// 表单回调不能假设线程（DESIGN §14）：回调里**一个世界状态都不碰**，只捕
-/// 「谁的 XUID、哪个维度、哪块牌」，真正要读方块/写牌时先切回服务端线程。
+/// 表单回调不能假设线程（DESIGN §14）：回调里**只读 XUID 与维度两个纯标量**（不读方块、不读容器、不发包），
+/// 真正要读世界或写牌时先切回服务端线程。
 ///
 /// 与交易的 `onServerThread` 同一条口径：玩家下线、换了维度、配置不可用都直接放弃——
-/// 这时那块牌已经不在他眼前，弹表单或写牌都没有意义。
+/// 这时那块牌已经不在他眼前，弹表单或写牌都没有意义。换维度时会给玩家一句提示（发包在服务端线程）。
 void onSignServerThread(Player& player, std::function<void(Player&, ShopConfig const&)> task) {
     std::string const xuid      = player.getXuid();
     int const         dimension = player.getDimensionId();
 
     ll::thread::ServerThreadExecutor::getDefault().execute([xuid, dimension, task = std::move(task)] {
+        auto& logger       = Shop::getInstance().getSelf().getLogger();
         auto const& config = Shop::getInstance().config();
         if (!config) {
+            logger.debug("{} 的表单提交被丢弃：配置已不可用（模组正在关闭？）", xuid);
             return;
         }
         Player* resolved = onlinePlayer(xuid);
-        if (resolved == nullptr || resolved->getDimensionId() != dimension) {
+        if (resolved == nullptr) {
+            logger.debug("{} 的表单提交被丢弃：玩家已离线", xuid);
+            return;
+        }
+        if (resolved->getDimensionId() != dimension) {
+            // 与管理/交易两条链同一口径：写了也不生效（那块牌子不在他眼前），
+            // 但必须说一句——静默 `return` 会让玩家以为按钮坏了。
+            resolved->sendMessage("你已经不在那家店所在的维度，请回到店里再操作");
             return;
         }
         task(*resolved, *config);
@@ -342,6 +351,10 @@ void openManageInputForm(
 ) {
     auto const input = manageInputField(action, data, signConfig);
     if (!input) {
+        // 只有「三个输入框动作」能走到这里。走到了说明表单按钮与动作表脱节了——
+        // 这是编程错误，不能表现为「按钮点了没反应」。
+        Shop::getInstance().getSelf().getLogger().error("管理表单收到非输入类动作，无法弹出输入框");
+        player.sendMessage("这个按钮现在不可用，请联系管理员");
         return;
     }
 
@@ -364,7 +377,10 @@ void openManageInputForm(
                 return;
             }
             // 读不到字符串就是表单出问题了：按「输入不合法」处理，不静默当留空。
-            who.sendMessage("读不到这个输入框的值，请重新打开表单再试");
+            // 发包要回到服务端线程：表单回调线程不确定（见 `onSignServerThread`）。
+            onSignServerThread(who, [](Player& player, ShopConfig const&) {
+                player.sendMessage("读不到这个输入框的值，请重新打开表单再试");
+            });
         }
     );
 }
@@ -459,13 +475,17 @@ void openTradeForm(Player& viewer, Cell const& sign, TradeDirection direction, S
         }
         auto const requested = resolveRequestedUnits(model, dropdownIndex(result, model), inputText(result));
         if (!requested.units) {
-            player.sendMessage(requested.error);
+            // 同上：表单回调线程不确定，发包走服务端线程。
+            onSignServerThread(player, [error = requested.error](Player& who, ShopConfig const&) {
+                who.sendMessage(error);
+            });
             return;
         }
         // 把「表单上看到的金额」与「共 N 个」一起交上去：两屏之间箱子里的货、店主改价或
         // 改份量都会让它们过期，`buyUnits` / `sellUnits` 会先返回确认表单，
         // 而不是按新价直接成交。
-        int const expectedItems = *requested.units * data.amountPerUnit;
+        // 与份数表单上「共 N 个」共用 `itemsForUnits`：两屏写同一个数，且用 int64 算再夹到 int。
+        int const expectedItems = itemsForUnits(*requested.units, data.amountPerUnit);
         submit(
             player,
             sign,

@@ -55,20 +55,16 @@ std::optional<std::string> logFileDate(std::string_view fileName) {
         return std::nullopt;
     }
     auto const stem = fileName.substr(0, fileName.size() - kLogExtension.size());
-    // 日期要么就是整个名字（新布局 `transactions/2026-11-01.jsonl`——类型已经由目录区分），
-    // 要么前面还有一个 `-`（旧布局 `transactions-2026-11-01.jsonl`，搬家前后都可能遇到）。
-    // 那个分隔符是必要的：`transactions2026-11-01.jsonl` 不该被认成自己的文件。
-    if (stem.size() < kDateLength) {
+    // **只认裸日期**（新布局 `transactions/2026-11-01.jsonl`：类型由目录区分，文件名不再带前缀）。
+    // 旧布局的 `transactions-2026-11-01.jsonl` 是 `relocatedLogFile` 的活（搬家），不归压缩——
+    // 否则服主自己放进日志目录的 `backup-2026-11-01.jsonl` 也会被压缩并删掉原文件。
+    if (stem.size() != kDateLength) {
         return std::nullopt;
     }
-    if (stem.size() > kDateLength && stem[stem.size() - kDateLength - 1] != '-') {
+    if (!parseDate(stem)) {
         return std::nullopt;
     }
-    auto const date = stem.substr(stem.size() - kDateLength);
-    if (!parseDate(date)) {
-        return std::nullopt;
-    }
-    return std::string{date};
+    return std::string{stem};
 }
 
 bool shouldCompress(std::string_view fileDate, std::string_view today, int days) {
@@ -100,8 +96,8 @@ std::optional<RelocatedLogFile> relocatedLogFile(std::string_view fileName) {
         }
         auto const rest = fileName.substr(candidate.prefix.size());
         // 去掉前缀后应当是 `YYYY-MM-DD.jsonl` 或 `YYYY-MM-DD.jsonl.gz`。
-        // 这里不能直接复用 `logFileDate`：它要求日期**前面**有 `-`（那是为了不把
-        // `transactions2026-11-01.jsonl` 认成自己的文件），而前缀已经在这之前被切掉了。
+        // 这里不复用 `logFileDate`：那个函数只管**新布局的裸日期名**（压缩用），
+        // 而搬家要认的正是带前缀的旧名字。两者的判据不同，不能合并。
         auto const body =
             rest.ends_with(kCompressedExtension) ? rest.substr(0, rest.size() - kCompressedExtension.size()) : rest;
         if (!body.ends_with(kLogExtension)) {

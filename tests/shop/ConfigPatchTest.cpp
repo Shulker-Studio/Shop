@@ -143,3 +143,35 @@ TEST_CASE("配置补齐：用户文件不是对象时按默认值跑，不炸") 
         CHECK(merged == sampleDefaults());
     }
 }
+
+TEST_CASE("配置补齐：只有未知键、没有缺键时 missing 为空（不该触发回写）") {
+    // mod 层的回写决策只看「缺键 / version 不同」。这条把前提钉住：
+    // 一个键都不少、只多写了一个拼错的键时，`missingConfigKeys` 必须为空，
+    // 否则 `config.json` 会为了一个拼错的键整体重写——那个键反而从文件里消失了。
+    auto const user = nlohmann::ordered_json::parse(R"({
+        "version": 1,
+        "adminShopName": "Admin Shop",
+        "shopContainers": ["minecraft:chest"],
+        "maxShopAmount": 3456,
+        "economy": {
+            "backend": "legacy_money",
+            "scoreboardObjective": "money",
+            "createObjectiveIfMissing": true
+        },
+        "transactionLog": {
+            "enabled": true,
+            "compressAfterDays": 7
+        },
+        "typoKey": 1
+    })");
+
+    CHECK(missingConfigKeys(sampleDefaults(), user).empty());
+    CHECK(joined(unknownConfigKeys(sampleDefaults(), user)) == "typoKey");
+
+    // 合并只做「默认值打底 + 用户值覆盖」，**不删**用户多写的键：所以只有未知键、
+    // 没有缺键时 merged == user，旧的 `merged != user` 条件也不会触发回写。
+    // mod 层现在明确写成「missing 非空 || version 不同」，与这里的契约一致。
+    auto const merged = mergeConfigDefaults(sampleDefaults(), user);
+    CHECK(merged.contains("typoKey"));
+    CHECK(merged == user);
+}

@@ -123,8 +123,19 @@ void onSignEdit(SignEditBeforeEvent& event) {
         // 而「写回原文本」让原版完整走完一次编辑，只是写的仍是原来那几行：牌面不变成
         // 玩家敲的内容，客户端也不再留下半截状态。
         auto* sign = signBlockActorAt(region, event.pos());
-        std::string const original = sign != nullptr ? sign->getMessage(SignTextSide::Front) : std::string{};
-        event.text() = original;
+        if (sign == nullptr) {
+            // 方块实体读不到（牌子在读之前被拆掉或被别的方块替掉）：这时**没有**可写回的原文。
+            // 以前这里会 `event.text() = ""`，而那会把牌面抹成空白——本层唯一会破坏
+            // 玩家数据的兜底。宁可这次编辑不生效，也不能写空串。
+            Shop::getInstance().getSelf().getLogger().warn(
+                "告示牌编辑被拒绝，但读不到方块实体（{}, {}, {}）：这次编辑未写回",
+                event.pos().x,
+                event.pos().y,
+                event.pos().z
+            );
+            return;
+        }
+        event.text() = sign->getMessage(SignTextSide::Front);
 
         // 写回文本会让引擎把 `mLastEditXuid` 记成这次编辑者（§6.5 第 3 条）。改之前如果是
         // 商店牌，就得像规范化那次一样把归属保住——否则 OP 代改一次非法文本就把店抢走了。
@@ -193,14 +204,33 @@ void onSignEdited(SignEditAfterEvent const& event) {
 } // namespace
 
 void registerSignEditListener() {
-    if (gSignEditListener) {
-        return;
+    if (gSignEditListener && gSignEditedListener) {
+        return; // 两条都在，不必重复挂
     }
-    auto& bus           = ll::event::EventBus::getInstance();
-    gSignEditListener   = bus.emplaceListener<SignEditBeforeEvent>(onSignEdit);
-    gSignEditedListener = bus.emplaceListener<SignEditAfterEvent>(onSignEdited);
+
+    auto& bus    = ll::event::EventBus::getInstance();
+    auto& logger = Shop::getInstance().getSelf().getLogger();
+
+    if (!gSignEditListener) {
+        gSignEditListener = bus.emplaceListener<SignEditBeforeEvent>(onSignEdit);
+    }
+    if (!gSignEditedListener) {
+        gSignEditedListener = bus.emplaceListener<SignEditAfterEvent>(onSignEdited);
+    }
+
+    // **全有或全无**：Before 记账交接、After 才把它落地。半挂（只有 Before）会让交接留在
+    // 4 槽的小环里，被下一次同坐标的编辑捡走——那会把商店归属写到一个不相干的人头上。
+    // 所以缺一条就回滚另一条，等下次 enable 重试；宁可这次不规范化文本，也不要错写归属。
     if (!gSignEditListener || !gSignEditedListener) {
-        Shop::getInstance().getSelf().getLogger().error("注册告示牌编辑监听失败");
+        if (gSignEditListener) {
+            bus.removeListener<SignEditBeforeEvent>(gSignEditListener);
+            gSignEditListener.reset();
+        }
+        if (gSignEditedListener) {
+            bus.removeListener<SignEditAfterEvent>(gSignEditedListener);
+            gSignEditedListener.reset();
+        }
+        logger.error("注册告示牌编辑监听失败（已回滚：Before/After 必须同时在，下次 enable 会重试）");
     }
 }
 

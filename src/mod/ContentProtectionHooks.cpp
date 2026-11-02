@@ -25,10 +25,12 @@ namespace ss::shop::detail {
 
 /// 这一次搬运的目标格是不是商店箱。`config` 由调用方判过非空。
 ///
-/// 「这一格是不是商店方块」仍然只问 `isShopBlockAt`（08 的四条 hook 与 07 的拆除路径
-/// 用的是同一个判据，DESIGN §9.3），这里只把坐标换成引擎类型。
+/// **不能用 `isShopBlockAt`**：这四条 hook 是每 tick 跑的（漏斗 20 次/秒、「红石时钟」的投掷器同理），
+/// 一片农场的漏斗数会把它乘成一个真实的热点。它们只往**容器**里搬，所以只问
+/// `isShopContainerBlockAt`：先一层「是不是箱子/木桶」的粗筛，漏斗链、熔炉、投掷器自身
+/// 都在那里被挡掉，不必每 tick 扫六个邻居、也不必每 tick 拷两份 `ShopSignConfig`。
 bool isShopContainerAt(BlockSource& region, Cell const& cell, ShopConfig const& config) {
-    return isShopBlockAt(region, toBlockPos(cell), config);
+    return isShopContainerBlockAt(region, toBlockPos(cell), config);
 }
 
 // ---------------------------------------------------------------------------

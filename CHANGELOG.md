@@ -90,6 +90,33 @@
 - 管理入口在停业时照给（回归断言：管理员店的 OP 在交易上是 `Visitor`，入口一消失就永久停业，只能拆牌）。
 - 管理表单四个动作收在 `applyManageEdit` 一处（spec「Testing Decisions」的那条缝）：`withBuyPrice` / `withSellPrice` / `withAmount` / `withToggledClosed` 都是它的薄包装，校验（输入非法、两侧都清空、`S > B`）只有一份；停业不豁免其中任何一条。停业这一项没有输入框，但仍走 `submitManageEdit` 的同一条链（重新取牌 → 重新解析 → 规范化 → 写牌 → 发整维度），没有第二条写牌路径。
 
+### 修复
+
+- **交易冷却与冻结键补上维度**（`TradeGate` / `TradeService`）：`Cell` 只有坐标，主世界与下界/末地同坐标的两家店以前会共享 250ms 冷却，补偿失败的冻结还会跨维度连坐（提示写「上一次交易未完成」，玩家根本想不起是哪一次）。键改成「玩家 + 维度 + 坐标」，`tests/shop/TradeGateTest.cpp` 补一条跨维度用例。
+- **冻结名单不再由 `disable()` 主动清除**：`/ll reload` 与关服都走 `disable()`，以前运维为了改一个无关配置重载一次，就把「钱货还没对上」的交易对静默解冻了。现在只在卸载时打一条 WARN 说明还有 N 对没核对。注意这只能挡住「主动清」——加载器若把 DLL 整块卸载再载入，静态对象仍会消失；要真跨过那个边界必须把冻结记录落盘（未做）。
+- **监听器部分注册失败后能补**：`ContainerProtectionListener` 的三条保护改成逐条判空注册（原来任一非空就整体跳过，半边保护永远修不回来）；`SignEditListener` 的 Before/After 改成「全有或全无」——半挂会让归属交接留在 4 槽环里被下一次编辑捡走，把店主写到不相干的人头上。
+- **牌子编辑读不到实体时不再写空串**：以前 `sign == nullptr` 会用 `""` 兜底，等于把玩家牌面抹掉；现在放弃这次编辑并打一条 warn。
+- **交易日志的两处无谓 syscall 去掉了（实测单笔 634 µs → 326 µs，约 -49%）**：`create_directories` 以前每笔都逐级 `stat` + `CreateDirectoryW`（日志目录固定两三个，改成进程级只建一次，打不开时清记录重试一次）；回滚点以前用 `std::filesystem::file_size`，它在 Windows 上是**另一次完整 open/close**（`CreateFileW` + `GetFileSizeEx` + `CloseHandle`），改用打开后 `seekp(0, end)` + `tellp()`（`SetFilePointerEx`，几乎免费），回滚语义不变。剩下的 326 µs 全是 `ofstream` 的 open/close，只有缓存句柄才能消掉，暂不做。
+- **日志压缩挪到启动时**：以前每写一行流水就扫两个目录、必要时当场同步 gzip 一整个旧文件，那笔 CPU 与磁盘 I/O 全落在玩家成交那一拍的 tick 线程上。现在只在模组启用时压一次（压了几个文件打一条 info），成交路径上只剩「开 → 写 → flush → 关」；失败的原文件留给下次启动重试。
+- **商店税：税率只支持千分位，税额下限 1**：`tax.shopTaxRate` 不是 `0.001` 的整数倍、或落在 `[0, 1)` 之外时**不拒绝加载**——启动 WARN 一次、本次运行按 `0` 处理（这个配置失效），交易与保护照常；合法值加载后对齐到千分位网格，避免计价、`/shop status` 与流水各自带浮点尾巴。`shopTax` 在向下取整之后取 `max(1, ...)`：以前不足 1 的税归零，等于把大单拆成小单就能免税；现在 100 元 5% 仍是 5，拆成 20 笔 5 元则每笔按 1 收、共 20。新增纯逻辑测试 `isTaxRateOnGrid` 与「拆单不能把税拆没」用例。
+- **`/shop status` 在配置不可用时不再早退**：以前配置坏了就只打一句「模组没有启用」然后返回，而那一刻恰恰是**交易与全部保护都没生效**的时候，hook 表是唯一能说明「到底挂上了没有」的东西。现在只跳过依赖配置的几行，hook 表、经济后端、冻结数、调试开关照打。
+- **`/shop status` 增加「冻结中的交易对」一行**：`compensation_failed` 之后钱货没对上的交易会被冻在内存里等人工核对，以前这个数字只在关服 WARN 里出现，游戏内看不到。
+- **`stripColorCodes` 按 UTF-8 跳过颜色码（真 bug）**：`§`（`0xC2 0xA7`）之后无条件再跳 1 字节，遇到 CJK（3 字节）就切掉高位，剩下半个非法 UTF-8 继续流进牌面解析、消息与流水。现在只在该字节是 ASCII（真正的格式码）时才吃，`§只有半个` 会完整保留「只有半个」。
+- **`check_pure_logic_headers` 覆盖 `ll/` 与 `mod/`**：以前只拦 `mc/`，LeviLamina 或本模组适配层的头能溜进 `src/shop`，纯逻辑层就不再能被 `ShopTests` 独立编译。
+- **`warnOnce` 的抑制键改用 `(种类, 路径)` 对**：不再为每个失败拼一次 `"种类|路径"` 的 UTF-8 字符串（那是一次宽字符转换）。
+- **`decimalText` 不再把极小值显示成 `0`**：`std::to_string` 只给 6 位小数，`0.0000001` 去零后成了 `"0"`、看着像没配。现在退化成 `"0"` 而原值非 0 时改用 `%.3g`。
+- **新增 `/shop reload`：只重读 `config.json`，不卸载模组**：`/ll reload Shop` 会把监听器、冻结名单、经济后端全部拆掉重来，改一个价格上限不该付这个代价。新命令只做「读文件 → 校验 → 原地替换 `mConfig` → 重建冷却窗口与后端选择」，**解析失败时保留当前配置**（热重载读到坏文件就把配置清掉，等于保护全关）。hook 里一律现取配置，所以下一次交互就用新值。
+- **牌面配置（`ShopSignConfig`）改为 `Shop` 里缓存一份**：`maxShopAmount` / `adminShopName` / 价格规则以前每次用 `toSignConfig` 现算，而它带一个 `std::string`——漏斗、投掷器、铜傀儡的 hook 每 tick 都要拷一次。现在 `load()` 与 `/shop reload` 各算一次，热路径只读指针；缓存为空时（模组未加载、单测）仍退回现算。
+- **漏斗 / 投掷器 / 铜傀儡的每 tick 判据不再扫六邻居**：这四条 hook 是每 tick 跑的（漏斗 20 次/秒，一片农场的漏斗数会把成本乘起来），以前每次都走 `isShopBlockAt`——一次方块实体查询之后无条件扫六个邻居、再拷两份 `ShopSignConfig`（含 `std::string`）。现在走新的 `isShopContainerBlockAt`：先一层「这一格是不是箱子/木桶」的粗筛，漏斗链、熔炉、投掷器自身都在那里被挡掉。判据仍是同一处组装，破坏防护与拆除路径继续用 `isShopBlockAt`（它们是玩家操作频率，还要认商店牌本身）。
+- **日志压缩只扫 `transactions/` 与 `discarded/`**：`logFileDate` 只认裸 `YYYY-MM-DD.jsonl`，`logs/` 根下服主自己的 `backup-2026-11-01.jsonl` 不会再被压缩并删原文件（旧布局的搬家仍由 `relocatedLogFile` 负责）。
+- **日志写失败会回滚半行**：磁盘满时 `<<` 可能已经写进半条 JSON，NDJSON 从那一行起整份读不出来。现在按写入前的文件大小截回去，并单独提示「这一批丢了」；`warnOnce` 的键改成「种类 + 路径」，`/ll reload` 时复位，`transactions/` 与 `discarded/` 的失败不再互相吃掉。
+- **配置写入与校验收紧**：`config.json` 的回写条件从 `merged != user` 收窄为「缺键 / version 不同」（不再被用户写的 `null` 触发），回写前备份成 `config.json.bak`；`maxShopAmount ≤ 32768`、`shopInteractionCooldownMs ≤ 60000`、`compressAfterDays ≤ 3650` 有了上界（分别对应表单 int 溢出、交易被静默拦下、`chrono::days` 溢出）；`tax.taxDestination` 写了 `void` 以外的值会 WARN 而不是静默不生效。
+- **`/ll reload` 后 `/shop status` 不再显示旧后端**：`resetEconomy()` 补清选型文本，`/shop status` 改用 `economyUnresolvedReason()` 区分「世界未就绪」与「世界已就绪但还没解析」。
+- **`pay_tax` 告警不再只在开税时出现**：只要 `economy.backend = legacy_money` 就无条件 WARN——不开商店税时补偿退款同样会被抽一次，退款按原金额反向转就会让一方固定亏一截。
+- **表单件数改用 `int64` 算**：`UnitsForm` 的「共 N 个」与提交时的 `expectedItems` 共用新的 `itemsForUnits`，合法配置范围内不再有 `int` 溢出。
+- **静默丢弃的提交有了痕迹**：交易与管理表单在「玩家换维度 / 下线 / 配置不可用」时不再无声 `return`——换维度会给一句可见提示，其余各留一条 debug 日志；`/shop status` 的 hook 表新增「曾尝试挂上，现已解绑」，`detachHooks` 之后不再被误报成「从未注册」。
+- **配置非法时的后果写明白了**：`load()` 失败现在明确说「交易、商店箱保护、破坏防护、内容防偷全部不会启用」，不再只是一句「配置不可用」。
+
 ### 变更
 
 - `ShopOwner::ensureOwnerRecorded` 改名为 `recordShopOwner`：归属在牌子第一次成为商店时写给编辑者，之后改牌面不改归属（After 阶段按 Before 记下的归属写回）。否则 06 的「OP 可以代改别人的牌面」会顺带把店主换成 OP，把原店主锁在自己的店外。

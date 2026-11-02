@@ -26,6 +26,17 @@ ShopSignConfig defaultConfig() {
 
 } // namespace
 
+TEST_CASE("去颜色码：`§` 后跟中文不能切坏 UTF-8") {
+    // `§` 是 0xC2 0xA7。旧实现无条件再跳 1 字节，遇到 CJK（3 字节）就切掉高位。
+    CHECK(stripColorCodes("§a钻石") == "钻石");
+    CHECK(stripColorCodes("§0§l钻石") == "钻石");
+    CHECK(stripColorCodes("§只有半个") == "只有半个");   // `§` 后不是格式码：不能吃字符
+    CHECK(stripColorCodes("钻石§") == "钻石");           // 孤立的 `§` 在末尾
+    CHECK(stripColorCodes("§§") == "");                   // 两个 `§` 各自成对，不互相吃
+    CHECK(stripColorCodes("无颜色") == "无颜色");
+    CHECK(stripColorCodes("") == "");
+}
+
 TEST_CASE("份量行：合法整数") {
     CHECK(parseAmountLine("1", 3456) == std::optional<int>{1});
     CHECK(parseAmountLine("64", 3456) == std::optional<int>{64});

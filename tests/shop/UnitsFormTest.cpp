@@ -1,6 +1,7 @@
 #include "shop/UnitsForm.h"
 
 #include <doctest/doctest.h>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -280,4 +281,18 @@ TEST_CASE("卖表单正文：管理员店的箱空间写「无限」，不写「
     CHECK_FALSE(hasLine(content, "商店箱还能装：0 份"));
     // 上限来源里也不该再列一项不存在的限制
     CHECK(hasLine(content, "这次最多卖：3 份（受你手里的货与单次上限限制）"));
+}
+
+TEST_CASE("份数 → 件数：用 int64 算，不在合法配置范围内回绕") {
+    // 正常范围
+    CHECK(itemsForUnits(4, 64) == 256);
+    CHECK(itemsForUnits(1, 1) == 1);
+    CHECK(itemsForUnits(0, 64) == 0);
+
+    // 32'768 是 maxShopAmount 的上界（也是「一份的件数」的上界），它的平方 1.07e9
+    // 仍在 INT_MAX 内；这一条把「配置上界」与「算式不溢出」钉在一起。
+    CHECK(itemsForUnits(32'768, 32'768) == 32'768 * 32'768);
+
+    // 越过 int 的量：夹到 INT_MAX，而不是回绕成负数。
+    CHECK(itemsForUnits(std::numeric_limits<int>::max(), 2) == std::numeric_limits<int>::max());
 }

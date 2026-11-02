@@ -70,9 +70,35 @@ TEST_CASE("商店税：总额 × 税率，向下取整到整数") {
     // 向下取整：3.5 → 3，余数留给店主（DESIGN §8.9）
     CHECK(shopTax(70, 0.05) == 3);
     CHECK(shopTax(99, 0.05) == 4);
-    // 不足 1 单位的税归零，不出现「四舍五入成一整块」
-    CHECK(shopTax(1, 0.05) == 0);
-    CHECK(shopTax(19, 0.05) == 0);
+    // 不足 1 的税按 1 收（下限 1，见下一个用例）
+    CHECK(shopTax(1, 0.05) == 1);
+    CHECK(shopTax(19, 0.05) == 1);
+}
+
+TEST_CASE("商店税：税额下限 1，拆单不能把税拆没") {
+    // 100 元 5% 应缴 5；若拆成 20 笔 5 元，每笔 0.25 → 每笔按 1 收，共 20，拆单反而更贵。
+    CHECK(shopTax(100, 0.05) == 5);
+    for (int i = 0; i < 20; ++i) {
+        CHECK(shopTax(5, 0.05) == 1);
+    }
+    // 下限只对有税的交易成立：没有税 / 总额非正仍然是 0，不能凭空收 1。
+    CHECK(shopTax(5, 0.0) == 0);
+    CHECK(shopTax(0, 0.05) == 0);
+    CHECK(shopTax(-5, 0.05) == 0);
+}
+
+TEST_CASE("税率精度：只接受千分位网格上的值") {
+    CHECK(isTaxRateOnGrid(0.0));
+    CHECK(isTaxRateOnGrid(0.001));
+    CHECK(isTaxRateOnGrid(0.05));
+    CHECK(isTaxRateOnGrid(0.29));   // 浮点下 289.99999999999994，容差必须留给它
+    CHECK(isTaxRateOnGrid(0.999));
+    CHECK_FALSE(isTaxRateOnGrid(0.0005));
+    CHECK_FALSE(isTaxRateOnGrid(0.0505));
+    // 越界一律不算「网格上」（范围由 validate 另外报错）
+    CHECK_FALSE(isTaxRateOnGrid(-0.001));
+    CHECK_FALSE(isTaxRateOnGrid(1.0));
+    CHECK_FALSE(isTaxRateOnGrid(std::nan("")));
 }
 
 TEST_CASE("商店税：非法输入不产生负税或超额的税") {

@@ -183,7 +183,7 @@ void onInteractBlock(ll::event::player::PlayerInteractBlockEvent& event) {
     // 冷却期内连点：拦下交互，也不再弹第二份表单（DESIGN §10.4）。
     // 注意仍然要 cancel——否则连点会退化成"弹一堆原版编辑界面"。
     Cell const sign    = toCell(pos);
-    bool const allowed = gTradeGate->allow(player.getXuid(), sign, monotonicNowMs());
+    bool const allowed = gTradeGate->allow(player.getXuid(), region.getDimensionId(), sign, monotonicNowMs());
     event.cancel();
     if (shopDebugEnabled()) {
         auto fields = touchFields(
@@ -212,9 +212,13 @@ void registerSignInteractListener() {
         return;
     }
     auto const& config = Shop::getInstance().config();
-    if (config) {
-        gTradeGate.emplace(config->shopInteractionCooldownMs);
+    if (!config) {
+        // 没有配置就没有冷却门：挂上去只会让每一下点击都落到 `onInteractBlock` 的早退分支，
+        // 而那种「监听器在、但永远不干活」的状态最难查（`/shop status` 也会显示已注册）。
+        Shop::getInstance().getSelf().getLogger().error("配置不可用，未注册方块交互监听（交易入口未开启）");
+        return;
     }
+    gTradeGate.emplace(config->shopInteractionCooldownMs);
     gSignInteractListener =
         ll::event::EventBus::getInstance().emplaceListener<ll::event::player::PlayerInteractBlockEvent>(
             onInteractBlock
@@ -225,13 +229,14 @@ void registerSignInteractListener() {
 }
 
 void unregisterSignInteractListener() {
-    if (!gSignInteractListener) {
-        return;
+    if (gSignInteractListener) {
+        ll::event::EventBus::getInstance().removeListener<ll::event::player::PlayerInteractBlockEvent>(
+            gSignInteractListener
+        );
+        gSignInteractListener.reset();
     }
-    ll::event::EventBus::getInstance().removeListener<ll::event::player::PlayerInteractBlockEvent>(
-        gSignInteractListener
-    );
-    gSignInteractListener.reset();
+    // 冷却门无条件清：注册可能在 listener 挂上之前就失败，那时 gate 已经建好了。
+    // 早退会把一个陈述的冷却门留给下一次 enable。
     gTradeGate.reset();
 }
 

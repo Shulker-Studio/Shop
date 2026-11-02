@@ -65,9 +65,18 @@ OP 把第 1 行写成 `adminShopName`（默认 `Admin Shop`）就是管理员商
 
 `tax.shopTaxRate`（百分比，`0.05` = 5%）由**店主承担**：买家总支出不变，店主实收少一笔，差额被销毁。
 
-> **启用前必须把 LegacyMoney 配置里的 `pay_tax` 设为 `0`。** 本模组读不到那个值（LegacyMoney 没有导出它的
-> getter），只能启动时打一条 WARN 提醒；若 `pay_tax` 仍大于 0，每笔转账的收款方都会被再扣一次税，
-> 店主会被抽两次，退款补偿也会与实际到账不一致。
+税率只支持**千分位**（`0.001` = 0.1%）。写成 `0.0005`、或落到 `[0, 1)` 之外时**不会拒绝加载**：
+启动日志 WARN 一次，本次运行**按 `0` 处理**（这个配置失效，不收商店税），交易与全部保护照常。
+所以看到税率不对，改完 `config.json` 用 `/shop reload` 重读即可，不用重启。
+
+税额按成交总额**向下取整**，**但不足 1 时按 1 收**。没有这个下限，把一笔大单拆成若干小单
+就能把税拆没（拆单对买卖双方都有利可图）。代价是极小额的交易：`1` 元的交易税 `1` 元，店主实收 `0`。
+
+> **只要 `economy.backend` 是 `legacy_money`，就必须把 LegacyMoney 配置里的 `pay_tax` 设为 `0`。**
+> 本模组读不到那个值（LegacyMoney 没有导出它的 getter），只能在启动时无条件打一条 WARN。
+> 若 `pay_tax` 仍大于 0，每笔转账的收款方都会被再扣一次税：不仅商店税收不准，
+> **补偿退款也会让一方固定亏一截**（退款按原金额反向转，但到账少了那一笔）——
+> 所以这个提醒与 `tax.shopTaxRate` 开不开无关。
 >
 > 商店税需要后端支持「单边扣钱」（从买家扣掉、谁都不加 = 销毁）。`legacy_money` 与 `scoreboard`
 > 都支持：前者是 `LLMoney_Trans(from, "", n)`，后者是只 `reduce` 买家。将来出现不支持的后端时，
@@ -94,8 +103,13 @@ plugins/Shop/logs/
 └── discarded/2026-10-25.jsonl.gz
 ```
 
-两个目录同一套轮转规则。旧版本留下的文件平铺在 `logs/` 根下（带 `transactions-` / `discarded-` 前缀），
+两个目录同一套轮转规则；压缩**只扫这两个子目录**，`logs/` 根下你自己放的文件（备份、旧布局残留）
+不会被碰。旧版本留下的文件平铺在 `logs/` 根下（带 `transactions-` / `discarded-` 前缀），
 模组启用时会**自动搬进**对应子目录（同盘 rename，不覆盖任何已有文件，失败只留一条 warn）。
+
+压缩**只在模组启用（服务器启动 / `/ll reload Shop`）时做一次**，不在成交路径上：早先是每写一行
+流水就扫一遍目录、必要时当场 gzip 一整个旧文件，那笔卡顿落在玩家刚买完东西那一拍的 tick 上。
+启动时同步压完（服主本来就在等），压了几个文件会打一条 info；压失败的原文件留给下次启动重试。
 
 **永不删除**：超过 `transactionLog.compressAfterDays` 天（默认 7）的文件压成 `.jsonl.gz`，
 压缩成功后才删原文件。`0` 表示永不压缩；负数被拒（配置非法不加载）。要清盘请服主自己 `rm`。
@@ -121,6 +135,13 @@ duckdb -c "SELECT owner.name, sum(total) AS 营业额 FROM read_json_auto('plugi
 `transactionLog.enabled`（默认 `true`）、`transactionLog.compressAfterDays`（默认 `7`，`0` = 永不压缩）。
 （`tax.taxDestination` 等仍留待 P1，见 `DESIGN.md` 第 15 节。）
 
+## 命令
+
+- `/shop status`：版本、当前配置、hooks 状态、经济后端与流水目录。
+- `/shop debug <on|off>`：打开后每次牌面判定 / 保护拦截 / 交易结果都会打一行 `[shop/dbg]`。
+- `/shop reload`：**只重读 `config.json`**，不卸载模组、不重挂 hook。改价格上限、税率、各种开关时用它；
+  新配置解析失败会保留旧配置并在控制台说明原因。`/ll reload Shop` 仍然可用，但它会重建监听器与经济后端。
+
 ### 配置文件与补齐规则
 
 配置文件在 `plugins/Shop/config/config.json`（日志在 `plugins/Shop/logs/transactions/` 与
@@ -134,8 +155,10 @@ duckdb -c "SELECT owner.name, sum(total) AS 营业额 FROM read_json_auto('plugi
 - 键名拼错（`transactionlog`、`scoreboardObjectiv`）→ 那个键**不生效**，启动时 WARN 列出被忽略的键。
 - 文件不是合法 JSON（少了逗号、多了注释外的括号）→ **拒绝加载且不覆盖你的文件**，
   日志里给出出错位置；修好再启动。
-- 值非法（`maxShopAmount: 0`、`tax.shopTaxRate: 1.5`、`compressAfterDays: -1` …）→ 拒绝加载，
+- 值非法（`maxShopAmount: 0`、`compressAfterDays: -1` …）→ 拒绝加载，
   日志写明哪一项不合法——这跟缺键是两回事，缺键是「没写」，写错是「写了但不合理」。
+- **例外是 `tax.shopTaxRate`**：它越界或精度超出千分位时不拒绝加载，只 WARN 并把本次运行的税率按 `0`。
+  一个税率数字写错不该让交易与全部保护一起关掉，代价是不收税而不是模组不工作。
 
 ## 构建
 

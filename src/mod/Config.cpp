@@ -3,7 +3,9 @@
 #include "ll/api/io/FileUtils.h"
 #include "ll/api/io/Logger.h"
 #include "shop/ConfigPatch.h"
+#include "shop/TradePricing.h"
 
+#include <cmath>
 #include <cstdint>
 #include <exception>
 #include <string_view>
@@ -26,9 +28,22 @@ std::string joinKeys(std::vector<std::string> const& keys) {
 bool isBlank(std::string const& text) { return text.find_first_not_of(" \t\r\n") == std::string::npos; }
 
 /// @return 配置是否合法。不合法时已经打过错误日志。
-bool validate(ShopConfig const& config, ll::io::Logger& logger) {
+bool validate(ShopConfig& config, ll::io::Logger& logger) {
     if (config.maxShopAmount < 1) {
         logger.error("config.json 非法：maxShopAmount 必须 >= 1（当前 {}）", config.maxShopAmount);
+        return false;
+    }
+    // 上界不是「拍脑袋的限制」：份数上限同时是一份的件数上限，而件数 = 份数 × 每份件数
+    // 在表单里用 int 算（`UnitsForm` / `ShopForm`）。32768² = 1.07e9 < INT_MAX，所以
+    // 只要它不超过这个数，表单层的乘法就不会溢出。再大只能靠 int64 兜，而牌面本身也会先变得不可读。
+    constexpr int kMaxShopAmountLimit = 32'768;
+    if (config.maxShopAmount > kMaxShopAmountLimit) {
+        logger.error(
+            "config.json 非法：maxShopAmount 不能大于 {}（当前 {}）——它同时限制「一份的件数」，"
+            "再大就会让份数 × 件数溢出",
+            kMaxShopAmountLimit,
+            config.maxShopAmount
+        );
         return false;
     }
     if (isBlank(config.adminShopName)) {
@@ -38,6 +53,16 @@ bool validate(ShopConfig const& config, ll::io::Logger& logger) {
     if (config.shopInteractionCooldownMs < 0) {
         logger.error(
             "config.json 非法：shopInteractionCooldownMs 不能为负数（当前 {}）",
+            config.shopInteractionCooldownMs
+        );
+        return false;
+    }
+    // 上界：这个值填成 10 分钟，所有交易都会「点了没反应」，而且没有任何日志能提醒到服主。
+    constexpr int kMaxCooldownMs = 60'000;
+    if (config.shopInteractionCooldownMs > kMaxCooldownMs) {
+        logger.error(
+            "config.json 非法：shopInteractionCooldownMs 不能大于 {}（当前 {}）——再大等于把所有交易静默拦下",
+            kMaxCooldownMs,
             config.shopInteractionCooldownMs
         );
         return false;
@@ -85,14 +110,26 @@ bool validate(ShopConfig const& config, ll::io::Logger& logger) {
         logger.error("config.json 非法：economy.scoreboardObjective 不能为空");
         return false;
     }
-    // 税率是百分比：0 <= rate < 1。>= 1 等于全额征税（店主一分不收），这种事不该靠
-    // 舍入悄悄生效；负税率会变成「给店主发钱」。
+    // 税率是百分比：0 <= rate < 1。>= 1 等于全额征税（店主一分不收），负税率会变成「给店主发钱」，
+    // NaN 会让每一次比较都为假；精度只到千分位（0.001 = 0.1%），更细的粒度在小额交易上
+    // 本来就会被「税额下限 1」吃掉。
+    //
+    // **但这几项都不拒绝加载**：一个税率数字写错，不该让交易、商店箱保护、破坏防护全部关掉。
+    // 处理方式是「这个配置失效」——WARN 一次，本次运行按 0 处理，其余照常。
     if (!(config.tax.shopTaxRate >= 0.0) || config.tax.shopTaxRate >= 1.0) {
-        logger.error(
-            "config.json 非法：tax.shopTaxRate 必须在 [0, 1) 之间（0.05 = 5%%，当前 {}）",
+        logger.warn(
+            "config.json 里的 tax.shopTaxRate 不合法（必须在 [0, 1) 之间，0.05 = 5%%，当前 {}）："
+            "本次运行按 0 处理（不收商店税），交易与保护照常",
             config.tax.shopTaxRate
         );
-        return false;
+        config.tax.shopTaxRate = 0.0;
+    } else if (!ss::shop::isTaxRateOnGrid(config.tax.shopTaxRate)) {
+        logger.warn(
+            "config.json 里的 tax.shopTaxRate 精度超过千分位（只支持 0.001 = 0.1%%，当前 {}）："
+            "本次运行按 0 处理（不收商店税），交易与保护照常",
+            config.tax.shopTaxRate
+        );
+        config.tax.shopTaxRate = 0.0;
     }
     // `0` 是「永不压缩」的正式取值，负数没有意义（它会让 `today - days` 跑到未来，
     // 把所有文件都压掉）。不静默按 0 处理：服主写错了应该知道。
@@ -102,6 +139,26 @@ bool validate(ShopConfig const& config, ll::io::Logger& logger) {
             config.transactionLog.compressAfterDays
         );
         return false;
+    }
+    // 上界：`std::chrono::days` 的 rep 是整数，填一个极大的值会在 `today - days` 处溢出。
+    constexpr int kMaxCompressAfterDays = 3'650;
+    if (config.transactionLog.compressAfterDays > kMaxCompressAfterDays) {
+        logger.error(
+            "config.json 非法：transactionLog.compressAfterDays 不能大于 {}（当前 {}）",
+            kMaxCompressAfterDays,
+            config.transactionLog.compressAfterDays
+        );
+        return false;
+    }
+    // `tax.taxDestination` 目前只认 `void`（销毁）。写了别的值不会报错、也不会生效——
+    // 那是最难查的一种配置（“我明明配了税收账户”）。这里只 warn、不拒绝加载：
+    // 指向税收账户是 P1 的功能，不该因为将来才会有的一个键把整服卡住。
+    if (config.tax.taxDestination != "void") {
+        logger.warn(
+            "config.json 里的 tax.taxDestination = \"{}\" 目前不生效（只支持 \"void\" = 销毁）："
+            "指向税收账户是 P1 的功能，本次启动仍按销毁处理",
+            config.tax.taxDestination
+        );
     }
     return true;
 }
@@ -176,16 +233,45 @@ std::optional<ShopConfig> loadShopConfig(std::filesystem::path const& path, ll::
         return std::nullopt;
     }
 
-    if (merged != user) {
-        // 补过东西（新字段 / 手写漏键 / version 升级）：回写一份完整文件。
-        // 回写后服主能在文件里看到新字段，下次启动也不必再补。
-        auto const missing = missingConfigKeys(*defaultsJson, user);
+    // 对齐到千分位网格：`validate` 已经确认它是 0.001 的整数倍，但二进制浮点下
+    // `0.001` 存的是 0.00100000000000000002...。对齐一次，让计价、状态输出与流水
+    // 用的是同一个值，而不是三个各自带浮点尾巴的近似。
+    config->tax.shopTaxRate =
+        std::round(config->tax.shopTaxRate / ss::shop::kTaxRateStep) * ss::shop::kTaxRateStep;
+
+    // 只在「缺键 / version 不对」时回写。不用 `merged != user`：那个条件还会被
+    // 「用户写了 null」触发（merge 后变成默认值），而那种文件不必重写。
+    //
+    // 回写本身就是一次重排：注释、键序、格式都会丢，所以先留一份 `.bak`。
+    // 注意：回写序列化的是 `ShopConfig`，**不认识的键不会跟着回去**——如果这次回写
+    // 恰好发生在「缺键 + 拼错键」同时存在的文件上，那个拼错的键会消失（上面已 WARN）。
+    auto const missing      = missingConfigKeys(*defaultsJson, user);
+    bool const versionStale = !user.contains("version") || !user["version"].is_number_integer()
+                           || user["version"].get<std::int64_t>() != defaults.version;
+    if (!missing.empty() || versionStale) {
+        auto const      backup = std::filesystem::path{path.string() + ".bak"};
+        std::error_code backupEc;
+        std::filesystem::copy_file(path, backup, std::filesystem::copy_options::overwrite_existing, backupEc);
+        if (backupEc) {
+            logger.warn("config.json 回写前的备份失败：{}（本次仍会回写）", backupEc.message());
+        }
+
         if (!ll::config::saveConfig(*config, path)) {
             logger.warn("config.json 回写失败，本次按补齐后的配置运行，下次启动会再补：{}", path.string());
         } else if (!missing.empty()) {
-            logger.info("config.json 已补齐并回写（补上默认值：{}）：{}", joinKeys(missing), path.string());
+            logger.info(
+                "config.json 已补齐并回写（补上默认值：{}）；原文件备份在 {}：{}",
+                joinKeys(missing),
+                backup.string(),
+                path.string()
+            );
         } else {
-            logger.info("config.json 已按本版结构回写（version = {}）：{}", config->version, path.string());
+            logger.info(
+                "config.json 已按本版结构回写（version = {}）；原文件备份在 {}：{}",
+                config->version,
+                backup.string(),
+                path.string()
+            );
         }
     }
 
