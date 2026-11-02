@@ -1,5 +1,7 @@
 #pragma once
 
+#include "shop/Text.h"
+
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -68,23 +70,23 @@ struct SignOwnerHandoff {
 /// 以及两句话都只写在这里，`planSignEdit` 只负责凑参数。
 ///
 /// 顺序是先身份后上蜡：非店主在上蜡的牌上拿到的是「不是你的店」，不泄露「这块牌上了蜡」。
-std::optional<std::string>
+std::optional<Text>
 signTextEditRejection(ShopActor actor, bool waxed, std::string const& ownerName, bool adminShop);
 
 /// 非店主想改别人的商店牌时的提示。管理员商店单独一句：它的管理权只给 OP（§11）。
-std::string ownerOnlyEditMessage(std::string const& ownerName, bool adminShop);
+Text ownerOnlyEditMessage(std::string const& ownerName, bool adminShop);
 
 /// 牌子上了蜡、改不动时的提示：连店主也改不了，只能拆掉重立（DESIGN §9.2）。
-std::string waxedSignEditMessage();
+Text waxedSignEditMessage();
 
 /// 已经上蜡的牌还要染色 / 改发光 / 再上蜡时的提示：原版对这一切都拒绝。
-std::string waxedSignTouchMessage();
+Text waxedSignTouchMessage();
 
 /// 商店牌还在、但附着格不是可用容器时点牌：没有表单可弹，也别把编辑界面递给非店主。
-std::string shopBoxMissingMessage();
+Text shopBoxMissingMessage();
 
 /// 商店牌还在、但它已经不严格合法（改了配置、或者牌子是脏数据）：同上，也没表单可弹。
-std::string shopInvalidMessage();
+Text shopInvalidMessage();
 
 /// 手持物品对告示牌会做的事（DESIGN §9.2 的「牌面防护」那一组）。
 ///
@@ -129,7 +131,7 @@ enum class SignTouchAction : std::uint8_t {
 struct SignTouchDecision {
     SignTouchAction action = SignTouchAction::TakeOver;
     /// 只有 `Block` 时非空：发给玩家的一句话。
-    std::string message;
+    Text        message;
 };
 
 /// 判定一次点击需要的既成事实。写成结构体而不是一串实参：一半是 bool，位置参数没人读得懂。

@@ -32,7 +32,7 @@
 - 交易流水入库、平均价格（P1）
 - 悬浮字、掉落物展示（P2，基岩版无原生文字展示实体，需客户端模组或假实体）
 - 商店创建费 / 退款、管理员商店的无容器模式、shift 快捷成交（P1）
-- 多语言、GUI 图标（P2）
+- 多语言（已落地语义 key + `lang/` 词典，见 8.10；模板化参数仍待做）、GUI 图标（P2）
 
 ### 1.3 明确不做的
 
@@ -699,6 +699,90 @@ public:
 - 因此启动时只要 `shopTaxRate > 0` 就**无条件打 WARN**，文案明确要求确认 `pay_tax = 0`；README 与安装说明同步写这一条。
 - 若服主不关闭 `pay_tax`，P0 **不**自动禁用商店税（读不到就不猜，只打 WARN）：结果是店主被抽两次、补偿金额与实际到账不一致。前提由服主承担，风险登记在 §14。
 - 两笔 `Trans` **不是跨调用事务**：第二笔失败时第一笔已生效，必须按 `total - shopTax` 精确补偿；补偿本身也可能失败，按第 10.2 节升级为严重错误。
+
+---
+
+### 8.10 玩家文本与本地化
+
+玩家可见文本一律是**结构化**的，纯逻辑层只产出树、不拼字符串：
+
+```cpp
+struct Text {
+    Tone        tone;     // 颜色语义：Label / Value / Accent / Good / Bad / Warn / Muted / Title
+    std::string key;      // 非空 = 查词表拿模板（`"还差 {} 元"`）
+    std::string literal;  // key 为空时原样输出（数字、玩家名、金额）
+    TextArgs    args;     // 模板的 `{}` 参数，参数本身也是 Text（可递归）
+};
+```
+
+- 一行 = `field(label, value)`（`§7标签：§f值`）或 `sequence({...})`（几段首尾相接）。
+- **渲染**由注入的 `Renderer` 做，签名带 locale：`render(Text, localeCode)`。
+  模组启用时 `mod/Text.cpp` 查 `ll::i18n` 拿模板、用 fmt 填 `{}`、`text::colorOf(tone)` 上色；
+  单元测试注入自己那份。**locale 由调用方给**（表单是点击那一刻的 `Player::getLocaleCode()`），
+  纯逻辑层不自己挑语言。
+- 纯逻辑层因此**不需要** include `ll/`（`check_pure_logic_headers` 不会拦），也不需要自带格式化器。
+
+**覆盖范围（不只是玩家界面）**：同一张词表也管后台输出——`logger.*` 走 `ui::msg(key, args...)`
+（默认 locale 渲染后**去掉颜色码**；`§8` 混进日志只会污染 `rg` 与 JSON 检索），
+`/shop status`、`/shop reload`、`/shop debug` 的每一行走 `ui::keyed` + `ui::line`，
+经济后端的探测失败原因（`probeIssueText`）、转账失败原因（`TransferResult::detail`）、
+容器保护的四类拒绝句、管理表单的三张输入表单也都是 `Text`。
+
+**不翻译的三类**（是协议或自举，不是文案）：
+
+1. 机器可读的流水字段与事件名（`sign_decision`、`reason`、`dim=`、rejection code）——
+   翻译它们会让 `rg`、告警规则、历史日志的检索一起失效；
+2. 编译期 `static_assert` 的说明文字（只给编译的人看）；
+3. `mod/Text.cpp` 自己那三条「`lang/` 载入失败」日志——词表还没载入时查表只会拿到 key id，
+   比中文原文更难读。
+
+`tests/TextLangTest.cpp` 守住三条：`zh_CN` 与 `en_US` 的 key 集合必须完全相等；
+同一个 key 在两份里的 `{}` 个数必须相同（占位符数量不符不会编译报错，
+只会在运行时被渲染器判成 `<bad-args:key>`）；**源码里引用的每个 `shop.*` key 都必须在词表里**
+（`ui::msg` 走的是 `ui::plain`，不经过测试里的严格渲染器，缺 key 只会静默输出 key id）。
+
+**副作用：`lang/` 从此是必需文件。** 改造前代码里留着中文原文，缺词表只是「没有英文」；
+现在缺词表 = 全部显示成 key id。所以 `Text::loadTexts` 在 `lang/` 缺失或解析失败时打 **WARN**
+（不是 debug），提示重装；`Shop::load` 把它排在 `loadShopConfig` **之前**——
+配置校验那三十条日志本身就要查表，晚一步就是最需要读懂的时刻打出一屏 key id。
+
+`/shop reload` **不重读 `lang/`**：`ll::i18n::I18n` 是全局单例，`load(path)` 对已载入 locale
+是覆盖还是追加、失败时会不会留下半份词表，头文件里只有声明没有实现可查。没实机验证之前
+不把「改完语言文件热重载就生效」写进承诺——语言文件是发布产物，改它就重启。
+
+**为什么不是 `ll::i18n` 的 `_tr`**：`"..."_tr(args...)` 与 `"..."_trl(locale, args...)` 都要求
+**编译期字面量 key**（`FixedString` 模板参数），而这里的 key 是运行时语义 id；`I18nStringError`
+虽能带 locale 与参数，但参数个数同样在编译期固定（可变参数模板），而 `field` 是 2 个参数、
+`choice` 是 3 个、且随句子变。
+
+所以「运行时 key + 运行时参数个数 + 指定 locale」只剩 `fmt::dynamic_format_arg_store` +
+`fmt::vformat` 这一条路——这也正是 `ll::i18n::I18nStringError::message(localeCode)` 内部的两步
+（`get(key, locale)` 取模板 → `fmt::vformat(pattern, args)`），而且 `I18n.h` 本身就直接
+`#include "fmt/format.h"`、把 fmt 当作公开依赖。换句话说：**fmt 在这里不是自造的格式化器，
+是 LL i18n 自己用的那一套**。
+
+**公开 API 全部返回 `Text`**，没有一处返回渲染后的字符串：
+
+| 层 | 产出 | 渲染 |
+| --- | --- | --- |
+| `src/shop` | `Text` 树：`shopFormTitle` / `shopFormContent` / `shopInfoLines` / `unitsFormContent` / `unitsConfirmContent` / `shopManageFormContent`、`ShopFormButton::label`、`ShopInfoData::unavailableReason`、`tradeRejectionMessage`、`SignTouchDecision::message`、`SignEditResult::message`、`ManageEdit::error`、`RequestedUnits::error`、`TradeResult::message` | 谁持有 `Player&` 谁渲染 |
+| `src/mod` | 渲染 + 发送 | `ui::send(player, tone, Text)`（`player.getLocaleCode()`）、`text::render(t, locale)` |
+
+**词表**：`lang/zh_CN.json` / `lang/en_US.json`，key 是语义化英文 id
+（`shop.form.buy_price`、`shop.trade.not_enough_funds`），值是模板。
+文件名即 locale code，由 `Mod::getLangDir()` 定位；构建时 `xmake.lua` 的 `after_build`
+把 `lang/` 搬进 `bin/Shop/lang/`（`modpacker` 只搬 dll/pdb/manifest）。
+
+**为什么参数必须进模板**：`"这家店现在只够成交 " + n + " 份"` 把一句话拆成三段，
+翻译时语序与数字位置全被写死。改成 `key = "shop.form.units_reduced.buy"`、
+模板 `"这家店现在只够成交 {} 份"` 之后，整句交给译者，`{}` 的位置由词表决定。
+
+**测试用真实的 `lang/zh_CN.json`**（`tests/main.cpp` 注入查表 + 渲染器，`set_rundir` 指到项目根）：
+词表少一条 key、或模板 `{}` 数量对不上，都会表现为测试失败，而不是上线后显示成 `shop.form.xxx`。
+
+**颜色**：`src/mod` 用 `mc/util/ColorFormat.h` 的常量（`GREEN`/`RED`/`YELLOW`/`GRAY`/`GOLD`/
+`DARK_GRAY`/`BOLD`/`RESET`）；纯逻辑层的 `shop/Text.h` 因为不能 include `mc/`，写字面量并在
+注释里标注对应关系，改配色时两处一起改。**牌面文本（`formatShopSign`）不用颜色码**：那是数据，改了会牵动解析。
 
 ---
 

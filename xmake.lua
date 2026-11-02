@@ -74,6 +74,19 @@ target("Shop")
     add_includedirs("src")
     before_build(check_pure_logic_headers)
 
+    -- `modpacker` 只搬 dll / pdb / manifest.json：语言文件得自己跟进产物目录，
+    -- 否则发出去的包里没有 `lang/`，所有玩家文本都会显示成 key id。
+    after_build(function(target)
+        if not os.isdir("lang") then
+            return
+        end
+        local outdir = path.join(os.projectdir(), "bin", target:name(), "lang")
+        os.mkdir(outdir)
+        for _, file in ipairs(os.files("lang/*.json")) do
+            os.cp(file, path.join(outdir, path.filename(file)))
+        end
+    end)
+
 -- 纯逻辑层的测试：只编译 src/shop 与 tests，不链接 levilamina，因此没有 BDS 也能跑。
 -- 用法：xmake test
 target("ShopTests")
@@ -88,5 +101,7 @@ target("ShopTests")
     add_packages("doctest", "nlohmann_json")
     add_includedirs("src")
     add_files("src/shop/**.cpp", "tests/**.cpp")
+    -- 测试从 `lang/zh_CN.json` 取文本，所以运行目录必须是项目根。
+    set_rundir(os.projectdir())
     add_tests("default")
     before_build(check_pure_logic_headers)

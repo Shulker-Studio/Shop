@@ -6,17 +6,19 @@
 
 #include <string>
 #include <vector>
+#include "mod/Text.h"
 
 namespace ss::shop {
 
 void writeTradeRecord(TradeRecord const& record) {
     if (auto const problem = tradeRecordProblem(record); !problem.empty()) {
-        Shop::getInstance().getSelf().getLogger().error(
-            "交易流水记录自相矛盾（{}），这一行不写：({}, {}, {})",
-            problem,
-            record.shop.x,
-            record.shop.y,
-            record.shop.z
+        Shop::getInstance().getSelf().getLogger().error(ui::msg(
+                "shop.log.trade.record_inconsistent",
+                ui::plain(text::keyed(std::string{problem})),
+                record.shop.x,
+                record.shop.y,
+                record.shop.z
+            )
         );
         return;
     }

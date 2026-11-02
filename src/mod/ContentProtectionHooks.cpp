@@ -1,5 +1,7 @@
 #include "mod/ContentProtectionHooks.h"
 
+#include "mod/Text.h"
+
 #include "mod/ContainerFinderBds.h"
 #include "mod/DebugLog.h"
 #include "mod/HookSlots.h"
@@ -196,10 +198,10 @@ LL_TYPE_INSTANCE_HOOK(
     if (!gDropperGuard.reached && !gDropperGuard.warned) {
         gDropperGuard.warned = true;
         // 「一次都没被问过」和「问了但坐标对不上」是两种失效，日志要能分开
-        Shop::getInstance().getSelf().getLogger().warn(
-            gDropperGuard.lookedUp
-                ? "投掷器拦不住商店箱（H2d 失效）：getContainerAt 被调用过，但拿到的坐标与我们算的目标格对不上"
-                : "投掷器拦不住商店箱（H2d 失效）：getContainerAt 没被问过（未挂上，或 pushOutItems 不经过它）"
+        Shop::getInstance().getSelf().getLogger().warn(ui::msg(
+                gDropperGuard.lookedUp ? "shop.log.protection.dropper_mismatch"
+                                       : "shop.log.protection.dropper_not_asked"
+            )
         );
     }
     return pushed;

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "shop/StockView.h"
+#include "shop/Text.h"
 
 #include <cstdint>
 #include <limits>
@@ -170,6 +171,6 @@ TradeDecision planTrade(TradeRequest const& request);
 ///
 /// `direction` 只决定「谁的钱」「谁的货」怎么称呼：买入的 `NotEnoughGoods` 是
 /// 「商店的货不够」，卖出的是「你手里没有这么多」，所以这一句必须带方向。
-std::string tradeRejectionMessage(TradeDirection direction, TradeRejection rejection);
+Text tradeRejectionMessage(TradeDirection direction, TradeRejection rejection);
 
 } // namespace ss::shop

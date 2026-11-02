@@ -1,4 +1,5 @@
 #include "shop/ManageForm.h"
+#include "shop/Text.h"
 
 #include "shop/Text.h"
 
@@ -12,10 +13,10 @@
 namespace ss::shop {
 namespace {
 
-constexpr std::string_view kInputHint = "改价与件数只写数字：价格留空表示这一侧不做生意，但至少要留一侧价格（停业请用下面的按钮）";
+constexpr std::string_view kInputHint = "shop.form.manage.hint";
 
 constexpr std::string_view kBothEmptyReason =
-    "至少要留一侧价格，否则这块牌就不再是商店牌（箱子会失去保护）。想关店请拆牌，或者停业（牌子与库存都留着）";
+    "shop.form.manage.need_one_price";
 
 /// 输入框里那个价格：只认「空」或「一个非负整数」。
 struct PriceInput {
@@ -28,11 +29,13 @@ struct PriceInput {
 /// 改哪一侧的价格。两侧的解析与校验一模一样，只有提示里的名字与落到哪个字段不同。
 enum class PriceSide { Buy, Sell };
 
-constexpr std::string_view priceLabelOf(PriceSide side) { return side == PriceSide::Buy ? "买入价" : "卖出价"; }
+constexpr std::string_view priceLabelOf(PriceSide side) { return side == PriceSide::Buy ? "shop.form.buy_price" : "shop.form.sell_price"; }
 
 /// 某一侧价格写错了。两侧共用这句话，只有名字不同。
-std::string notAnIntegerReason(PriceSide side) {
-    return std::string{priceLabelOf(side)} + "只能写非负整数（例如 10），或者留空表示这一侧不做生意";
+Text notAnIntegerReason(PriceSide side) {
+    return text::keyed("shop.manage.price_not_integer", Tone::Default, {
+        text::keyed(std::string{priceLabelOf(side)})
+    });
 }
 
 /// 空串（含只有空白）= 没填。
@@ -59,7 +62,7 @@ PriceInput parsePriceInput(std::string_view text) {
 /// 只有两个价格函数用它：改件数造不出这两种状态（件数一个字段都不碰价）。
 ManageEdit validatedEdit(ShopSpec next, ShopSignConfig const& config) {
     if (!next.buyPrice && !next.sellPrice) {
-        return {.spec = std::nullopt, .error = std::string{kBothEmptyReason}};
+        return {.spec = std::nullopt, .error = text::keyed(std::string{kBothEmptyReason})};
     }
     if (sellPriceHigherThanBuy(next.buyPrice, next.sellPrice, config)) {
         return {.spec = std::nullopt, .error = sellPriceAboveBuyMessage(next.buyPrice, next.sellPrice)};
@@ -69,7 +72,7 @@ ManageEdit validatedEdit(ShopSpec next, ShopSignConfig const& config) {
 
 /// `applyManageEdit` 里的一格价格：没填（`nullopt`）= 这次不改这一侧，跳过；
 /// 填了就解析并写进 `next`。返回空 = 接着干；有字符串 = 直接交给玩家的原因（输入不合法）。
-std::optional<std::string> applyPrice(
+std::optional<Text> applyPrice(
     std::optional<std::string> const& input,
     PriceSide                         side,
     ShopSpec&                         next
@@ -85,41 +88,38 @@ std::optional<std::string> applyPrice(
     return std::nullopt;
 }
 
-/// 管理表单上一个带当前值的按钮：`改买入价（现在 $ 10 / 份）`。
-/// `emptyWord` 是这一侧现在不做生意时的说法（买入价「不出售」、卖出价「不收购」）。
-std::string priceButtonLabel(
-    std::string_view            title,
-    std::optional<std::int64_t> price,
-    std::string const&          currencySymbol,
-    std::string_view            emptyWord
-) {
-    std::string label{title};
-    label += "（现在";
-    label += price ? moneyText(currencySymbol, *price) + " / 份" : std::string{emptyWord};
-    label += "）";
-    return label;
+/// 管理表单上的一个按钮：只写标题。
+///
+/// 以前标题后面跟一句 `（现在 $ 10 / 份）`，但顶层正文刚刚列过买入价与卖出价——
+/// 同一个数字在按钮上再说一遍，读的人还得比对两次才能确定是同一个。
+Text priceButtonLabel(std::string_view title) {
+    return text::keyed(std::string{title}, Tone::Default);
 }
 
 } // namespace
 
-std::string shopManageFormContent(ShopInfoData const& data, bool waxed) {
-    std::string content = shopFormContent(data);
+std::vector<Text> shopManageFormContent(ShopInfoData const& data, bool waxed) {
+    auto lines = shopFormContent(data);
+    // 管理表单在商店信息下面接一段「怎么改」，用同一条分隔线切开，别让提示混进价格里。
+    lines.push_back(text::section(text::keyed("shop.form.section.manage", Tone::Value)));
     if (waxed) {
         // 蜡不可逆（DESIGN §9.2）：不写这句，店主会以为改价彻底没路了。
-        appendLine(content, "这块牌上了蜡：手写编辑仍被锁，这里可以直接改");
+        lines.push_back(text::muted(text::keyed("shop.form.manage.waxed")));
     }
-    appendLine(content, std::string{kInputHint});
-    return content;
+    lines.push_back(text::muted(text::keyed(std::string{kInputHint})));
+    return lines;
 }
 
 std::vector<ShopFormButton> shopManageFormButtons(ShopInfoData const& data) {
     return {
-        {priceButtonLabel("改买入价", data.buyPrice, data.currencySymbol, "不出售"), ShopFormAction::ManageBuyPrice},
-        {priceButtonLabel("改卖出价", data.sellPrice, data.currencySymbol, "不收购"), ShopFormAction::ManageSellPrice},
-        {"改每份件数（现在 " + std::to_string(data.amountPerUnit) + " 个）", ShopFormAction::ManageAmount},
+        {priceButtonLabel("shop.manage.button.buy_price"), ShopFormAction::ManageBuyPrice},
+        {priceButtonLabel("shop.manage.button.sell_price"), ShopFormAction::ManageSellPrice},
+        {priceButtonLabel("shop.manage.button.amount"), ShopFormAction::ManageAmount},
         // 停业与恢复营业是同一个动作的两个方向，按当前状态只给一个：两个按钮同时挂着，
         // 店主得自己先想明白哪个才算话。
-        {data.closed ? "恢复营业" : "停业", ShopFormAction::ToggleClosed},
+        {data.closed ? text::keyed("shop.manage.button.reopen", Tone::Default)
+                     : text::keyed("shop.manage.button.close", Tone::Default),
+         ShopFormAction::ToggleClosed},
     };
 }
 

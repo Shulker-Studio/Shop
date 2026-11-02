@@ -1,4 +1,5 @@
 #include "mod/Shop.h"
+#include "mod/Text.h"
 #include "mod/ShopCommand.h"
 
 #include "mod/ContainerProtectionListener.h"
@@ -32,17 +33,19 @@ void Shop::refreshSignConfig() {
 }
 
 bool Shop::load() {
+    // **必须先载入词表**：下面 `loadShopConfig` 的每一条校验日志都走 `ui::msg`，
+    // 晚一步就是三十行 key id 打进控制台，而那一刻恰好是服主最需要读懂的时候。
+    // `loadTexts` 只读 `lang/` 目录，不依赖 `config.json`，所以可以在最前面调。
+    ui::loadTexts();
+
     auto& logger = getSelf().getLogger();
-    logger.debug("Loading...");
+    logger.debug(ui::msg("shop.log.lifecycle.loading"));
 
     mConfig = loadShopConfig(getSelf().getConfigDir() / "config.json", logger);
     if (!mConfig) {
         // 拒绝加载是有意的（带着半份配置跑更糟），但后果必须说清楚：
         // 不只是「不能交易」——保护那些 hook 也一条都不会挂，箱子完全不设防。
-        logger.error(
-            "配置不可用，Shop 拒绝加载：交易、商店箱保护、破坏防护、内容防偷**全部不会启用**。"
-            "修好 config.json 后重启服务器（模组没加载时连 /shop status 都没有）"
-        );
+        logger.error(ui::msg("shop.log.lifecycle.refused"));
         return false;
     }
     refreshSignConfig();
@@ -50,11 +53,15 @@ bool Shop::load() {
 }
 
 std::optional<std::string> Shop::reloadConfig() {
+    // 这里**故意不重读 `lang/`**：`ll::i18n::I18n` 是全局单例，`load(path)` 对已载入
+    // locale 是覆盖还是追加、失败时会不会留下半份词表，LeviLamina 的头文件里只有声明，
+    // 没有可查的实现。在没有实机验证之前，不拿一条"改完语言文件 /shop reload 就生效"
+    // 的承诺去换一次可能半坏的热重载——语言文件是发布产物，改它就重启/`/ll reload`。
     auto& logger = getSelf().getLogger();
     auto  loaded = loadShopConfig(getSelf().getConfigDir() / "config.json", logger);
     if (!loaded) {
         // 保持旧配置不动：这是本函数唯一一条重要规则（见头文件）。
-        return "新配置无效，已保留当前配置（原因见控制台）";
+        return "shop.command.reload.failed";
     }
 
     // 原地赋值而不是换对象：所有现取 `config()` 指针的地方（hook、监听器）继续有效。
@@ -70,19 +77,22 @@ std::optional<std::string> Shop::reloadConfig() {
     resetEconomy();
     initEconomyService(*mConfig);
 
-    logger.info(
-        "配置已重新读取：{}（maxShopAmount={}、economy.backend={}、shopTaxRate={}、流水{}）",
-        (getSelf().getConfigDir() / "config.json").string(),
-        mConfig->maxShopAmount,
-        mConfig->economy.backend,
-        mConfig->tax.shopTaxRate,
-        mConfig->transactionLog.enabled ? "开" : "关"
+    logger.info(ui::msg(
+            "shop.log.lifecycle.reloaded",
+            (getSelf().getConfigDir() / "config.json").string(),
+            mConfig->maxShopAmount,
+            mConfig->economy.backend,
+            mConfig->tax.shopTaxRate,
+            ui::plain(text::keyed(
+                mConfig->transactionLog.enabled ? "shop.log.config.log.on" : "shop.log.config.log.off"
+            ))
+        )
     );
     return std::nullopt;
 }
 
 bool Shop::enable() {
-    getSelf().getLogger().debug("Enabling...");
+    getSelf().getLogger().debug(ui::msg("shop.log.lifecycle.enabling"));
     if (mConfig) {
         initTradeService(*mConfig);
         // 经济后端也是懒解析：现在世界往往还没起来，所以这里只挂启动监听 + 打税告警。
@@ -110,17 +120,14 @@ bool Shop::enable() {
 }
 
 bool Shop::disable() {
-    getSelf().getLogger().debug("Disabling...");
+    getSelf().getLogger().debug(ui::msg("shop.log.lifecycle.disabling"));
     unregisterContentProtectionHooks();
     unregisterDestructionProtectionHooks();
     unregisterContainerProtectionListener();
     unregisterSignInteractListener();
     unregisterSignEditListener();
     if (auto const frozen = frozenTradeCount(); frozen > 0) {
-        getSelf().getLogger().warn(
-            "模组正在卸载，但还有 {} 对「玩家 + 商店」处于冻结状态（补偿失败、尚未人工核对）。"
-            "冻结记录不随重载清除，进程退出后才会消失；请在重启前把日志里的 fatal 记录核一遍",
-            frozen
+        getSelf().getLogger().warn(ui::msg("shop.log.lifecycle.frozen_on_disable", frozen)
         );
     }
     resetTradeService();

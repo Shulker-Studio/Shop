@@ -1,5 +1,9 @@
 #include "mod/LegacyMoneyEconomy.h"
 
+#include "shop/Text.h"
+
+#include "mod/Text.h"
+
 #include "mod/Shop.h"
 
 #include <windows.h>
@@ -67,9 +71,7 @@ bool LegacyMoneyEconomy::modulePresent() const {
     }
     if (!mMissingWarned) {
         mMissingWarned = true;
-        Shop::getInstance().getSelf().getLogger().error(
-            "LegacyMoney.dll 已经不在进程里了（被卸载？）：经济后端随之失效，"
-            "余额一律读不到、转账一律拒绝"
+        Shop::getInstance().getSelf().getLogger().error(ui::msg("shop.log.economy.legacy_module_gone")
         );
     }
     return false;
@@ -113,8 +115,7 @@ void LegacyMoneyEconomy::warnNegativeOnce() const {
     }
     mNegativeWarned = true;
     // LegacyMoney 永远拒绝负余额（`LLMoney_Trans` 里先比余额再扣），只能按 false 处理。
-    Shop::getInstance().getSelf().getLogger().debug(
-        "LegacyMoney 不支持 allowNegative，已按 false 处理（商店不用这个参数）"
+    Shop::getInstance().getSelf().getLogger().debug(ui::msg("shop.log.economy.legacy_no_negative")
     );
 }
 
@@ -144,14 +145,14 @@ economy::TransferResult LegacyMoneyEconomy::transfer(
     }
     if (!modulePresent()) {
         // 与「被拒绝」分开说：这一笔一分钱都没动，原因是后端整个不在了。
-        return {economy::TransferStatus::Rejected, "LegacyMoney.dll 已经不在进程里了，这一笔没有动账"};
+        return {economy::TransferStatus::Rejected, text::keyed("shop.economy.reject.legacy_module_gone")};
     }
 
     // 空付款方 = 从系统付款（管理员店的卖出方向，DESIGN §7.4）：`LLMoney_Add` 就是凭空记账。
     // 它不进 `LLMoney_Trans`：Trans 从空 XUID 扣款只会失败。
     if (from.empty()) {
         if (!mExports.add(to, amount)) {
-            return {economy::TransferStatus::Rejected, "LegacyMoney 没能把钱记到收款方账上"};
+            return {economy::TransferStatus::Rejected, text::keyed("shop.economy.reject.legacy_add_failed")};
         }
         return {economy::TransferStatus::Ok, {}};
     }
@@ -162,7 +163,7 @@ economy::TransferResult LegacyMoneyEconomy::transfer(
     if (!mExports.trans(from, to, amount, std::string{})) {
         return {
             economy::TransferStatus::Rejected,
-            "LegacyMoney 拒绝了这笔转账（余额不足、被其他插件拦下，或它自己的数据库出错）"
+            text::keyed("shop.economy.reject.legacy_trans_failed")
         };
     }
     return {economy::TransferStatus::Ok, {}};

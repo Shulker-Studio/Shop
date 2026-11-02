@@ -1,6 +1,7 @@
 #pragma once
 
 #include "shop/SignProtection.h"
+#include "shop/Text.h"
 #include "shop/TradePlan.h"
 
 #include <cstdint>
@@ -40,7 +41,7 @@ struct ShopInfoData {
     std::optional<std::int64_t> balance;
     /// 这家店现在不能交易的原因（店主收不了钱、或服务器没有可用经济后端）。
     /// 非空时不给买卖按钮，正文直接写这条原因，免得玩家点进去才被拒（DESIGN §8.5）。
-    std::string unavailableReason;
+    Text        unavailableReason;
     /// 货币符号。只由调用方从 `economy.currencySymbol` 填进来，这里不留默认值：
     /// 默认值只能有一处定义，否则配置改了表单不跟着变。
     std::string currencySymbol;
@@ -53,13 +54,13 @@ std::string moneyText(std::string const& symbol, std::int64_t amount);
 ///
 /// 表单正文里凡是显示「库存 / 还剩几份」的地方都走它：一处写「无限」、一处写数字
 /// 是最容易被读成「其实只剩几份」的两种真相（DESIGN §10.1 D2）。
-std::string stockUnitsText(StockView const& stock);
+Text stockUnitsText(StockView const& stock);
 
 /// 收货方空间的文本：`7 份` / `无限（管理员店，永远收得下）`。
 ///
 /// 与 `stockUnitsText` 共用同一个「有限写份数、无限不编数字」的实现，只有无限时那句括号里
 /// 的解释不同——卖出方向的「无限」是**收得下**（货被销毁），不是「有货」。
-std::string boxRoomText(StockView const& stock);
+Text boxRoomText(StockView const& stock);
 
 /// 这个方向上「一份」的价格：买入看 `buyPrice`，卖出看 `sellPrice`（DESIGN §10.1）。
 ///
@@ -70,37 +71,37 @@ std::optional<std::int64_t> unitPriceOf(ShopInfoData const& data, TradeDirection
 void appendLine(std::string& content, std::string const& line);
 
 /// 店主收不了钱的原因（DESIGN §8.5）。表单与交易提示共用这一句，别写成两种说法。
-std::string ownerOfflineReason();
+Text ownerOfflineReason();
 
 /// 读不到店主余额的原因。
 ///
 /// 「店主余额是 0」与「读不到店主余额」是两件事（DESIGN §8.2）：前者是正常的
 /// 「钱不够」，后者是后端出问题或账户不可记账。混成一句会把后者误报成
 /// 「店主资金不足」，玩家申诉时无处可查。
-std::string ownerFundsUnknownReason();
+Text ownerFundsUnknownReason();
 
 /// 读不到**玩家自己**的余额的原因。买入要扣钱、卖出要收钱，两边的说法一样：
 /// 这不是「你没钱」，而是后端没给出这个账户的余额（DESIGN §8.2）。
-std::string playerFundsUnknownReason();
+Text playerFundsUnknownReason();
 
 /// 没有可用经济后端的原因。
-std::string noEconomyReason();
+Text noEconomyReason();
 
 /// 后端当不了系统账户的原因（DESIGN §7.4）。
 ///
 /// 管理员店的资金侧是系统账户（买入销毁、卖出凭空记账），靠后端的能力声明
 /// `supportsSystemAccount()`；声明不了的就不能开买卖按钮，也不能在提交阶段放行。
-std::string noSystemAccountReason();
+Text noSystemAccountReason();
 
 /// 商店税没收到时的原因（DESIGN §8.9）。`detail` 是后端给的细节，前缀只写一次。
-std::string taxChargeFailureReason(std::string const& detail);
+Text taxChargeFailureReason(Text const& detail);
 
 /// 收商店税时钱已经动过且没能还原（§10.2 第 8 步的严重错误）。
-std::string taxBrokenReason(std::string const& detail);
+Text taxBrokenReason(Text const& detail);
 
 /// 普通店的商店箱空了的原因：没东西可卖，也看不出这家店收什么（商品权威是第一个非空槽位，DESIGN §5.3）。
 /// 牌面第 4 行仍作商品名显示（那是旧记录），所以这里只讲「现在没法交易」。
-std::string emptyBoxReason();
+Text emptyBoxReason();
 
 /// 盒子空了时的不可交易原因。**两条原因不许合并**（票 03）：
 ///
@@ -111,16 +112,16 @@ std::string emptyBoxReason();
 ///
 /// 判据在 mod 层是同一句「第一个非空槽位不存在」（`firstProductStack`），所以这里按店的性质分叉，
 /// 而不是让调用方各自拼一句文案。
-std::string unavailableReasonForEmptyBox(bool adminShop);
+Text unavailableReasonForEmptyBox(bool adminShop);
 
 /// 表单标题：普通店 `<店主> 的商店`，管理员店 `管理员商店`（DESIGN §10.1）。
-std::string shopFormTitle(ShopInfoData const& data);
+Text shopFormTitle(ShopInfoData const& data);
 
 /// 表单正文的每一行：店主、商品、每份件数、买入价、卖出价、可成交份数、余额。
-std::vector<std::string> shopInfoLines(ShopInfoData const& data);
+std::vector<Text> shopInfoLines(ShopInfoData const& data);
 
 /// 表单正文：`shopInfoLines` 用换行符拼起来，行尾不留换行。
-std::string shopFormContent(ShopInfoData const& data);
+std::vector<Text> shopFormContent(ShopInfoData const& data);
 
 /// 这个表单给谁看：游客/买家，还是店主/OP。
 enum class ShopFormRole : std::uint8_t { Visitor, Manager };
@@ -151,7 +152,7 @@ enum class ShopFormAction : std::uint8_t {
 };
 
 struct ShopFormButton {
-    std::string    label;
+    Text           label;
     ShopFormAction action = ShopFormAction::Buy;
 };
 

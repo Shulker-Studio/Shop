@@ -4,6 +4,28 @@
 
 ## 语言
 
+### 文本与本地化
+
+**文本键**:
+玩家可见文本的语义化英文 id（`shop.form.owner`、`shop.trade.not_enough_funds`），
+住在 `lang/<locale>.json` 里。不是中文原文——中文也是从词表取的。
+_Avoid_: 翻译 key、message id、字面量
+
+**文本层**:
+`src/shop` 里产出 `Text` 树的那一层（`shop/Text.h`：`keyed` / `lit` / `field` / `sequence`）。
+它不拼字符串、不依赖 `ll/`；把树渲染成带颜色的文本是注入的 renderer 的事。
+_Avoid_: i18n 模块、语言包
+
+**渲染器**:
+把 `Text` 树变成玩家可见字符串的函数（查模板、填 `{}`、上色）。
+生产实现是 `mod/Text.cpp`（`ll::i18n` + `fmt`），测试实现住在 `tests/main.cpp`。
+_Avoid_: 格式化器、formatter
+
+**语言文件**:
+`lang/zh_CN.json` 这类文件，文件名就是 locale code，由 `Mod::getLangDir()` 定位。
+缺文件时文本键原样显示，不会让任何功能失效。
+_Avoid_: 翻译文件、词典（"词典"在本项目里专指玩家名/商品名的展示文本）
+
 ### 商店与容器
 
 **商店牌**:

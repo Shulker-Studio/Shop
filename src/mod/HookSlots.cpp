@@ -3,6 +3,7 @@
 #include "mod/Shop.h"
 
 #include <iterator>
+#include "mod/Text.h"
 
 namespace ss::shop {
 
@@ -16,10 +17,7 @@ void attachHooks(std::span<HookSlot> slots) {
         slot.lastReturn = status; // 只给 `/shop status` 看，不拿来判成败
         slot.attempted  = true;    // 永不回退：解绑之后仍能看出「这一条曾经挂过」
         if (status != 0) {
-            Shop::getInstance().getSelf().getLogger().warn(
-                "hook 注册返回 {}（{}），若对应行为无效即为符号漂移",
-                status,
-                slot.name
+            Shop::getInstance().getSelf().getLogger().warn(ui::msg("shop.log.hook.attach_returned", status, slot.name)
             );
         }
         slot.attached = true;

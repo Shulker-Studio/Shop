@@ -1,4 +1,5 @@
 #include "shop/TradePlan.h"
+#include "../TextHelper.h"
 
 #include <doctest/doctest.h>
 #include <limits>
@@ -9,7 +10,7 @@ using namespace ss::shop;
 
 /// 一价 10、一份 64 件、余额充足、商店箱够货、背包放得下的正常买入。
 ///
-/// `TradeRequest` 买卖共用，角色由调用方装：买入时 `goodsUnits` 是商店箱、
+/// `TradeRequest` 买卖共用，角色由调用方装： 买入时 `goodsUnits` 是商店箱、
 /// `roomUnits` 是背包、`payerFunds` 是买家余额（见 `TradePlan.h` 的对照表）。
 TradeRequest soundBuy() {
     TradeRequest request;
@@ -24,7 +25,7 @@ TradeRequest soundBuy() {
     return request;
 }
 
-/// 同样的形状，卖出的角色反过来：货是玩家手里、收货方是商店箱、付款方是店主。
+/// 同样的形状，卖出的角色反过来： 货是玩家手里、收货方是商店箱、付款方是店主。
 TradeRequest soundSell() {
     TradeRequest request;
     request.requested     = 1;
@@ -40,7 +41,7 @@ TradeRequest soundSell() {
 
 } // namespace
 
-TEST_CASE("买一份：成交份数、件数、金额三者一致") {
+TEST_CASE("买一份: 成交份数、件数、金额三者一致") {
     auto const decision = planTrade(soundBuy());
 
     REQUIRE(decision.ok());
@@ -49,7 +50,7 @@ TEST_CASE("买一份：成交份数、件数、金额三者一致") {
     CHECK(decision.plan->total == std::int64_t{10});
 }
 
-TEST_CASE("买多份：总价 = 单价 × 份数，恒为整数") {
+TEST_CASE("买多份: 总价 = 单价 × 份数，恒为整数") {
     auto request       = soundBuy();
     request.requested  = 4;
     request.payerFunds = 40;
@@ -61,7 +62,7 @@ TEST_CASE("买多份：总价 = 单价 × 份数，恒为整数") {
     CHECK(decision.plan->total == std::int64_t{40});
 }
 
-TEST_CASE("买：余额不足时整笔拒绝，不给出半份方案") {
+TEST_CASE("买: 余额不足时整笔拒绝，不给出半份方案") {
     auto request       = soundBuy();
     request.payerFunds = 5;
 
@@ -70,7 +71,7 @@ TEST_CASE("买：余额不足时整笔拒绝，不给出半份方案") {
     CHECK(decision.rejection == TradeRejection::NotEnoughFunds);
 }
 
-TEST_CASE("买：箱子空了报缺货，不报缺钱") {
+TEST_CASE("买: 箱子空了报缺货，不报缺钱") {
     auto request       = soundBuy();
     request.goodsUnits = 0;
     request.payerFunds = 0;
@@ -80,7 +81,7 @@ TEST_CASE("买：箱子空了报缺货，不报缺钱") {
     CHECK(decision.rejection == TradeRejection::NotEnoughGoods);
 }
 
-TEST_CASE("买：背包放不下报收货方装不下") {
+TEST_CASE("买: 背包放不下报收货方装不下") {
     auto request      = soundBuy();
     request.roomUnits = 0;
 
@@ -89,7 +90,7 @@ TEST_CASE("买：背包放不下报收货方装不下") {
     CHECK(decision.rejection == TradeRejection::NoRoomToReceive);
 }
 
-TEST_CASE("买：部分成交时按实际份数成交，金额按份数重算") {
+TEST_CASE("买: 部分成交时按实际份数成交，金额按份数重算") {
     auto request       = soundBuy();
     request.requested  = 4;
     request.payerFunds = 100;
@@ -102,7 +103,7 @@ TEST_CASE("买：部分成交时按实际份数成交，金额按份数重算") 
     CHECK(decision.plan->total == std::int64_t{20});
 }
 
-TEST_CASE("买：余额只够 3 份时按 3 份成交") {
+TEST_CASE("买: 余额只够 3 份时按 3 份成交") {
     auto request       = soundBuy();
     request.requested  = 4;
     request.payerFunds = 35;
@@ -113,7 +114,7 @@ TEST_CASE("买：余额只够 3 份时按 3 份成交") {
     CHECK(decision.plan->total == std::int64_t{30});
 }
 
-TEST_CASE("买：背包只放得下 1 份时按 1 份成交") {
+TEST_CASE("买: 背包只放得下 1 份时按 1 份成交") {
     auto request      = soundBuy();
     request.requested = 4;
     request.roomUnits = 1;
@@ -124,7 +125,7 @@ TEST_CASE("买：背包只放得下 1 份时按 1 份成交") {
     CHECK(decision.plan->items == 64);
 }
 
-TEST_CASE("关掉部分成交：买的三条上限各报各的原因") {
+TEST_CASE("关掉部分成交: 买的三条上限各报各的原因") {
     auto request         = soundBuy();
     request.requested    = 4;
     request.allowPartial = false;
@@ -147,7 +148,7 @@ TEST_CASE("关掉部分成交：买的三条上限各报各的原因") {
     CHECK(planTrade(overCap).rejection == TradeRejection::OverUnitLimit);
 }
 
-TEST_CASE("关掉部分成交：刚好够时不误伤") {
+TEST_CASE("关掉部分成交: 刚好够时不误伤") {
     auto request         = soundBuy();
     request.requested    = 2;
     request.payerFunds   = 20;
@@ -161,7 +162,7 @@ TEST_CASE("关掉部分成交：刚好够时不误伤") {
     CHECK(decision.plan->total == std::int64_t{20});
 }
 
-TEST_CASE("店主离线：后端不支持离线记账就整笔拒绝（买卖都一样）") {
+TEST_CASE("店主离线: 后端不支持离线记账就整笔拒绝 (买卖都一样)") {
     auto buy        = soundBuy();
     buy.ownerOnline = false;
     CHECK(planTrade(buy).rejection == TradeRejection::OwnerOffline);
@@ -171,7 +172,7 @@ TEST_CASE("店主离线：后端不支持离线记账就整笔拒绝（买卖都
     CHECK(planTrade(sell).rejection == TradeRejection::OwnerOffline);
 }
 
-TEST_CASE("店主离线：后端支持离线记账照常成交") {
+TEST_CASE("店主离线: 后端支持离线记账照常成交") {
     auto request                   = soundBuy();
     request.ownerOnline            = false;
     request.backendSupportsOffline = true;
@@ -181,7 +182,7 @@ TEST_CASE("店主离线：后端支持离线记账照常成交") {
     CHECK(decision.plan->units == 1);
 }
 
-TEST_CASE("免费商店：钱不是限制，金额为 0") {
+TEST_CASE("免费商店: 钱不是限制，金额为 0") {
     auto request       = soundBuy();
     request.unitPrice  = 0;
     request.payerFunds = 0;
@@ -191,7 +192,7 @@ TEST_CASE("免费商店：钱不是限制，金额为 0") {
     CHECK(decision.plan->total == std::int64_t{0});
 }
 
-TEST_CASE("非法输入：请求份数、份价、每份件数都必须合法") {
+TEST_CASE("非法输入: 请求份数、份价、每份件数都必须合法") {
     auto request      = soundBuy();
     request.requested = 0;
     CHECK(planTrade(request).rejection == TradeRejection::InvalidRequest);
@@ -221,41 +222,41 @@ TEST_CASE("件数溢出 int 时拒绝，不给出回绕的件数") {
 }
 
 TEST_CASE("每条拒绝原因都有玩家看得懂的提示") {
-    CHECK_FALSE(tradeRejectionMessage(TradeDirection::Buy, TradeRejection::NotEnoughGoods).empty());
-    CHECK_FALSE(tradeRejectionMessage(TradeDirection::Buy, TradeRejection::NotEnoughFunds).empty());
-    CHECK_FALSE(tradeRejectionMessage(TradeDirection::Buy, TradeRejection::NoRoomToReceive).empty());
-    CHECK_FALSE(tradeRejectionMessage(TradeDirection::Buy, TradeRejection::OwnerOffline).empty());
-    CHECK_FALSE(tradeRejectionMessage(TradeDirection::Buy, TradeRejection::InvalidRequest).empty());
-    CHECK_FALSE(tradeRejectionMessage(TradeDirection::Buy, TradeRejection::ShopClosed).empty());
-    CHECK(tradeRejectionMessage(TradeDirection::Buy, TradeRejection::None).empty());
+    CHECK_FALSE(text::empty(tradeRejectionMessage(TradeDirection::Buy, TradeRejection::NotEnoughGoods)));
+    CHECK_FALSE(text::empty(tradeRejectionMessage(TradeDirection::Buy, TradeRejection::NotEnoughFunds)));
+    CHECK_FALSE(text::empty(tradeRejectionMessage(TradeDirection::Buy, TradeRejection::NoRoomToReceive)));
+    CHECK_FALSE(text::empty(tradeRejectionMessage(TradeDirection::Buy, TradeRejection::OwnerOffline)));
+    CHECK_FALSE(text::empty(tradeRejectionMessage(TradeDirection::Buy, TradeRejection::InvalidRequest)));
+    CHECK_FALSE(text::empty(tradeRejectionMessage(TradeDirection::Buy, TradeRejection::ShopClosed)));
+    CHECK(text::empty(tradeRejectionMessage(TradeDirection::Buy, TradeRejection::None)));
 }
 
-TEST_CASE("份数天花板：maxShopAmount 也进上限（DESIGN §10.1 第 3 步）") {
+TEST_CASE("份数天花板: maxShopAmount 也进上限 (DESIGN §10.1 第 3 步)") {
     auto request      = soundBuy();
     request.requested = 10;
     request.maxUnits  = 2;
 
-    // 允许部分成交：按天花板成交 2 份
+    // 允许部分成交： 按天花板成交 2 份
     auto decision = planTrade(request);
     REQUIRE(decision.ok());
     CHECK(decision.plan->units == 2);
     CHECK(decision.plan->total == std::int64_t{20});
 
-    // 不允许：整笔拒绝，别缩水成交
+    // 不允许： 整笔拒绝，别缩水成交
     request.allowPartial = false;
     CHECK_FALSE(planTrade(request).ok());
 }
 
-TEST_CASE("份数天花板：不额外限制时与三条上限的最小值一致") {
+TEST_CASE("份数天花板: 不额外限制时与三条上限的最小值一致") {
     CHECK(maxTradeUnits(100, 5, 4, 10, 1000) == 4);
     CHECK(maxTradeUnits(2, 5, 4, 10, 1000) == 2);
     CHECK(maxTradeUnits(100, 5, 4, 10, 35) == 3);
     CHECK(maxTradeUnits(100, 0, 4, 10, 1000) == 0);
     CHECK(maxTradeUnits(0, 5, 4, 10, 1000) == 0);
-    CHECK(maxTradeUnits(100, 5, 4, 0, 0) == 4); // 免费店：钱不是限制
+    CHECK(maxTradeUnits(100, 5, 4, 0, 0) == 4); // 免费店： 钱不是限制
 }
 
-TEST_CASE("卖一份：份数、件数、收入三者一致") {
+TEST_CASE("卖一份: 份数、件数、收入三者一致") {
     auto const decision = planTrade(soundSell());
 
     REQUIRE(decision.ok());
@@ -264,13 +265,13 @@ TEST_CASE("卖一份：份数、件数、收入三者一致") {
     CHECK(decision.plan->total == std::int64_t{5});
 }
 
-TEST_CASE("卖：手里没有这种物品就整笔拒绝") {
+TEST_CASE("卖: 手里没有这种物品就整笔拒绝") {
     auto request       = soundSell();
     request.goodsUnits = 0;
     CHECK(planTrade(request).rejection == TradeRejection::NotEnoughGoods);
 }
 
-TEST_CASE("卖：店主资金不足时按部分成交，金额按实际份数重算") {
+TEST_CASE("卖: 店主资金不足时按部分成交，金额按实际份数重算") {
     auto request       = soundSell();
     request.requested  = 4;
     request.payerFunds = 25; // 只付得起 2 份（一份 10 元的店）
@@ -285,14 +286,14 @@ TEST_CASE("卖：店主资金不足时按部分成交，金额按实际份数重
     CHECK(decision.plan->total == std::int64_t{20});
 }
 
-TEST_CASE("卖：店主真的 0 元时报缺钱，与「读不到店主余额」无关") {
+TEST_CASE("卖: 店主真的 0 元时报缺钱，与「读不到店主余额」无关") {
     auto request       = soundSell();
     request.unitPrice  = 10;
     request.payerFunds = 0;
     CHECK(planTrade(request).rejection == TradeRejection::NotEnoughFunds);
 }
 
-TEST_CASE("卖：商店箱装不下时按实际能装下的份数成交") {
+TEST_CASE("卖: 商店箱装不下时按实际能装下的份数成交") {
     auto request       = soundSell();
     request.requested  = 4;
     request.unitPrice  = 10;
@@ -334,24 +335,24 @@ TEST_CASE("关掉部分成交时，卖出的三种不够要分开报") {
 }
 
 TEST_CASE("同一个拒绝原因在两个方向上的说法不一样") {
-    CHECK(tradeRejectionMessage(TradeDirection::Buy, TradeRejection::NotEnoughGoods) == "商店的货不够");
-    CHECK(tradeRejectionMessage(TradeDirection::Sell, TradeRejection::NotEnoughGoods) == "你手里没有这么多");
-    CHECK(tradeRejectionMessage(TradeDirection::Buy, TradeRejection::NotEnoughFunds) == "你的钱不够");
-    CHECK(tradeRejectionMessage(TradeDirection::Sell, TradeRejection::NotEnoughFunds) == "店主的钱不够，付不起这一笔");
-    CHECK(tradeRejectionMessage(TradeDirection::Buy, TradeRejection::NoRoomToReceive) == "背包放不下这些物品");
-    CHECK(tradeRejectionMessage(TradeDirection::Sell, TradeRejection::NoRoomToReceive) == "商店箱装不下这些物品");
-    CHECK(tradeRejectionMessage(TradeDirection::Buy, TradeRejection::OverUnitLimit).find("买") != std::string::npos);
-    CHECK(tradeRejectionMessage(TradeDirection::Sell, TradeRejection::OverUnitLimit).find("卖") != std::string::npos);
-    // 店主离线的说法两边一样：那不是份数问题
+    CHECK(plainText(tradeRejectionMessage(TradeDirection::Buy, TradeRejection::NotEnoughGoods)) == "商店的货不够");
+    CHECK(plainText(tradeRejectionMessage(TradeDirection::Sell, TradeRejection::NotEnoughGoods)) == "你手里没有这么多");
+    CHECK(plainText(tradeRejectionMessage(TradeDirection::Buy, TradeRejection::NotEnoughFunds)) == "你的钱不够");
+    CHECK(plainText(tradeRejectionMessage(TradeDirection::Sell, TradeRejection::NotEnoughFunds)) == "店主的钱不够，付不起这一笔");
+    CHECK(plainText(tradeRejectionMessage(TradeDirection::Buy, TradeRejection::NoRoomToReceive)) == "背包放不下这些物品");
+    CHECK(plainText(tradeRejectionMessage(TradeDirection::Sell, TradeRejection::NoRoomToReceive)) == "商店箱装不下这些物品");
+    CHECK(plainText(tradeRejectionMessage(TradeDirection::Buy, TradeRejection::OverUnitLimit)).find("买") != std::string::npos);
+    CHECK(plainText(tradeRejectionMessage(TradeDirection::Sell, TradeRejection::OverUnitLimit)).find("卖") != std::string::npos);
+    // 店主离线的说法两边一样： 那不是份数问题
     CHECK(
-        tradeRejectionMessage(TradeDirection::Buy, TradeRejection::OwnerOffline)
-        == tradeRejectionMessage(TradeDirection::Sell, TradeRejection::OwnerOffline)
+        plainText(tradeRejectionMessage(TradeDirection::Buy, TradeRejection::OwnerOffline))
+        == plainText(tradeRejectionMessage(TradeDirection::Sell, TradeRejection::OwnerOffline))
     );
-    CHECK(std::string{directionVerb(TradeDirection::Buy)} == "买");
-    CHECK(std::string{directionVerb(TradeDirection::Sell)} == "卖");
+    CHECK(std::string{directionVerb(TradeDirection::Buy)} == "shop.direction.buy");
+    CHECK(std::string{directionVerb(TradeDirection::Sell)} == "shop.direction.sell");
 }
 
-TEST_CASE("卖：件数溢出或输入非法时拒绝，不给出回绕的件数") {
+TEST_CASE("卖: 件数溢出或输入非法时拒绝，不给出回绕的件数") {
     auto request       = soundSell();
     request.requested  = std::numeric_limits<int>::max();
     request.goodsUnits = std::numeric_limits<int>::max();
@@ -365,7 +366,7 @@ TEST_CASE("卖：件数溢出或输入非法时拒绝，不给出回绕的件数
     CHECK(planTrade(noAmount).rejection == TradeRejection::InvalidRequest);
 }
 
-TEST_CASE("requireOwnerOnline=false：记分板不再因店主离线提前拒绝") {
+TEST_CASE("requireOwnerOnline=false: 记分板不再因店主离线提前拒绝") {
     auto request                   = soundBuy();
     request.ownerOnline            = false;
     request.backendSupportsOffline = false;
@@ -373,7 +374,7 @@ TEST_CASE("requireOwnerOnline=false：记分板不再因店主离线提前拒绝
     request.requireOwnerOnline = true;
     CHECK(planTrade(request).rejection == TradeRejection::OwnerOffline);
 
-    // 关掉之后不再提前拦：这一笔会走到动钱那一步，由「读不到账户」失败
+    // 关掉之后不再提前拦： 这一笔会走到动钱那一步，由「读不到账户」失败
     request.requireOwnerOnline = false;
     CHECK(planTrade(request).ok());
 }
@@ -391,8 +392,8 @@ TEST_CASE("requireOwnerOnline 对支持离线的后端没有意义") {
     }
 }
 
-TEST_CASE("税字段由方向与后端能力决定（mod 层不再自己写 direction == Sell）") {
-    // 支持销毁（LegacyMoney）：两个方向都要收，税只压在卖出方向的店主身上
+TEST_CASE("税字段由方向与后端能力决定 (mod 层不再自己写 direction == Sell)") {
+    // 支持销毁（LegacyMoney）： 两个方向都要收，税只压在卖出方向的店主身上
     auto const buy = tradeTaxPlan(TradeDirection::Buy, 0.1, /*backendSupportsMoneySink=*/true, /*adminShop=*/false);
     CHECK(buy.taxRate == doctest::Approx(0.1));
     CHECK_FALSE(buy.taxOnPayer);
@@ -401,19 +402,19 @@ TEST_CASE("税字段由方向与后端能力决定（mod 层不再自己写 dire
     CHECK(sell.taxRate == doctest::Approx(0.1));
     CHECK(sell.taxOnPayer);
 
-    // 收不走（记分板）：整笔不算，两个方向都归零
+    // 收不走（记分板）： 整笔不算，两个方向都归零
     for (auto direction : {TradeDirection::Buy, TradeDirection::Sell}) {
         auto const none = tradeTaxPlan(direction, 0.1, /*backendSupportsMoneySink=*/false, /*adminShop=*/false);
         CHECK(none.taxRate == 0.0);
         CHECK_FALSE(none.taxOnPayer);
     }
 
-    // 没开税：也归零
+    // 没开税： 也归零
     auto const off = tradeTaxPlan(TradeDirection::Sell, 0.0, true, /*adminShop=*/false);
     CHECK(off.taxRate == 0.0);
     CHECK_FALSE(off.taxOnPayer);
 
-    // 管理员店：对手方是系统账户，没有可抽的成交额（DESIGN §7.4），两个方向都归零
+    // 管理员店： 对手方是系统账户，没有可抽的成交额（DESIGN §7.4），两个方向都归零
     for (auto direction : {TradeDirection::Buy, TradeDirection::Sell}) {
         auto const admin = tradeTaxPlan(direction, 0.1, /*backendSupportsMoneySink=*/true, /*adminShop=*/true);
         CHECK(admin.taxRate == 0.0);
@@ -421,7 +422,7 @@ TEST_CASE("税字段由方向与后端能力决定（mod 层不再自己写 dire
     }
 }
 
-TEST_CASE("付款方含税成本率：只有税压在付款方身上时才是税率") {
+TEST_CASE("付款方含税成本率: 只有税压在付款方身上时才是税率") {
     auto request  = soundBuy();
     request.taxRate    = 0.1;
     request.taxOnPayer = false;
@@ -431,7 +432,7 @@ TEST_CASE("付款方含税成本率：只有税压在付款方身上时才是税
     CHECK(payerTaxRate(request) == doctest::Approx(0.1));
 }
 
-TEST_CASE("成交方案带出商店税：总额 × 税率向下取整") {
+TEST_CASE("成交方案带出商店税: 总额 × 税率向下取整") {
     // 买入方向也要算税。注意这条用例只覆盖 `planTrade`（需要 `request.taxRate` 非 0），
     // 「谁往 request 里填税率」由 `tradeTaxPlan` 那条用例钉住（`prepareCommon` 在 mod 层，测不到）。
     auto request      = soundBuy();
@@ -444,7 +445,7 @@ TEST_CASE("成交方案带出商店税：总额 × 税率向下取整") {
     CHECK(decision.plan->tax == std::int64_t{3});
 }
 
-TEST_CASE("税压在店主身上（买入）：买家的份数上限不受税影响") {
+TEST_CASE("税压在店主身上 (买入): 买家的份数上限不受税影响") {
     auto request      = soundBuy();
     request.requested = 4;
     request.unitPrice = 10;
@@ -460,7 +461,7 @@ TEST_CASE("税压在店主身上（买入）：买家的份数上限不受税影
     CHECK(decision.plan->tax == std::int64_t{4});
 }
 
-TEST_CASE("税压在付款方身上（卖出）：份数上限含税") {
+TEST_CASE("税压在付款方身上 (卖出): 份数上限含税") {
     auto request       = soundSell();
     request.unitPrice  = 10;
     request.payerFunds = 40; // 店主只够 3 份含税成本（33），不够 4 份（44）
@@ -477,7 +478,7 @@ TEST_CASE("税压在付款方身上（卖出）：份数上限含税") {
     CHECK(decision.plan->tax == std::int64_t{3});
 }
 
-TEST_CASE("税为 0 时方案里的税也是 0（不产生第二笔转账）") {
+TEST_CASE("税为 0 时方案里的税也是 0 (不产生第二笔转账)") {
     auto request      = soundBuy();
     request.requested = 3;
 
@@ -486,7 +487,7 @@ TEST_CASE("税为 0 时方案里的税也是 0（不产生第二笔转账）") {
     CHECK(decision.plan->tax == std::int64_t{0});
 }
 
-TEST_CASE("卖出方向：份数上限按含税成本算，店主不会多卖一份再失败") {
+TEST_CASE("卖出方向: 份数上限按含税成本算，店主不会多卖一份再失败") {
     auto request        = soundSell();
     request.unitPrice   = 10;
     request.payerFunds  = 100; // 店主余额
@@ -503,7 +504,7 @@ TEST_CASE("卖出方向：份数上限按含税成本算，店主不会多卖一
     CHECK(decision.plan->tax == std::int64_t{9});
 }
 
-TEST_CASE("停业：closed 压过所有上限与输入校验，返回 ShopClosed") {
+TEST_CASE("停业: closed 压过所有上限与输入校验，返回 ShopClosed") {
     auto request          = soundBuy();
     request.closed        = true;
     request.goodsUnits    = 0; // 缺货
@@ -515,19 +516,19 @@ TEST_CASE("停业：closed 压过所有上限与输入校验，返回 ShopClosed
     CHECK_FALSE(decision.ok());
     CHECK(decision.rejection == TradeRejection::ShopClosed);
 
-    // 连同「输入本身不合法」也压过：停业是整家店的状态，不是玩家填错了什么
+    // 连同「输入本身不合法」也压过： 停业是整家店的状态，不是玩家填错了什么
     auto broken          = request;
     broken.amountPerUnit = 0;
     CHECK(planTrade(broken).rejection == TradeRejection::ShopClosed);
 }
 
-TEST_CASE("停业：卖出方向同样拒绝") {
+TEST_CASE("停业: 卖出方向同样拒绝") {
     auto request   = soundSell();
     request.closed = true;
     CHECK(planTrade(request).rejection == TradeRejection::ShopClosed);
 }
 
-TEST_CASE("停业：恢复营业后一切照旧") {
+TEST_CASE("停业: 恢复营业后一切照旧") {
     auto request   = soundBuy();
     request.closed = false;
 
@@ -536,12 +537,12 @@ TEST_CASE("停业：恢复营业后一切照旧") {
     CHECK(decision.plan->units == 1);
 }
 
-TEST_CASE("停业：文案是「这家店暂停营业」，两个方向同一句") {
-    CHECK(tradeRejectionMessage(TradeDirection::Buy, TradeRejection::ShopClosed) == "这家店暂停营业");
-    CHECK(tradeRejectionMessage(TradeDirection::Sell, TradeRejection::ShopClosed) == "这家店暂停营业");
+TEST_CASE("停业: 文案是「这家店暂停营业」，两个方向同一句") {
+    CHECK(plainText(tradeRejectionMessage(TradeDirection::Buy, TradeRejection::ShopClosed)) == "这家店暂停营业");
+    CHECK(plainText(tradeRejectionMessage(TradeDirection::Sell, TradeRejection::ShopClosed)) == "这家店暂停营业");
 }
 
-TEST_CASE("无限库存：买 1 / 2 / 4 份都给得出来，库存项不参与上限") {
+TEST_CASE("无限库存: 买 1 / 2 / 4 份都给得出来，库存项不参与上限") {
     for (int const units : {1, 2, 4}) {
         auto request       = soundBuy();
         request.requested  = units;
@@ -557,7 +558,7 @@ TEST_CASE("无限库存：买 1 / 2 / 4 份都给得出来，库存项不参与�
     }
 }
 
-TEST_CASE("无限库存：自定义份数只看其余三个上限") {
+TEST_CASE("无限库存: 自定义份数只看其余三个上限") {
     auto request       = soundBuy();
     request.requested  = 7;
     request.goodsUnits = StockView::makeUnlimited();
@@ -571,7 +572,7 @@ TEST_CASE("无限库存：自定义份数只看其余三个上限") {
     CHECK(decision.plan->total == std::int64_t{70});
 }
 
-TEST_CASE("无限库存：余额不够仍然被拒") {
+TEST_CASE("无限库存: 余额不够仍然被拒") {
     auto request       = soundBuy();
     request.goodsUnits = StockView::makeUnlimited();
     request.payerFunds = 9; // 一份 10
@@ -579,7 +580,7 @@ TEST_CASE("无限库存：余额不够仍然被拒") {
     CHECK(planTrade(request).rejection == TradeRejection::NotEnoughFunds);
 }
 
-TEST_CASE("无限库存：单次上限（maxShopAmount）仍然生效") {
+TEST_CASE("无限库存: 单次上限 (maxShopAmount) 仍然生效") {
     auto request       = soundBuy();
     request.requested  = 5;
     request.goodsUnits = StockView::makeUnlimited();
@@ -596,7 +597,7 @@ TEST_CASE("无限库存：单次上限（maxShopAmount）仍然生效") {
     CHECK(planTrade(request).rejection == TradeRejection::OverUnitLimit);
 }
 
-TEST_CASE("无限库存：背包放不下仍然生效，而且是「装不下」不是「货不够」") {
+TEST_CASE("无限库存: 背包放不下仍然生效，而且是「装不下」不是「货不够」") {
     auto request       = soundBuy();
     request.requested  = 4;
     request.goodsUnits = StockView::makeUnlimited();
@@ -608,11 +609,11 @@ TEST_CASE("无限库存：背包放不下仍然生效，而且是「装不下」
     CHECK(decision.plan->units == 2);
 
     request.allowPartial = false;
-    // 库存无限时唯一的「收不了」原因是背包：不许报成缺货
+    // 库存无限时唯一的「收不了」原因是背包： 不许报成缺货
     CHECK(planTrade(request).rejection == TradeRejection::NoRoomToReceive);
 }
 
-TEST_CASE("无限库存：maxTradeUnits 不看库存项，其余上限照旧") {
+TEST_CASE("无限库存: maxTradeUnits 不看库存项，其余上限照旧") {
     auto const unlimited = StockView::makeUnlimited();
 
     CHECK(maxTradeUnits(100, unlimited, 4, 10, 1000) == 4);         // 收货方空间
@@ -623,7 +624,7 @@ TEST_CASE("无限库存：maxTradeUnits 不看库存项，其余上限照旧") {
     CHECK(maxTradeUnits(100, StockView::makeFinite(0), unlimited, 10, 1000) == 0); // 有限 0 份真的空
 }
 
-TEST_CASE("无限库存：模板箱有货也不靠「几份」说话，缺货不再是拒绝理由") {
+TEST_CASE("无限库存: 模板箱有货也不靠「几份」说话，缺货不再是拒绝理由") {
     auto request       = soundBuy();
     request.goodsUnits = StockView::makeUnlimited();
     request.roomUnits  = StockView::makeFinite(0); // 背包满
@@ -632,11 +633,11 @@ TEST_CASE("无限库存：模板箱有货也不靠「几份」说话，缺货不
     CHECK(planTrade(request).rejection == TradeRejection::NoRoomToReceive);
 }
 
-TEST_CASE("无限收购：商店箱空间不参与上限，玩家手里的货与店主余额照旧") {
+TEST_CASE("无限收购: 商店箱空间不参与上限，玩家手里的货与店主余额照旧") {
     auto request       = soundSell();
     request.requested  = 4;
     request.goodsUnits = StockView::makeFinite(10);   // 玩家手里有 10 份
-    request.roomUnits  = StockView::makeUnlimited();  // 管理员店：收进来就销毁，永远收得下
+    request.roomUnits  = StockView::makeUnlimited();  // 管理员店： 收进来就销毁，永远收得下
     request.payerFunds = 100;
 
     auto const decision = planTrade(request);
@@ -649,13 +650,13 @@ TEST_CASE("无限收购：商店箱空间不参与上限，玩家手里的货与
     REQUIRE(shortGoods.ok());
     CHECK(shortGoods.plan->units == 2);
 
-    // 店主余额也是硬的（管理员店没有这一项，普通店有）：9 块钱连一份（5）都付不起
+    // 店主余额也是硬的（管理员店没有这一项，普通店有）： 9 块钱连一份（5）都付不起
     request.goodsUnits = StockView::makeFinite(10);
     request.payerFunds = 4;
     CHECK(planTrade(request).rejection == TradeRejection::NotEnoughFunds);
 }
 
-TEST_CASE("无限收购：玩家手里没有货仍然被拒，「收得下」不能顶替「没有货」") {
+TEST_CASE("无限收购: 玩家手里没有货仍然被拒，「收得下」不能顶替「没有货」") {
     auto request       = soundSell();
     request.goodsUnits = StockView::makeFinite(0);
     request.roomUnits  = StockView::makeUnlimited();
@@ -664,7 +665,7 @@ TEST_CASE("无限收购：玩家手里没有货仍然被拒，「收得下」不
     CHECK(planTrade(request).rejection == TradeRejection::NotEnoughGoods);
 }
 
-TEST_CASE("无限收购：关闭部分成交时不会被报成「商店箱装不下」") {
+TEST_CASE("无限收购: 关闭部分成交时不会被报成「商店箱装不下」") {
     auto request         = soundSell();
     request.requested    = 4;
     request.goodsUnits   = StockView::makeFinite(2);
@@ -674,7 +675,7 @@ TEST_CASE("无限收购：关闭部分成交时不会被报成「商店箱装不
     CHECK(planTrade(request).rejection == TradeRejection::NotEnoughGoods);
 }
 
-TEST_CASE("无限收购：maxTradeUnits 里箱空间那一项不存在") {
+TEST_CASE("无限收购: maxTradeUnits 里箱空间那一项不存在") {
     // 上限 = min(天花板 100, 手里的 10 份, 箱空间无限, 1000 / 5 = 200 份) = 10
     CHECK(maxTradeUnits(100, StockView::makeFinite(10), StockView::makeUnlimited(), 5, 1000) == 10);
     CHECK(maxTradeUnits(100, StockView::makeFinite(10), StockView::makeUnlimited(), 5, 1) == 0);

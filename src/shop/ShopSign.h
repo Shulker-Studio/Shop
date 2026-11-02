@@ -1,5 +1,7 @@
 #pragma once
 
+#include "shop/Text.h"
+
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -73,7 +75,7 @@ std::optional<int> parseAmountLine(std::string_view line, int maxAmount);
 ///
 /// 手写编辑（`src/mod/ShopService.cpp` 的 `messageFor`）与管理表单改件数共用这一句：
 /// 上限来自 `maxShopAmount`，改配置时两处一起变。
-std::string amountOutOfRangeMessage(int maxShopAmount);
+Text amountOutOfRangeMessage(int maxShopAmount);
 
 /// 解析第 3 行（价格）。
 ///
@@ -105,7 +107,7 @@ bool sellPriceHigherThanBuy(
 ///
 /// 给得出两侧价格时把号码念出来（管理表单：玩家刚在输入框里改了价）；
 /// 给不出时（手写编辑的解析失败）只说规则。
-std::string sellPriceAboveBuyMessage(std::optional<std::int64_t> buy, std::optional<std::int64_t> sell);
+Text sellPriceAboveBuyMessage(std::optional<std::int64_t> buy, std::optional<std::int64_t> sell);
 
 /// 管理员商店判定：第 1 行等于配置名，且编辑者是 OP。
 bool isAdminShop(std::string_view ownerLine, std::string_view adminShopName, bool editorIsOp);

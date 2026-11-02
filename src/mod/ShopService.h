@@ -24,7 +24,7 @@ enum class SignEditOutcome {
 
 struct SignEditResult {
     SignEditOutcome outcome = SignEditOutcome::NotAShopSign;
-    std::string     message;        ///< Rejected 时发给玩家的原因
+    Text            message;        ///< Rejected 时发给玩家的原因
     std::string     normalizedText; ///< Normalized 时写回 `event.text()`
     /// Normalized 时的归属交接；由事件层在 After 事件里交给 `recordShopOwner`。
     /// 结构体本身在 `shop/SignProtection.h`（它是纯数据 + 一个判据，可以单测）。
@@ -32,7 +32,7 @@ struct SignEditResult {
 };
 
 /// 解析错误 → 玩家提示文案（中文，面向服主与玩家）。
-std::string messageFor(ShopSignError error, int maxShopAmount);
+Text messageFor(ShopSignError error, int maxShopAmount);
 
 /// 判断一次告示牌正面编辑会把商店带到什么状态。
 ///

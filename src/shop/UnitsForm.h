@@ -20,7 +20,7 @@ struct UnitsFormModel {
     /// 下拉框的一档。`units == 0` 表示「自定义份数」，读输入框。
     struct Choice {
         int         units = 0;
-        std::string label;
+        Text label;
     };
 
     std::vector<Choice> choices;
@@ -36,14 +36,18 @@ struct UnitsFormModel {
 UnitsFormModel makeUnitsFormModel(int maxUnits);
 
 /// 下拉框的选项文案，顺序与 `model.choices` 一致。
-std::vector<std::string> unitsFormOptions(UnitsFormModel const& model);
+std::vector<std::string> unitsFormOptions(UnitsFormModel const& model, std::string_view localeCode = {});
 
 /// 把「选项文案」换算回下标（`unitsFormOptions` 的逆运算），找不到返回 -1。
 ///
 /// 为什么要这一层：LeviLamina 的 `CustomForm` 下拉框回传的是**选中项的文案**
 /// （`Dropdown::parseResult` 返回 `mOptions[index]`），不是下标。表单回调那侧
 /// 只能拿到字符串，所以「文案 → 下标」这一步必须由建表单的人来解释。
-int choiceIndexForOption(UnitsFormModel const& model, std::string_view optionText);
+int choiceIndexForOption(
+    UnitsFormModel const& model,
+    std::string_view      optionText,
+    std::string_view      localeCode = {}
+);
 
 /// 表单正文：每份件数、价格、货还剩多少、余额，再逐档列出**总件数与总金额**。
 ///
@@ -52,7 +56,11 @@ int choiceIndexForOption(UnitsFormModel const& model, std::string_view optionTex
 ///
 /// `direction` 只改说法：买入看「箱子里的货还够」与「扣款」，卖出看「你手里有」
 /// 与「收入」（`data.heldUnits` 由调用方填，见 `ShopInfoData`）。
-std::string unitsFormContent(TradeDirection direction, ShopInfoData const& data, UnitsFormModel const& model);
+std::vector<Text> unitsFormContent(
+    TradeDirection        direction,
+    ShopInfoData const&   data,
+    UnitsFormModel const& model
+);
 
 /// 成交条件为什么会变（DESIGN §10.3）。三样里任何一样变了都要玩家重新点头。
 enum class ChangeReason : std::uint8_t {
@@ -65,8 +73,12 @@ enum class ChangeReason : std::uint8_t {
 ///
 /// 份数表单上看到的是「弹出那一刻」的数；两屏之间箱子、店主改价或改份量都会让它过期。
 /// 这时先把重算后的真实值摆出来让玩家确认，再执行——不能拿旧数字直接成交。
-std::string
-unitsConfirmContent(TradeDirection direction, ShopInfoData const& data, TradePlan const& plan, ChangeReason reason);
+std::vector<Text> unitsConfirmContent(
+    TradeDirection      direction,
+    ShopInfoData const& data,
+    TradePlan const&    plan,
+    ChangeReason        reason
+);
 
 /// 份数 → 件数：`units × amountPerUnit`。
 ///
@@ -78,7 +90,7 @@ int itemsForUnits(int units, int amountPerUnit);
 /// 提交时的解析结果：`units` 为空时 `error` 是给玩家看的中文原因。
 struct RequestedUnits {
     std::optional<int> units;
-    std::string        error;
+    Text               error;
 };
 
 /// 把「下拉框选中项 + 自定义输入」解析成请求份数。

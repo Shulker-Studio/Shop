@@ -35,7 +35,7 @@ struct TradeResult {
     TradeStatus status = TradeStatus::Rejected;
     /// 实际（`NeedsConfirm` 时是待确认的）成交方案：份数、件数、金额。
     TradePlan   plan;
-    std::string message; ///< 发给玩家的中文提示；`NeedsConfirm` 时是确认表单的正文
+    Text        message; ///< 发给玩家的提示；`NeedsConfirm` 时是确认表单的正文
     /// 这一次被销毁的物品堆的留档（管理员店卖出方向，票 02）。
     ///
     /// 记录在 `Done` **之前**造好（SNBT 只有那一刻读得到），落盘在 `Done` **之后**由

@@ -36,7 +36,7 @@ struct ShopBlockTouchContext {
 struct ShopBlockDecision {
     bool allowed = true;
     /// 只有 `allowed == false` 时非空：发给玩家的一句话。
-    std::string message;
+    Text message;
 };
 
 /// 判定一次对商店箱 / 商店牌的操作（DESIGN §9.2 的「商店箱保护」那一组）。

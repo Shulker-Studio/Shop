@@ -72,20 +72,20 @@ BackendProbes probesFor(Backend configured) {
     return {};
 }
 
-std::string probeIssueText(ProbeIssue issue) {
+Text probeIssueText(ProbeIssue issue) {
     switch (issue) {
     case ProbeIssue::ModuleMissing:
-        return "进程里没有加载 LegacyMoney.dll";
+        return text::keyed("shop.economy.issue.module_missing");
     case ProbeIssue::ExportsMissing:
-        return "LegacyMoney.dll 里拿不到 LLMoney_* 导出（多半不是 C 接口那一版）";
+        return text::keyed("shop.economy.issue.exports_missing");
     case ProbeIssue::ObjectiveMissing:
-        return "记分板目标不存在，且没有开启自动创建";
+        return text::keyed("shop.economy.issue.objective_missing");
     case ProbeIssue::ObjectiveCreateFailed:
-        return "记分板目标不存在，自动创建失败";
+        return text::keyed("shop.economy.issue.objective_create_failed");
     case ProbeIssue::None:
         break;
     }
-    return "可用";
+    return text::keyed("shop.economy.issue.none");
 }
 
 BackendSelection selectBackend(Backend configured, BackendCandidates const& candidates) {
@@ -126,23 +126,25 @@ BackendSelection selectBackend(Backend configured, BackendCandidates const& cand
     return selection;
 }
 
-std::string backendSelectionText(Backend configured, BackendSelection const& selection) {
-    std::string text = "配置 " + std::string{backendName(configured)} + " → 选用 "
-                     + std::string{backendName(selection.chosen)};
+Text backendSelectionText(Backend configured, BackendSelection const& selection) {
+    auto const configuredName = text::lit(std::string{backendName(configured)});
+    auto const chosenName     = text::lit(std::string{backendName(selection.chosen)});
+
     if (selection.skipped.empty()) {
-        return text;
+        return text::keyed("shop.economy.selection", Tone::Default, {configuredName, chosenName});
     }
-    text += "（跳过 ";
-    bool first = true;
-    for (auto const& [backend, issue] : selection.skipped) {
-        if (!first) {
-            text += "；";
-        }
-        first = false;
-        text += std::string{backendName(backend)} + "：" + probeIssueText(issue);
+    // `selectBackend` 只会探配置里点名的那一个后端，所以跳过记录最多一条。
+    // 真出现多条就退回不带细节的说法，而不是拼一串没有分隔符的词。
+    if (selection.skipped.size() == 1) {
+        auto const& [backend, issue] = selection.skipped.front();
+        return text::keyed("shop.economy.selection.skipped", Tone::Default, {
+            configuredName,
+            chosenName,
+            text::lit(std::string{backendName(backend)}),
+            probeIssueText(issue),
+        });
     }
-    text += "）";
-    return text;
+    return text::keyed("shop.economy.selection", Tone::Default, {configuredName, chosenName});
 }
 
 bool ownerUnreachable(bool ownerOnline, bool backendSupportsOffline, bool requireOwnerOnline) {
@@ -159,23 +161,23 @@ std::optional<TransferResult> checkTransfer(
     std::int64_t           amount
 ) {
     if (amount <= 0) {
-        return TransferResult{TransferStatus::Rejected, "转账金额必须大于 0"};
+        return TransferResult{TransferStatus::Rejected, text::keyed("shop.economy.reject.amount_not_positive")};
     }
     if (from.empty() && to.empty()) {
         // 两边都是系统账户：既没有钱生出来，也没有钱被销毁，这笔转账没有意义。
-        return TransferResult{TransferStatus::Rejected, "系统账户不能转给系统账户"};
+        return TransferResult{TransferStatus::Rejected, text::keyed("shop.economy.reject.both_system")};
     }
     // 空付款方 = 从系统付款（凭空记账，管理员店的卖出方向，DESIGN §7.4）。
     if (from.empty() && !provider.supportsSystemAccount()) {
-        return TransferResult{TransferStatus::Rejected, "这个后端没有系统账户，没法从系统付款"};
+        return TransferResult{TransferStatus::Rejected, text::keyed("shop.economy.reject.no_system_payer")};
     }
     // `to` 为空是合法的（付给系统 = 销毁），与「自己转给自己」不是一回事。
     if (!to.empty() && from == to) {
-        return TransferResult{TransferStatus::Rejected, "不能转给同一个账户"};
+        return TransferResult{TransferStatus::Rejected, text::keyed("shop.economy.reject.same_account")};
     }
     if (to.empty() && !provider.supportsMoneySink() && !provider.supportsSystemAccount()) {
         // 空账户 = 付给系统（销毁）。不声明支持的后端拿它没谱，当成普通账户会变成一笔读不到的入账。
-        return TransferResult{TransferStatus::Rejected, "这个后端没有可以把钱付给系统的账户"};
+        return TransferResult{TransferStatus::Rejected, text::keyed("shop.economy.reject.no_money_sink")};
     }
     return std::nullopt;
 }
@@ -191,17 +193,17 @@ EconomyProvider::transfer(Account const& from, Account const& to, std::int64_t a
         if (add(to, amount)) {
             return {TransferStatus::Ok, {}};
         }
-        return {TransferStatus::Rejected, "系统账户的钱没能记到收款方账上"};
+        return {TransferStatus::Rejected, text::keyed("shop.economy.reject.system_payout_failed")};
     }
     if (to.empty()) {
         // 付给系统 = 销毁（管理员店的买入方向、商店税）。同样只有一笔动作。
         if (reduce(from, amount, allowNegative)) {
             return {TransferStatus::Ok, {}};
         }
-        return {TransferStatus::Rejected, "付款方扣款失败（余额不足或账户不可记账）"};
+        return {TransferStatus::Rejected, text::keyed("shop.economy.reject.payer_reduce_failed")};
     }
     if (!reduce(from, amount, allowNegative)) {
-        return {TransferStatus::Rejected, "付款方扣款失败（余额不足或账户不可记账）"};
+        return {TransferStatus::Rejected, text::keyed("shop.economy.reject.payer_reduce_failed")};
     }
     if (add(to, amount)) {
         return {TransferStatus::Ok, {}};
@@ -209,9 +211,9 @@ EconomyProvider::transfer(Account const& from, Account const& to, std::int64_t a
 
     // 钱已经从付款方身上扣掉了：必须加回去，否则就是凭空消失。
     if (add(from, amount)) {
-        return {TransferStatus::Rejected, "收款方不可记账，款已退回付款方"};
+        return {TransferStatus::Rejected, text::keyed("shop.economy.reject.receiver_failed_refunded")};
     }
-    return {TransferStatus::Broken, "收款方不可记账，且退款也失败"};
+    return {TransferStatus::Broken, text::keyed("shop.economy.reject.receiver_failed_refund_failed")};
 }
 
 Account shopSideAccount(bool adminShop, std::string_view ownerXuid) {

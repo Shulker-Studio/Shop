@@ -18,7 +18,7 @@ namespace ss::shop {
 ///
 /// 上蜡的牌补一句：蜡只锁手写编辑，管理表单照常能改（`DESIGN §9.2`），
 /// 不写这句店主会以为牌坏了。
-std::string shopManageFormContent(ShopInfoData const& data, bool waxed);
+std::vector<Text> shopManageFormContent(ShopInfoData const& data, bool waxed);
 
 /// 管理表单的按钮：改买入价 / 改卖出价 / 改每份件数 / 停业（停业中换成恢复营业）。
 ///
@@ -29,7 +29,7 @@ std::vector<ShopFormButton> shopManageFormButtons(ShopInfoData const& data);
 /// 一次管理表单改动的结果。
 struct ManageEdit {
     std::optional<ShopSpec> spec;  ///< 改完的商店定义；空 = 这次不能改
-    std::string             error; ///< `spec` 为空时给玩家的中文原因
+    Text                    error; ///< `spec` 为空时给玩家的原因
 
     [[nodiscard]] bool ok() const { return spec.has_value(); }
 };

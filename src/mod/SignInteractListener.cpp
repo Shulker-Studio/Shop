@@ -1,4 +1,5 @@
 #include "mod/SignInteractListener.h"
+#include "mod/Text.h"
 
 #include "mod/BlockResync.h"
 #include "mod/Clock.h"
@@ -141,11 +142,11 @@ void onInteractBlock(ll::event::player::PlayerInteractBlockEvent& event) {
                 {dbgField("kind", signTouchKind(touch)),
                  dbgField("player", player.getXuid()),
                  dbgField("pos", dbgPos(region.getDimensionId(), pos.x, pos.y, pos.z)),
-                 dbgField("reason", decision.message)}
+                 dbgField("reason", text::render(decision.message))}
             );
         }
         event.cancel();
-        player.sendMessage(decision.message);
+        ui::send(player, ui::Tone::Warning, decision.message);
         // 取消拦住了服务端的改动，但客户端已经把它预演出来了：补一份真实数据过去。
         resyncBlockActor(player, region, pos);
         return;
@@ -174,7 +175,9 @@ void onInteractBlock(ll::event::player::PlayerInteractBlockEvent& event) {
             return;
         }
         event.cancel();
-        player.sendMessage(
+        ui::send(
+            player,
+            ui::Tone::Warning,
             interaction->unavailable == ShopUnavailable::NoContainer ? shopBoxMissingMessage() : shopInvalidMessage()
         );
         return;
@@ -215,7 +218,7 @@ void registerSignInteractListener() {
     if (!config) {
         // 没有配置就没有冷却门：挂上去只会让每一下点击都落到 `onInteractBlock` 的早退分支，
         // 而那种「监听器在、但永远不干活」的状态最难查（`/shop status` 也会显示已注册）。
-        Shop::getInstance().getSelf().getLogger().error("配置不可用，未注册方块交互监听（交易入口未开启）");
+        Shop::getInstance().getSelf().getLogger().error(ui::msg("shop.log.protection.no_config_no_interact"));
         return;
     }
     gTradeGate.emplace(config->shopInteractionCooldownMs);
@@ -224,7 +227,7 @@ void registerSignInteractListener() {
             onInteractBlock
         );
     if (!gSignInteractListener) {
-        Shop::getInstance().getSelf().getLogger().error("注册方块交互监听失败");
+        Shop::getInstance().getSelf().getLogger().error(ui::msg("shop.log.protection.interact_register_failed"));
     }
 }
 

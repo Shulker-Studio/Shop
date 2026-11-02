@@ -1,4 +1,5 @@
 #include "shop/TradePlan.h"
+#include "shop/Text.h"
 
 #include "shop/Economy.h"
 #include "shop/ShopInfo.h"
@@ -36,7 +37,7 @@ bool ownerOfflineHere(TradeRequest const& request) {
 } // namespace
 
 std::string_view directionVerb(TradeDirection direction) {
-    return direction == TradeDirection::Sell ? "卖" : "买";
+    return direction == TradeDirection::Sell ? "shop.direction.sell" : "shop.direction.buy";
 }
 
 TradeTaxPlan tradeTaxPlan(
@@ -132,24 +133,26 @@ TradeDecision planTrade(TradeRequest const& request) {
     return {.plan = TradePlan{units, static_cast<int>(items), *total, shopTax(*total, request.taxRate)}};
 }
 
-std::string tradeRejectionMessage(TradeDirection direction, TradeRejection rejection) {
+Text tradeRejectionMessage(TradeDirection direction, TradeRejection rejection) {
     bool const selling = direction == TradeDirection::Sell;
     switch (rejection) {
     case TradeRejection::ShopClosed:
         // 两个方向同一句：停业是店的事，与「谁来买还是卖」无关。
-        return "这家店暂停营业";
+        return text::keyed("shop.form.closed");
     case TradeRejection::OwnerOffline:
         return ownerOfflineReason();
     case TradeRejection::NotEnoughGoods:
-        return selling ? "你手里没有这么多" : "商店的货不够";
+        return text::keyed(selling ? "shop.trade.not_enough_items_player" : "shop.trade.not_enough_stock");
     case TradeRejection::NotEnoughFunds:
-        return selling ? "店主的钱不够，付不起这一笔" : "你的钱不够";
+        return text::keyed(selling ? "shop.trade.not_enough_funds_owner" : "shop.trade.not_enough_funds");
     case TradeRejection::NoRoomToReceive:
-        return selling ? "商店箱装不下这些物品" : "背包放不下这些物品";
+        return text::keyed(selling ? "shop.trade.chest_full" : "shop.trade.inventory_full");
     case TradeRejection::OverUnitLimit:
-        return "一次" + std::string{directionVerb(direction)} + "的份数超过了服务器允许的单次上限";
+        return text::keyed("shop.trade.over_unit_limit", Tone::Default, {
+            text::keyed(selling ? "shop.direction.sell" : "shop.direction.buy")
+        });
     case TradeRejection::InvalidRequest:
-        return "这笔交易不成立（份数或价格不合法）";
+        return text::keyed("shop.trade.invalid");
     case TradeRejection::None:
         break;
     }

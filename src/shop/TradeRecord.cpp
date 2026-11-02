@@ -121,24 +121,24 @@ std::string transactionLogFileName(std::string_view date) { return std::string{d
 
 std::string_view tradeRecordProblem(TradeRecord const& record) {
     if (record.ts.empty()) {
-        return "缺少 ts：文件名要从它推出来";
+        return "shop.record.problem.missing_ts";
     }
     if (record.result == TradeLogResult::Ok && !record.reason.empty()) {
-        return "result 是 ok 却带着 reason";
+        return "shop.record.problem.ok_with_reason";
     }
     if (record.result != TradeLogResult::Ok && record.reason.empty()) {
-        return "result 不是 ok 却没有 reason";
+        return "shop.record.problem.not_ok_without_reason";
     }
     if (record.admin && !record.owner.xuid.empty()) {
-        return "管理员店的 owner.xuid 必须是空串";
+        return "shop.record.problem.admin_owner_not_empty";
     }
     if (record.admin && record.tax != 0) {
-        return "管理员店的 tax 必须是 0";
+        return "shop.record.problem.admin_tax_not_zero";
     }
     if (record.gross > record.total) {
         // 主交易金额只会**小于或等于**玩家侧的总额：买入的税是另外一笔付给系统账户的。
         // 大过总额说明 gross 不是从 `Payment::main` 来的，而那一行会让人以为账对不上。
-        return "gross（主交易金额）不能大于 total";
+        return "shop.record.problem.gross_gt_total";
     }
     return {};
 }

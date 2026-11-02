@@ -1,5 +1,7 @@
 #pragma once
 
+#include "shop/Text.h"
+
 #include <cstdint>
 #include <limits>
 #include <memory>
@@ -99,14 +101,14 @@ struct BackendSelection {
 /// `builtin` 到不了这里（配置校验就拒了），万一到了按空实现处理。
 BackendSelection selectBackend(Backend configured, BackendCandidates const& candidates);
 
-/// 选中结果的说明（中文，进日志与状态输出）。
+/// 选中结果的说明（进日志与状态输出）。
 ///
-/// 形如 `配置 legacy_money → 选用 legacy_money（支持离线店主…）`，或探不到时的
-/// `配置 scoreboard → 没有可用的经济后端（记分板目标 "money" 不存在…）`。
-std::string backendSelectionText(Backend configured, BackendSelection const& selection);
+/// 形如 `配置 legacy_money → 选用 legacy_money`，或探不到时的
+/// `配置 scoreboard → 选用 null（跳过 scoreboard: 记分板目标不存在…）`。
+Text backendSelectionText(Backend configured, BackendSelection const& selection);
 
-/// 探测失败原因 → 中文说明。
-std::string probeIssueText(ProbeIssue issue);
+/// 探测失败原因 → 玩家/服主可读的说明。
+Text probeIssueText(ProbeIssue issue);
 
 /// 店主不在线时，这一笔还能不能做（DESIGN §8.5）。
 ///
@@ -129,7 +131,7 @@ enum class TransferStatus : std::uint8_t {
 
 struct TransferResult {
     TransferStatus status = TransferStatus::Rejected;
-    std::string    detail; ///< 中文说明，直接进日志
+    Text           detail; ///< 失败原因：进日志、进玩家消息、进 OP 告警
 
     [[nodiscard]] bool ok() const { return status == TransferStatus::Ok; }
     [[nodiscard]] bool broken() const { return status == TransferStatus::Broken; }

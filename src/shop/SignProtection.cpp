@@ -1,4 +1,5 @@
 #include "shop/SignProtection.h"
+#include "shop/Text.h"
 
 #include <array>
 #include <cctype>
@@ -59,26 +60,26 @@ bool contains(std::array<std::string_view, N> const& table, std::string const& n
 }
 
 /// 「只有店主（或 OP）能 ……」这个句式只写一次：前面接主体、后面接动作。
-constexpr std::string_view kOwnerOnly = "只有店主（或 OP）能";
+constexpr std::string_view kOwnerOnly = "shop.protection.actor.owner";
 
 /// 「谁能」这半句按身份换：有主的牌说店主，没记下店主的牌只能找 OP（§9.2 的表）。
 std::string_view allowedActorPhrase(ShopActor actor) {
-    return actor == ShopActor::NoRecordedOwner ? std::string_view{"只有 OP 能"} : kOwnerOnly;
+    return actor == ShopActor::NoRecordedOwner ? std::string_view{"shop.protection.actor.op"} : kOwnerOnly;
 }
 
 /// 被拦下的是牌子上的什么。
 std::string_view touchSubject(SignTouch touch) {
     switch (touch) {
     case SignTouch::Dye:
-        return "这块商店牌的颜色";
+        return "shop.protection.subject.dye";
     case SignTouch::InkSac:
     case SignTouch::GlowInkSac:
-        return "这块商店牌的文字样式";
+        return "shop.protection.subject.style";
     case SignTouch::HoneyComb:
     case SignTouch::None:
         break;
     }
-    return "这块商店牌";
+    return "shop.protection.subject.sign";
 }
 
 /// 要做什么（GLOSSARY 里的「上蜡」原样用）。
@@ -87,21 +88,22 @@ std::string_view touchAction(SignTouch touch) {
     case SignTouch::Dye:
     case SignTouch::InkSac:
     case SignTouch::GlowInkSac:
-        return "改";
+        return "shop.protection.action.change";
     case SignTouch::HoneyComb:
-        return "上蜡";
+        return "shop.protection.action.wax";
     case SignTouch::None:
         break;
     }
-    return "动"; // 不可达的兜底：`None` 不会走到 Block（见 `planSignTouch`）
+    return "shop.protection.action.touch"; // 不可达的兜底：`None` 不会走到 Block（见 `planSignTouch`）
 }
 
 /// 「<主体><谁能><动作>」——一句话只在这里拼。
-std::string onlyOwnerMessage(ShopActor actor, SignTouch touch) {
-    std::string sentence{touchSubject(touch)};
-    sentence.append(allowedActorPhrase(actor));
-    sentence.append(touchAction(touch));
-    return sentence;
+Text onlyOwnerMessage(ShopActor actor, SignTouch touch) {
+    return text::sequence({
+        text::keyed(std::string{touchSubject(touch)}),
+        text::keyed(std::string{allowedActorPhrase(actor)}),
+        text::keyed(std::string{touchAction(touch)}),
+    });
 }
 
 } // namespace
@@ -133,7 +135,7 @@ bool mayEditShopSignText(ShopActor actor) {
     return actor != ShopActor::Other;
 }
 
-std::optional<std::string>
+std::optional<Text>
 signTextEditRejection(ShopActor actor, bool waxed, std::string const& ownerName, bool adminShop) {
     if (!mayEditShopSignText(actor)) {
         return ownerOnlyEditMessage(ownerName, adminShop);
@@ -144,27 +146,28 @@ signTextEditRejection(ShopActor actor, bool waxed, std::string const& ownerName,
     return std::nullopt;
 }
 
-std::string ownerOnlyEditMessage(std::string const& ownerName, bool adminShop) {
+Text ownerOnlyEditMessage(std::string const& ownerName, bool adminShop) {
     if (adminShop) {
-        return "管理员商店只有 OP 能改"; // §11：管理员商店的管理权只给 OP
+        // §11：管理员商店的管理权只给 OP
+        return text::keyed("shop.protection.admin_only");
     }
     if (ownerName.empty()) {
-        return "这块商店牌不是你的，" + std::string{kOwnerOnly} + "改";
+        return text::keyed("shop.protection.owner_only_anonymous");
     }
-    return "这块商店牌是 " + ownerName + " 的，" + std::string{kOwnerOnly} + "改";
+    return text::keyed("shop.protection.owner_only", Tone::Default, {text::lit(ownerName)});
 }
 
-std::string waxedSignEditMessage() {
+Text waxedSignEditMessage() {
     // 必须说清「原版去不掉蜡」：不然玩家会一直去试斧头（老版本的习惯），
     // 而斧头对告示牌只当普通点击用。
-    return "这块商店牌上了蜡，牌面文字改不了了：原版的蜡不能用斧头去除，要改只能拆掉这块牌重立";
+    return text::keyed("shop.protection.waxed_edit");
 }
 
-std::string waxedSignTouchMessage() { return "这块商店牌上了蜡：颜色、发光和再上蜡都改不了了"; }
+Text waxedSignTouchMessage() { return text::keyed("shop.protection.waxed_touch"); }
 
-std::string shopBoxMissingMessage() { return "这家店暂时用不了（商店箱不在了），牌子还不能改"; }
+Text shopBoxMissingMessage() { return text::keyed("shop.protection.chest_missing"); }
 
-std::string shopInvalidMessage() { return "这块商店牌的写法现在不算有效商店，牌子还不能改"; }
+Text shopInvalidMessage() { return text::keyed("shop.protection.invalid_sign"); }
 
 SignTouch classifySignTouch(std::string_view itemTypeName) {
     auto const name = normalizeItemName(itemTypeName);

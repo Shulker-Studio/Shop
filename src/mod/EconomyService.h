@@ -49,7 +49,7 @@ void initEconomyService(ShopConfig const& config);
 /// 还没解析出后端时，`/shop status` 该显示的那句话；已解析就返回空串。
 ///
 /// 分开写是因为「世界还没起来」与「世界起来了但解析没跑」是两件事，混成一句会让人误判。
-std::string economyUnresolvedReason();
+Text economyUnresolvedReason();
 
 /// 丢掉已选定的后端并解开监听，下次用到时按（可能已经改过的）配置重探。模组关闭时调用。
 void resetEconomy();

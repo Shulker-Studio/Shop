@@ -249,8 +249,10 @@ std::optional<int> parseAmountLine(std::string_view line, int maxAmount) {
     return static_cast<int>(value);
 }
 
-std::string amountOutOfRangeMessage(int maxShopAmount) {
-    return "一份的件数要写 1 到 " + std::to_string(maxShopAmount) + " 之间的整数";
+Text amountOutOfRangeMessage(int maxShopAmount) {
+    return text::keyed("shop.sign.amount_out_of_range", Tone::Default, {
+        text::lit(std::to_string(maxShopAmount))
+    });
 }
 
 std::optional<PricePair> parsePriceLine(std::string_view line) {
@@ -338,12 +340,15 @@ bool sellPriceHigherThanBuy(
     return buy.has_value() && sell.has_value() && *buy < *sell;
 }
 
-std::string sellPriceAboveBuyMessage(std::optional<std::int64_t> buy, std::optional<std::int64_t> sell) {
+Text sellPriceAboveBuyMessage(std::optional<std::int64_t> buy, std::optional<std::int64_t> sell) {
     if (!buy || !sell) {
         // 手写编辑报错时手上没有「改成了什么」：牌面就在眼前，不必把号码再念一遍。
-        return "卖出价不能高于买入价";
+        return text::keyed("shop.sign.sell_above_buy_plain");
     }
-    return "卖出价 " + std::to_string(*sell) + " 高于买入价 " + std::to_string(*buy) + "：卖出价不能高于买入价";
+    return text::keyed("shop.sign.sell_above_buy", Tone::Default, {
+        text::lit(std::to_string(*sell)),
+        text::lit(std::to_string(*buy)),
+    });
 }
 
 bool isAdminShop(std::string_view ownerLine, std::string_view adminShopName, bool editorIsOp) {

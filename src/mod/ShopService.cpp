@@ -18,15 +18,15 @@
 
 namespace ss::shop {
 
-std::string messageFor(ShopSignError error, int maxShopAmount) {
+Text messageFor(ShopSignError error, int maxShopAmount) {
     switch (error) {
     case ShopSignError::EmptyOwnerName:
-        return "第 1 行不能空着（服务器会把它换成你的名字，随便写点什么）";
+        return text::keyed("shop.trade.sign.owner_empty");
     case ShopSignError::BadAmount:
         // 规则与措辞都归纯逻辑层（`amountOutOfRangeMessage`）：管理表单改件数说的是同一句。
         return amountOutOfRangeMessage(maxShopAmount);
     case ShopSignError::BadPrice:
-        return "价格写法不对：写 B <买入价> : S <卖出价>，至少写一个";
+        return text::keyed("shop.trade.sign.price_malformed");
     case ShopSignError::SellPriceAboveBuy:
         // 规则与措辞都归纯逻辑层（`sellPriceAboveBuyMessage`），这里只说规则、不念号码。
         return sellPriceAboveBuyMessage(std::nullopt, std::nullopt);
@@ -34,27 +34,27 @@ std::string messageFor(ShopSignError error, int maxShopAmount) {
     case ShopSignError::NotAShopSign:
         break;
     }
-    return "商店牌写得不对";
+    return text::keyed("shop.trade.sign.invalid");
 }
 
 namespace {
 
-std::string messageFor(ContainerError error) {
+Text messageFor(ContainerError error) {
     switch (error) {
     case ContainerError::NotAContainer:
     case ContainerError::UnknownSignShape:
         // 立在箱子旁边的地上、贴在箱子旁边的墙上、侧挂的悬挂牌都走这里。
-        return "牌子要贴在或立在箱子上";
+        return text::keyed("shop.trade.sign.not_on_chest");
     case ContainerError::NotAllowedContainer:
-        return "这种容器不能当商店用（服主可配置可用的容器）";
+        return text::keyed("shop.trade.sign.container_not_allowed");
     case ContainerError::Empty:
-        return "请先在箱子里放商品";
+        return text::keyed("shop.trade.sign.chest_empty");
     case ContainerError::AlreadyBound:
-        return "这个箱子已经有商店了";
+        return text::keyed("shop.trade.sign.chest_taken");
     case ContainerError::None:
         break;
     }
-    return "找不到商店的箱子";
+    return text::keyed("shop.trade.sign.chest_missing");
 }
 
 } // namespace
@@ -225,7 +225,7 @@ inspectShop(BlockSource& region, BlockPos const& signPos, Player& viewer, ShopCo
         auto& provider = economyBackend();
         if (!provider.available()) {
             // 没有可用后端：余额不编造数字（DESIGN §10.1），买卖按钮也不给。
-            if (shop->info.unavailableReason.empty()) {
+            if (text::empty(shop->info.unavailableReason)) {
                 shop->info.unavailableReason = noEconomyReason();
             }
         } else {
@@ -234,10 +234,10 @@ inspectShop(BlockSource& region, BlockPos const& signPos, Player& viewer, ShopCo
             // 管理员店的资金端是系统账户（§7.4）：后端声明不了这项能力时买卖必然失败，
             // 那就一个按钮都不给（与下面的离线策略同一套“提前藏按钮”的做法）。
             if (shop->info.adminShop) {
-                if (!provider.supportsSystemAccount() && shop->info.unavailableReason.empty()) {
+                if (!provider.supportsSystemAccount() && text::empty(shop->info.unavailableReason)) {
                     shop->info.unavailableReason = noSystemAccountReason();
                 }
-            } else if (shop->info.unavailableReason.empty()
+            } else if (text::empty(shop->info.unavailableReason)
                        && economy::ownerUnreachable(
                            onlinePlayer(shop->ownerXuid) != nullptr,
                            provider.supportsOffline(),

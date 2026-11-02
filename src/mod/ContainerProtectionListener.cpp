@@ -1,4 +1,5 @@
 #include "mod/ContainerProtectionListener.h"
+#include "mod/Text.h"
 
 #include "mod/BlockResync.h"
 #include "mod/ContainerFinderBds.h"
@@ -129,7 +130,7 @@ void reject(
     bool                    resync = false
 ) {
     event.cancel();
-    player.sendMessage(decision.message);
+    ui::send(player, ui::Tone::Warning, decision.message);
     if (resync) {
         resyncBlockActor(player, player.getDimensionBlockSource(), blockPos);
     }
@@ -140,7 +141,7 @@ void reject(
             {dbgField("kind", std::string_view{kind}),
              dbgField("player", player.getXuid()),
              dbgField("pos", dbgPos(region.getDimensionId(), blockPos.x, blockPos.y, blockPos.z)),
-             dbgField("reason", decision.message)}
+             dbgField("reason", text::render(decision.message))}
         );
     }
 }
@@ -249,7 +250,7 @@ void registerContainerProtectionListener() {
     }
 
     if (!gOpenContainerListener || !gAttackBlockListener || !gDestroyBlockListener) {
-        logger.error("注册商店箱保护监听失败：某一条没挂上（下次 enable 会只补缺的那几条）");
+        logger.error(ui::msg("shop.log.protection.container_register_failed"));
     }
 }
 

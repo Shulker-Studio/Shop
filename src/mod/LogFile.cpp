@@ -1,5 +1,7 @@
 #include "mod/LogFile.h"
 
+#include "mod/Text.h"
+
 #include "mod/Shop.h"
 #include "mod/WallClock.h"
 #include "shop/LogRotation.h"
@@ -44,7 +46,7 @@ void warnOnce(std::string_view kind, std::filesystem::path const& path, std::str
     if (!gWarnedFailures.emplace(std::string{kind}, path).second) {
         return;
     }
-    Shop::getInstance().getSelf().getLogger().warn("{}（同类失败本次运行只提示这一次）", message);
+    Shop::getInstance().getSelf().getLogger().warn(ui::msg("shop.log.logfile.warn_once", message));
 }
 
 /// 压缩用的缓冲。64 KiB：足够摊平每次 `gzwrite` 的调用开销，又不至于为一条日志占多少内存。
@@ -138,7 +140,15 @@ bool compressLogFile(std::filesystem::path const& dir, std::string const& fileNa
         // 补上这一步，而不是永远留着两份——否则「压缩省磁盘」就成了空话。
         std::filesystem::remove(source, ec);
         if (ec) {
-            warnOnce("compress", source, "旧日志删不掉（" + source.string() + "）：" + ec.message() + "；已压好的 .gz 保留");
+            warnOnce(
+                "compress",
+                source,
+                ui::plain(text::keyed(
+                    "shop.log.logfile.remove_old_failed",
+                    ss::shop::Tone::Default,
+                    {text::lit(source.string()), text::lit(ec.message())}
+                ))
+            );
             return false;
         }
         return true;
@@ -146,7 +156,15 @@ bool compressLogFile(std::filesystem::path const& dir, std::string const& fileNa
 
     if (!gzipFile(source, target)) {
         // 失败不删原文件（`gzipFile` 保证），下次启动还会扫到它，重试是幂等的。
-        warnOnce("compress", source, "日志压缩失败（" + source.string() + "）；原文件保留，下次启动会再试");
+        warnOnce(
+            "compress",
+            source,
+            ui::plain(text::keyed(
+                "shop.log.logfile.compress_failed",
+                ss::shop::Tone::Default,
+                {text::lit(source.string())}
+            ))
+        );
         return false;
     }
     return true;
@@ -231,7 +249,15 @@ void migrateLegacyLogs() {
         std::error_code mkdirEc;
         std::filesystem::create_directories(dir, mkdirEc);
         if (mkdirEc) {
-            warnOnce("migrate", dir, "旧日志搬不进去：目录建不出来（" + dir.string() + "）：" + mkdirEc.message());
+            warnOnce(
+                "migrate",
+                dir,
+                ui::plain(text::keyed(
+                    "shop.log.logfile.migrate_mkdir_failed",
+                    ss::shop::Tone::Default,
+                    {text::lit(dir.string()), text::lit(mkdirEc.message())}
+                ))
+            );
             continue;
         }
 
@@ -242,7 +268,11 @@ void migrateLegacyLogs() {
             warnOnce(
                 "migrate",
                 entry.path(),
-                "旧日志搬不动（" + entry.path().string() + "）：" + renameEc.message() + "；它留在 logs/ 根下"
+                ui::plain(text::keyed(
+                    "shop.log.logfile.migrate_rename_failed",
+                    ss::shop::Tone::Default,
+                    {text::lit(entry.path().string()), text::lit(renameEc.message())}
+                ))
             );
             continue;
         }
@@ -250,7 +280,7 @@ void migrateLegacyLogs() {
     }
 
     if (moved > 0) {
-        logger.info("已把 {} 个旧位置的日志文件搬进 transactions/ 与 discarded/ 子目录", moved);
+        logger.info(ui::msg("shop.log.logfile.migrated", moved));
     }
 }
 
@@ -284,7 +314,11 @@ bool appendLogLines(
                 warnOnce(
                     "create_directories",
                     dir,
-                    "日志目录建不出来（" + dir.string() + "）：" + dirEc.message() + "；这一行丢了"
+                    ui::plain(text::keyed(
+                        "shop.log.logfile.mkdir_failed",
+                        ss::shop::Tone::Default,
+                        {text::lit(dir.string()), text::lit(dirEc.message())}
+                    ))
                 );
                 return false;
             }
@@ -298,7 +332,15 @@ bool appendLogLines(
         gKnownDirs.erase(dir);
     }
     if (!out) {
-        warnOnce("open", path, "日志文件打不开（" + path.string() + "）；这一行丢了");
+        warnOnce(
+            "open",
+            path,
+            ui::plain(text::keyed(
+                "shop.log.logfile.open_failed",
+                ss::shop::Tone::Default,
+                {text::lit(path.string())}
+            ))
+        );
         return false;
     }
 
@@ -334,19 +376,34 @@ bool appendLogLines(
                 warnOnce(
                     "write",
                     path,
-                    "日志写入失败（" + path.string() + "）；已回滚到上一条完整记录，这一批丢了"
+                    ui::plain(text::keyed(
+                        "shop.log.logfile.write_failed_rolled_back",
+                        ss::shop::Tone::Default,
+                        {text::lit(path.string())}
+                    ))
                 );
                 return false;
             }
             warnOnce(
                 "truncate",
                 path,
-                "日志写入失败且回滚也失败（" + path.string() + "）：" + truncEc.message()
-                    + "；这个文件里可能有一条半行，请手工检查"
+                ui::plain(text::keyed(
+                    "shop.log.logfile.write_and_rollback_failed",
+                    ss::shop::Tone::Default,
+                    {text::lit(path.string()), text::lit(truncEc.message())}
+                ))
             );
             return false;
         }
-        warnOnce("write", path, "日志写入失败（" + path.string() + "）；这一行可能不完整");
+        warnOnce(
+            "write",
+            path,
+            ui::plain(text::keyed(
+                "shop.log.logfile.write_failed",
+                ss::shop::Tone::Default,
+                {text::lit(path.string())}
+            ))
+        );
         return false;
     }
 
@@ -365,7 +422,7 @@ void compressOldLogsOnStartup() {
     auto const today = std::string{isoDateOf(nowIso8601Local())};
     int const  count = compressOldLogs(logDirectory(), today, config->transactionLog.compressAfterDays);
     if (count > 0) {
-        Shop::getInstance().getSelf().getLogger().info("启动压缩：{} 个过期日志文件已压成 .gz", count);
+        Shop::getInstance().getSelf().getLogger().info(ui::msg("shop.log.logfile.compressed_on_startup", count));
     }
 }
 

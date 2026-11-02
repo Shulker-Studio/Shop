@@ -5,6 +5,7 @@
 #include "mod/HookSlots.h"
 #include "mod/LogFile.h"
 #include "mod/Shop.h"
+#include "mod/Text.h"
 #include "mod/TradeService.h"
 
 #include "ll/api/command/CommandHandle.h"
@@ -20,6 +21,7 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <vector>
 
 #include "ll/api/data/Version.h"
 
@@ -40,7 +42,7 @@ namespace {
 /// `Manifest::version` 是可选的：发布包一定会写，开发期手拼的 manifest 可能没有，
 /// 所以读不到就如实写「未知」。
 std::string versionText(std::optional<ll::data::Version> const& version) {
-    return version.has_value() ? version->to_string() : std::string{"未知"};
+    return version.has_value() ? version->to_string() : ui::plain(text::keyed("shop.command.status.unknown"));
 }
 
 std::string const& selfVersion() {
@@ -53,12 +55,12 @@ std::string const& selfVersion() {
 std::string dependencyVersion(std::string_view name) {
     auto& registry = ll::mod::ModManagerRegistry::getInstance();
     if (!registry.hasMod(name)) {
-        return "未安装";
+        return ui::plain(text::keyed("shop.command.status.not_installed"));
     }
     if (auto mod = registry.getMod(name)) {
         return versionText(mod->getManifest().version);
     }
-    return "未知";
+    return ui::plain(text::keyed("shop.command.status.unknown"));
 }
 
 /// 浮点配置的可读写法：`0.0` 显示成 `0`，`0.1` 还是 `0.1`。
@@ -81,102 +83,180 @@ std::string decimalText(double value) {
     return text;
 }
 
-std::string hookLines(std::string_view title, std::span<HookSlot const> slots) {
-    std::string out{"hooks（"};
-    out.append(title);
-    out += "）：\n";
+/// Hook 表：全挂上时只报一行「已挂上 N/M」，异常的才逐条展开。
+///
+/// 十条 `[x]` 是日常噪音——`/shop status` 平时是拿来查病的，正常的那几条不值得占行。
+/// 但**不能整段省掉**：配置坏掉时 hook 表恰恰是唯一能说明「到底挂上了没有」的东西
+/// （那时交易与全部保护都没生效），所以汇总行永远在。
+void appendHookLines(std::vector<Text>& lines, Text title, std::span<HookSlot const> slots) {
+    std::size_t attached = 0;
     for (auto const& slot : slots) {
-        out += slot.attached ? "  [x] " : "  [ ] ";
-        out += slot.name;
         if (slot.attached) {
-            out += "  已挂上（attach 返回 " + std::to_string(slot.lastReturn) + "，返回值不代表成功）";
+            ++attached;
+        }
+    }
+
+    lines.push_back(text::keyed("shop.command.status.hooks", Tone::Default, {
+        std::move(title),
+        text::lit(std::to_string(attached)),
+        text::lit(std::to_string(slots.size())),
+    }));
+
+    for (auto const& slot : slots) {
+        auto name = text::lit(std::string{slot.name});
+        // 返回码只在非 0 时才提：`attach` 返回 0 是常态，十行都挂一句
+        // 「返回值不代表成功」只会把真正异常的那一条淹掉。
+        if (slot.attached) {
+            if (slot.lastReturn != 0) {
+                lines.push_back(text::keyed("shop.command.status.hook.attached_dirty", Tone::Default, {
+                    std::move(name),
+                    text::lit(std::to_string(slot.lastReturn)),
+                }));
+            }
         } else if (slot.attempted) {
             // `detachHooks` 会把 attached 置回 false：这里必须能区分「挂过又解开」与「从没试过」。
-            out += "  曾尝试挂上，现已解绑（上次返回 " + std::to_string(slot.lastReturn) + "）";
+            lines.push_back(text::keyed("shop.command.status.hook.detached", Tone::Default, {
+                std::move(name),
+                text::lit(std::to_string(slot.lastReturn)),
+            }));
         } else {
-            out += "  未尝试注册";
+            lines.push_back(text::keyed("shop.command.status.hook.never", Tone::Default, {std::move(name)}));
         }
-        out += '\n';
     }
-    return out;
+}
+
+/// 显示用路径：把 `\` 换成 `/`。
+///
+/// `getPluginDir()` 给的是 `./plugins/Shop`（正斜杠），`/ "logs"` 拼出来的尾部却是平台
+/// 分隔符，于是同一条路径里两种斜杠混着出现（`./plugins/Shop\logs`），看着像坏了。
+/// 正斜杠在 Windows 的资源管理器、`cd`、`ls` 里都认。
+std::string displayPath(std::filesystem::path const& path) {
+    auto text = path.string();
+    std::replace(text.begin(), text.end(), '\\', '/');
+    return text;
+}
+
+std::string boolText(bool value) {
+    return value ? "true" : "false";
+}
+
+/// 一条分隔行。命令反馈通道是单色的（`§` 码会被连字符一起吞掉），所以层次只能
+/// 靠这个和缩进做，不靠颜色——与表单那条路不同，别指望 `Tone` 在这里有视觉效果。
+Text section(Text title) {
+    return text::keyed("shop.command.section", Tone::Default, {std::move(title)});
 }
 
 void reportStatus(CommandOutput& output) {
     auto const& config = Shop::getInstance().config();
 
-    std::string out{"Shop "};
-    out += selfVersion();
-    out += "（iListenAttentively ";
-    out += dependencyVersion("iListenAttentively");
-    out += "）\n";
+    std::vector<Text> lines;
+
+    lines.push_back(text::keyed("shop.command.status.version", Tone::Default, {
+        text::lit(selfVersion()),
+        text::lit(dependencyVersion("iListenAttentively")),
+    }));
+
+    lines.push_back(section(text::keyed("shop.command.section.config")));
 
     // **配置坏了不是「没什么可看」**：这时交易与全部保护都没生效，而 hook 表恰恰是
     // 唯一能说明「到底挂上了没有」的东西。所以只跳过依赖配置的那几行，后面照打。
     if (!config) {
-        out += "配置：不可用（模组没启用：交易、商店箱保护、破坏防护、内容防盗全部没有生效）\n";
+        lines.push_back(text::keyed("shop.command.status.config_unavailable"));
     } else {
-        out += "配置：maxShopAmount=" + std::to_string(config->maxShopAmount);
-        out += " allowPartialTransactions=" + std::string{config->allowPartialTransactions ? "true" : "false"};
-        out += " ignoreCreativeMode=" + std::string{config->ignoreCreativeMode ? "true" : "false"};
-        out += " allowOwnerOpenChest=" + std::string{config->allowOwnerOpenChest ? "true" : "false"};
-        out += " requireOwnerOnline=" + std::string{config->economy.requireOwnerOnline ? "true" : "false"};
-        out += " shopTaxRate=" + decimalText(config->tax.shopTaxRate);
-        out += " shopInteractionCooldownMs=" + std::to_string(config->shopInteractionCooldownMs);
-        out += " economy.backend=" + config->economy.backend;
-        out += '\n';
+        lines.push_back(text::keyed("shop.command.status.config.limits", Tone::Default, {
+            text::lit(std::to_string(config->maxShopAmount)),
+            text::lit(boolText(config->allowPartialTransactions)),
+            text::lit(boolText(config->ignoreCreativeMode)),
+        }));
+        lines.push_back(text::keyed("shop.command.status.config.owner", Tone::Default, {
+            text::lit(boolText(config->allowOwnerOpenChest)),
+            text::lit(boolText(config->economy.requireOwnerOnline)),
+        }));
+        lines.push_back(text::keyed("shop.command.status.config.tax", Tone::Default, {
+            text::lit(decimalText(config->tax.shopTaxRate)),
+            text::lit(std::to_string(config->shopInteractionCooldownMs)),
+        }));
+    }
+
+    lines.push_back(section(text::keyed("shop.command.section.economy")));
+
+    // **只读**：不在这里触发解析。解析由 `ServerStartedEvent` 或第一次动钱负责，
+    // 敲一条查询命令不该顺手在记分板上建目标。
+    //
+    // 「尚未解析」也分两种（世界未就绪 / 世界已就绪但解析还没跑），
+    // 混成一句会让服主去查错方向——两句话的解释权在 `economyUnresolvedReason()`。
+    auto const unresolved = economyUnresolvedReason();
+    lines.push_back(text::keyed("shop.command.status.economy", Tone::Default, {
+        ss::shop::text::empty(unresolved) ? text::lit(economySelectionText()) : unresolved,
+    }));
+
+    if (config) {
+        lines.push_back(section(text::keyed("shop.command.section.log")));
 
         // 交易流水（`p1-transaction-log` D4）：两个配置项 + 现在到底开没开。
         // 「开」不等于「能写」：目录建不出来、磁盘满的时候每一笔都会 warn（同进程一次），
         // 所以这里只报**配置与目录**，不编一个健康状态。
-        out += "交易流水：";
-        out += config->transactionLog.enabled ? "开" : "关（业务流水与 discarded 一起停）";
-        out += " compressAfterDays=" + std::to_string(config->transactionLog.compressAfterDays);
-        out += config->transactionLog.compressAfterDays == 0 ? "（永不压缩）" : "（超期压成 .jsonl.gz，永不删除）";
-        out += "，目录 " + transactionLogDirectory().string() + " 与 " + discardLogDirectory().string();
-        out += '\n';
+        lines.push_back(text::keyed(
+            config->transactionLog.compressAfterDays == 0 ? "shop.command.status.log.line.never"
+                                                          : "shop.command.status.log.line",
+            Tone::Default,
+            config->transactionLog.compressAfterDays == 0
+                ? TextArgs{
+                      text::keyed(config->transactionLog.enabled ? "shop.command.status.log.on"
+                                                                 : "shop.command.status.log.off"),
+                  }
+                : TextArgs{
+                      text::keyed(config->transactionLog.enabled ? "shop.command.status.log.on"
+                                                                 : "shop.command.status.log.off"),
+                      text::lit(std::to_string(config->transactionLog.compressAfterDays)),
+                  }
+        ));
+        lines.push_back(text::keyed("shop.command.status.log.dir", Tone::Default, {
+            text::lit(displayPath(logDirectory())),
+        }));
     }
 
-    // **只读**：不在这里触发解析。解析由 `ServerStartedEvent` 或第一次动钱负责，
-    // 敲一条查询命令不该顺手在记分板上建目标。
-    out += "经济后端：";
-    // 「尚未解析」也分两种（世界未就绪 / 世界已就绪但解析还没跑），
-    // 混成一句会让服主去查错方向——两句话的解释权在 `economyUnresolvedReason()`。
-    auto const unresolved = economyUnresolvedReason();
-    out += unresolved.empty() ? economySelectionText() : unresolved;
-    out += '\n';
+    lines.push_back(section(text::keyed("shop.command.section.runtime")));
 
     // 冻结的交易对：`compensation_failed` 之后钱货没对上，交易被冻在这里等人工核对。
     // 注意这只是**当前进程**里的记录：加载器若整块卸载 DLL，静态对象会一起消失。
-    out += "冻结中的交易对：" + std::to_string(frozenTradeCount())
-         + "（compensation_failed 后冻结，需人工核对；关服日志里会列出）";
-    out += '\n';
+    // 0 是常态：那串「compensation_failed 之后……关服日志里会列出」只在真冻了才有用。
+    auto const frozen = frozenTradeCount();
+    lines.push_back(text::keyed(
+        frozen == 0 ? "shop.command.status.frozen" : "shop.command.status.frozen.note",
+        Tone::Default,
+        {text::lit(std::to_string(frozen))}
+    ));
 
-    out += hookLines("破坏防护", destructionHookSlots());
-    out += hookLines("内容防盗", contentHookSlots());
+    lines.push_back(text::keyed("shop.command.status.debug", Tone::Default, {
+        text::keyed(shopDebugEnabled() ? "shop.command.status.debug.on" : "shop.command.status.debug.off"),
+    }));
 
-    out += "调试日志：";
-    out += shopDebugEnabled() ? "开（/shop debug off 关闭）" : "关（/shop debug on 打开）";
+    lines.push_back(section(text::keyed("shop.command.section.hooks")));
 
-    output.success(out);
+    appendHookLines(lines, text::keyed("shop.command.hooks.destruction"), destructionHookSlots());
+    appendHookLines(lines, text::keyed("shop.command.hooks.content"), contentHookSlots());
+
+    output.success(ss::shop::text::renderLines(lines));
 }
 
 void applyDebugSwitch(CommandOutput& output, std::string const& value) {
     // 配置不可用时模组没启用：改一个全局开关只会留下「看起来生效了」的假象。
     if (!Shop::getInstance().config()) {
-        output.error("Shop 的配置不可用，模组没有启用（调试开关不生效）");
+        output.error(ui::line(ui::Tone::Failure, "shop.command.unavailable"));
         return;
     }
     if (value == "on") {
         setShopDebugEnabled(true);
-        output.success("调试日志已打开：每次牌面判定、保护拦截、交易结果、内容防盗拦截都会打一行 [shop/dbg]");
+        output.success(ui::line(ui::Tone::Success, "shop.command.debug.on"));
         return;
     }
     if (value == "off") {
         setShopDebugEnabled(false);
-        output.success("调试日志已关闭");
+        output.success(ui::line(ui::Tone::Hint, "shop.command.debug.off"));
         return;
     }
-    output.error("用法：/shop debug <on|off>");
+    output.error(ui::line(ui::Tone::Hint, "shop.command.debug.usage"));
 }
 
 } // namespace
@@ -193,7 +273,11 @@ void registerShopCommand() {
     auto& logger = Shop::getInstance().getSelf().getLogger();
     auto& command =
         ll::command::CommandRegistrar::getInstance(/*isClientSide=*/false)
-            .getOrCreateCommand("shop", "商店模组的状态查询与调试开关", CommandPermissionLevel::GameDirectors);
+            .getOrCreateCommand(
+                "shop",
+                ui::plain(text::keyed("shop.command.description")),
+                CommandPermissionLevel::GameDirectors
+            );
 
     command.overload().text("status").execute([](CommandOrigin const&, CommandOutput& output) {
         reportStatus(output);
@@ -212,14 +296,14 @@ void registerShopCommand() {
     // hook 里一律现取配置，所以换完下一次交互就用新值。
     command.overload().text("reload").execute([](CommandOrigin const&, CommandOutput& output) {
         if (auto const error = Shop::getInstance().reloadConfig()) {
-            output.error(*error);
+            output.error(ui::line(ui::Tone::Failure, *error));
             return;
         }
-        output.success("配置已重新读取（不用重挂任何 hook，下一次交互就用新值）");
+        output.success(ui::line(ui::Tone::Success, "shop.command.reload.ok"));
     });
 
     // 注册本身没有返回值可判；这里只在拿不到命令句柄时留一条痕迹。
-    logger.debug("已注册 /shop 命令（status / debug / reload）");
+    logger.debug(ui::plain(text::keyed("shop.command.registered")));
 }
 
 } // namespace ss::shop

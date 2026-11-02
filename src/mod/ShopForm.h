@@ -55,7 +55,7 @@ void openTradeConfirmForm(
     Cell const&        sign,
     TradeDirection     direction,
     TradePlan const&   plan,
-    std::string const& content
+    Text const&        content
 );
 
 } // namespace ss::shop

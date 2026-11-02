@@ -1,4 +1,6 @@
 #include "mod/ShopForm.h"
+#include "mod/Text.h"
+#include "shop/Text.h"
 
 #include "mod/BlockResync.h"
 #include "mod/ContainerFinderBds.h"
@@ -41,7 +43,7 @@ constexpr std::string_view kSellPriceField   = "sell_price";
 constexpr std::string_view kAmountField      = "amount";
 
 /// 提交时牌子已经不在了（改价与改件数共用这一句，所以说「这次的改动」）。
-constexpr std::string_view kSignGoneMessage = "这块商店牌已经不在了，这次的改动没有生效";
+constexpr std::string_view kSignGoneMessage = "shop.protection.sign_gone";
 
 /// 按钮按下之后干什么：买卖各自弹份数表单，管理入口进管理表单，管理表单上的按钮进各自的输入框。
 ///
@@ -85,18 +87,18 @@ void onSignServerThread(Player& player, std::function<void(Player&, ShopConfig c
         auto& logger       = Shop::getInstance().getSelf().getLogger();
         auto const& config = Shop::getInstance().config();
         if (!config) {
-            logger.debug("{} 的表单提交被丢弃：配置已不可用（模组正在关闭？）", xuid);
+            logger.debug(ui::msg("shop.log.form.dropped_no_config", xuid));
             return;
         }
         Player* resolved = onlinePlayer(xuid);
         if (resolved == nullptr) {
-            logger.debug("{} 的表单提交被丢弃：玩家已离线", xuid);
+            logger.debug(ui::msg("shop.log.form.dropped_offline", xuid));
             return;
         }
         if (resolved->getDimensionId() != dimension) {
             // 与管理/交易两条链同一口径：写了也不生效（那块牌子不在他眼前），
             // 但必须说一句——静默 `return` 会让玩家以为按钮坏了。
-            resolved->sendMessage("你已经不在那家店所在的维度，请回到店里再操作");
+            ui::send(*resolved, ui::Tone::Warning, "shop.trade.wrong_dimension");
             return;
         }
         task(*resolved, *config);
@@ -158,7 +160,7 @@ std::string inputText(ll::form::CustomFormResult const& result) {
 struct ManageTarget {
     std::optional<ShopSnapshot> shop;
     bool                        waxed = false;
-    std::string                 message;
+    Text                        message;
 };
 
 ManageTarget inspectManageTarget(BlockSource& region, BlockPos const& pos, Player& player, ShopConfig const& config) {
@@ -197,26 +199,36 @@ std::string priceEditMessage(
     ShopConfig const&           config
 ) {
     if (!price) {
-        return std::string{title} + "已清空：" + std::string{clearedWord};
+        return text::render(text::keyed("shop.form.price_cleared", ss::shop::Tone::Default, {
+            text::keyed(std::string{title}),
+            text::keyed(std::string{clearedWord}),
+        }));
     }
-    return std::string{title} + "已改为 " + moneyText(config.economy.currencySymbol, *price) + " / 份";
+    return text::render(text::keyed("shop.form.price_changed", ss::shop::Tone::Default, {
+        text::keyed(std::string{title}),
+        text::lit(moneyText(config.economy.currencySymbol, *price)),
+    }));
 }
 
 std::string buyPriceEditMessage(ShopSpec const& spec, ShopConfig const& config) {
-    return priceEditMessage("买入价", spec.buyPrice, "这一侧不再出售", config);
+    return priceEditMessage("shop.form.buy_price", spec.buyPrice, "shop.form.side_off.sell", config);
 }
 
 std::string sellPriceEditMessage(ShopSpec const& spec, ShopConfig const& config) {
-    return priceEditMessage("卖出价", spec.sellPrice, "这一侧不再收购", config);
+    return priceEditMessage("shop.form.sell_price", spec.sellPrice, "shop.form.side_off.buy", config);
 }
 
 std::string amountEditMessage(ShopSpec const& spec, ShopConfig const&) {
-    return "一份的件数已改为 " + std::to_string(spec.amount) + " 个";
+    return text::render(text::keyed(
+        "shop.form.amount_changed",
+        ss::shop::Tone::Default,
+        {text::lit(std::to_string(spec.amount))}
+    ));
 }
 
 std::string closedEditMessage(ShopSpec const& spec, ShopConfig const&) {
     // 停业不是关店：牌子、库存、归属、保护都还在，所以提示里说清「随时能开回来」。
-    return spec.closed ? "这家店已停业：牌子、库存与价格都留着，随时可以恢复营业" : "这家店已恢复营业";
+    return ui::plain(text::keyed(spec.closed ? "shop.form.closed_edit" : "shop.form.reopened_edit"));
 }
 
 /// 管理表单上一张单输入框表单的全部内容：控件名、三句文案与初值，再加上校验与成功提示。
@@ -240,27 +252,37 @@ manageInputField(ShopFormAction action, ShopInfoData const& data, ShopSignConfig
     case ShopFormAction::ManageBuyPrice:
         return ManageInputField{
             .control      = std::string{kBuyPriceField},
-            .titleSuffix  = "（管理 · 改买入价）",
-            .label        = "买入价（一份的总价，玩家买一份付给你多少）",
-            .placeholder  = data.buyPrice ? currentValueOf(data.buyPrice) : std::string{"留空表示这一侧不出售"},
+            .titleSuffix  = "shop.form.input.buy_price.title",
+            .label        = "shop.form.input.buy_price.label",
+            .placeholder  = data.buyPrice ? currentValueOf(data.buyPrice)
+                                          : ui::plain(text::keyed("shop.form.input.side_off.sell")),
             .defaultValue = currentValueOf(data.buyPrice),
             .change       = {&withBuyPrice, &buyPriceEditMessage},
         };
     case ShopFormAction::ManageSellPrice:
         return ManageInputField{
             .control      = std::string{kSellPriceField},
-            .titleSuffix  = "（管理 · 改卖出价）",
-            .label        = "卖出价（一份的总价，玩家卖一份你付给他多少）",
-            .placeholder  = data.sellPrice ? currentValueOf(data.sellPrice) : std::string{"留空表示这一侧不收购"},
+            .titleSuffix  = "shop.form.input.sell_price.title",
+            .label        = "shop.form.input.sell_price.label",
+            .placeholder  = data.sellPrice ? currentValueOf(data.sellPrice)
+                                           : ui::plain(text::keyed("shop.form.input.side_off.buy")),
             .defaultValue = currentValueOf(data.sellPrice),
             .change       = {&withSellPrice, &sellPriceEditMessage},
         };
     case ShopFormAction::ManageAmount:
         return ManageInputField{
             .control      = std::string{kAmountField},
-            .titleSuffix  = "（管理 · 改每份件数）",
-            .label        = "每份件数（一份装几个，1 到 " + std::to_string(signConfig.maxShopAmount) + "）",
-            .placeholder  = "1 到 " + std::to_string(signConfig.maxShopAmount) + " 之间的整数",
+            .titleSuffix  = "shop.form.input.amount.title",
+            .label        = ui::plain(text::keyed(
+                "shop.form.input.amount.label",
+                ss::shop::Tone::Default,
+                {text::lit(std::to_string(signConfig.maxShopAmount))}
+            )),
+            .placeholder  = ui::plain(text::keyed(
+                "shop.form.input.amount.placeholder",
+                ss::shop::Tone::Default,
+                {text::lit(std::to_string(signConfig.maxShopAmount))}
+            )),
             .defaultValue = std::to_string(data.amountPerUnit),
             .change       = {&withAmount, &amountEditMessage},
         };
@@ -286,13 +308,13 @@ void submitManageEdit(Player& player, Cell const& sign, ManageChange change, std
 
         auto* signActor = signBlockActorAt(region, pos);
         if (signActor == nullptr) {
-            who.sendMessage(std::string{kSignGoneMessage});
+            ui::send(who, ui::Tone::Failure, kSignGoneMessage);
             return;
         }
 
         auto const target = inspectManageTarget(region, pos, who, config);
         if (!target.shop) {
-            who.sendMessage(target.message);
+            ui::send(who, ui::Tone::Failure, target.message);
             return;
         }
 
@@ -303,14 +325,14 @@ void submitManageEdit(Player& player, Cell const& sign, ManageChange change, std
         // （`formatShopSign` 不看它）；真正决定写牌 XUID 的是 `inspectShop` 读出的 `info.adminShop`。
         auto const parsed = parseShopSignText(text, /*editorIsOp=*/true, signConfig);
         if (!parsed.ok()) {
-            who.sendMessage(shopInvalidMessage());
+            ui::send(who, ui::Tone::Failure, shopInvalidMessage());
             return;
         }
 
         auto const edit = change.apply(*parsed.spec, input, signConfig);
         if (!edit.ok()) {
             // 失败只提示，牌面一字不改（spec D6）。
-            who.sendMessage(edit.error);
+            ui::send(who, ui::Tone::Failure, edit.error);
             return;
         }
 
@@ -327,15 +349,28 @@ void submitManageEdit(Player& player, Cell const& sign, ManageChange change, std
         // 这次写入不是玩家发起的编辑，客户端不会自己重画：按 DESIGN §9.2 发给整个维度。
         resyncBlockActorToDimension(region, pos);
 
-        who.sendMessage(change.successMessage(*edit.spec, config));
+        ui::send(who, ui::Tone::Success, change.successMessage(*edit.spec, config));
     });
 }
 
 void openManageForm(Player& player, Cell const& sign, ShopInfoData const& data, bool waxed) {
-    ll::form::SimpleForm form{shopFormTitle(data) + "（管理）", shopManageFormContent(data, waxed)};
+    auto const localeCode = player.getLocaleCode();
+    ll::form::SimpleForm form{
+        text::render(
+            text::sequence({
+                shopFormTitle(data),
+                text::keyed("shop.form.manage_suffix", ss::shop::Tone::Muted),
+            }),
+            localeCode
+        ),
+        text::renderLines(shopManageFormContent(data, waxed), localeCode)
+    };
 
     for (auto const& button : shopManageFormButtons(data)) {
-        form.appendButton(button.label, [action = button.action, sign](Player& who) { onButton(who, sign, action); });
+        form.appendButton(
+            text::render(button.label, localeCode),
+            [action = button.action, sign](Player& who) { onButton(who, sign, action); }
+        );
     }
 
     form.sendTo(player);
@@ -353,14 +388,17 @@ void openManageInputForm(
     if (!input) {
         // 只有「三个输入框动作」能走到这里。走到了说明表单按钮与动作表脱节了——
         // 这是编程错误，不能表现为「按钮点了没反应」。
-        Shop::getInstance().getSelf().getLogger().error("管理表单收到非输入类动作，无法弹出输入框");
-        player.sendMessage("这个按钮现在不可用，请联系管理员");
+        Shop::getInstance().getSelf().getLogger().error(ui::msg("shop.log.form.not_an_input_action"));
+        ui::send(player, ui::Tone::Failure, "shop.form.button_unavailable");
         return;
     }
 
-    ll::form::CustomForm custom{shopFormTitle(data) + input->titleSuffix};
+    auto const localeCode = player.getLocaleCode();
+    ll::form::CustomForm custom{
+        text::render(shopFormTitle(data), localeCode) + text::render(text::keyed(input->titleSuffix), localeCode)
+    };
     // 正文与信息表单同源：改价时看得到「箱里还剩几份」「余额够不够」，改完不用再点回来看。
-    custom.appendLabel(shopManageFormContent(data, waxed));
+    custom.appendLabel(text::renderLines(shopManageFormContent(data, waxed), localeCode));
     custom.appendInput(input->control, input->label, input->placeholder, input->defaultValue);
 
     custom.sendTo(
@@ -379,7 +417,7 @@ void openManageInputForm(
             // 读不到字符串就是表单出问题了：按「输入不合法」处理，不静默当留空。
             // 发包要回到服务端线程：表单回调线程不确定（见 `onSignServerThread`）。
             onSignServerThread(who, [](Player& player, ShopConfig const&) {
-                player.sendMessage("读不到这个输入框的值，请重新打开表单再试");
+                ui::send(player, ui::Tone::Failure, "shop.form.input_unreadable");
             });
         }
     );
@@ -406,13 +444,17 @@ std::optional<std::int64_t> visibleTotal(ShopInfoData const& data, TradeDirectio
 } // namespace
 
 void openShopForm(Player& viewer, Cell const& sign, ShopInfoData const& data, ShopFormRole role, bool canManage) {
-    ll::form::SimpleForm form{shopFormTitle(data), shopFormContent(data)};
+    auto const localeCode = viewer.getLocaleCode();
+    ll::form::SimpleForm form{
+        text::render(shopFormTitle(data), localeCode),
+        text::renderLines(shopFormContent(data), localeCode)
+    };
 
     for (auto const& button : shopFormButtons(data, role, canManage)) {
         // 按钮回调可能在非主线程触发：回调里不碰方块与容器。
         // 买卖把工作交给 `requestBuyForm` / `requestSellForm`，管理入口交给 `requestManageForm`
         // （两者都会先切回服务端线程）。
-        form.appendButton(button.label, [action = button.action, sign](Player& player) {
+        form.appendButton(text::render(button.label, localeCode), [action = button.action, sign](Player& player) {
             onButton(player, sign, action);
         });
     }
@@ -428,7 +470,7 @@ void requestManageForm(Player& viewer, Cell const& sign) {
 
         auto const target = inspectManageTarget(region, pos, player, config);
         if (!target.shop) {
-            player.sendMessage(target.message);
+            ui::send(player, ui::Tone::Failure, target.message);
             return;
         }
         openManageForm(player, sign, target.shop->info, target.waxed);
@@ -442,7 +484,7 @@ void requestManageInputForm(Player& viewer, Cell const& sign, ShopFormAction act
 
         auto const target = inspectManageTarget(region, pos, player, config);
         if (!target.shop) {
-            player.sendMessage(target.message);
+            ui::send(player, ui::Tone::Failure, target.message);
             return;
         }
         openManageInputForm(player, sign, action, target.shop->info, target.waxed, toSignConfig(config));
@@ -458,15 +500,29 @@ void requestManageToggleClosed(Player& viewer, Cell const& sign) {
 void openTradeForm(Player& viewer, Cell const& sign, TradeDirection direction, ShopInfoData const& data, int maxUnits) {
     auto const model = makeUnitsFormModel(maxUnits);
 
-    ll::form::CustomForm form{shopFormTitle(data)};
-    form.appendLabel(unitsFormContent(direction, data, model));
+    auto const localeCode = viewer.getLocaleCode();
+    ll::form::CustomForm form{text::render(shopFormTitle(data), localeCode)};
+    form.appendLabel(text::renderLines(unitsFormContent(direction, data, model), localeCode));
     form.appendDropdown(
         std::string{kUnitChoiceField},
-        std::string{directionVerb(direction)} + "几份",
-        unitsFormOptions(model),
+        text::render(text::keyed(
+            direction == TradeDirection::Buy ? "shop.form.units_field.buy" : "shop.form.units_field.sell",
+            ss::shop::Tone::Label
+        )),
+        unitsFormOptions(model, localeCode),
         /*defaultVal=*/0
     );
-    form.appendInput(std::string{kCustomUnitsField}, "自定义份数（选「自定义份数」时才看这里）", "1");
+    form.appendInput(
+        std::string{kCustomUnitsField},
+        text::render(
+            text::sequence({
+                text::keyed("shop.form.custom_units", ss::shop::Tone::Label),
+                text::keyed("shop.form.custom_units_hint", ss::shop::Tone::Muted),
+            }),
+            localeCode
+        ),
+        "1"
+    );
 
     form.sendTo(viewer, [sign, model, data, direction](Player& player, ll::form::CustomFormResult const& result, auto) {
         // 玩家选了「取消」：什么都不做，别发一条莫名其妙的提示。
@@ -477,7 +533,7 @@ void openTradeForm(Player& viewer, Cell const& sign, TradeDirection direction, S
         if (!requested.units) {
             // 同上：表单回调线程不确定，发包走服务端线程。
             onSignServerThread(player, [error = requested.error](Player& who, ShopConfig const&) {
-                who.sendMessage(error);
+                ui::send(who, ui::Tone::Failure, error);
             });
             return;
         }
@@ -505,12 +561,21 @@ void openTradeConfirmForm(
     Cell const&        sign,
     TradeDirection     direction,
     TradePlan const&   plan,
-    std::string const& content
+    Text const&        content
 ) {
-    ll::form::SimpleForm form{"确认交易", content};
+    auto const localeCode = viewer.getLocaleCode();
+    ll::form::SimpleForm form{
+        text::render(text::keyed("shop.form.confirm_title", ss::shop::Tone::Title), localeCode),
+        text::render(content, localeCode)
+    };
 
-    auto const verb = "确认" + std::string{directionVerb(direction)} + "（";
-    form.appendButton(verb + std::to_string(plan.units) + " 份）", [sign, plan, direction](Player& player) {
+    // 按钮文字不上色：按钮底有浅灰与深绿两种状态，固定颜色必在其一里失效。
+    auto const verb = text::render(text::keyed(
+        direction == TradeDirection::Buy ? "shop.form.confirm_buy" : "shop.form.confirm_sell",
+        ss::shop::Tone::Default,
+        {text::lit(std::to_string(plan.units))}
+    ), localeCode);
+    form.appendButton(verb, [sign, plan, direction](Player& player) {
         // 已经看过真实份数与金额了：带着它们再确认一次，后续若又变就按实际成交并报告。
         submit(
             player,
@@ -524,7 +589,7 @@ void openTradeConfirmForm(
             }
         );
     });
-    form.appendButton("取消", [](Player&) {});
+    form.appendButton(text::render(text::keyed("shop.form.cancel", ss::shop::Tone::Default), localeCode), [](Player&) {});
 
     form.sendTo(viewer);
 }

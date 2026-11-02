@@ -1,4 +1,5 @@
 #include "mod/SignEditListener.h"
+#include "mod/Text.h"
 
 #include "mod/ContainerFinderBds.h"
 #include "mod/DebugLog.h"
@@ -106,7 +107,7 @@ void onSignEdit(SignEditBeforeEvent& event) {
             {dbgField("outcome", std::string_view{editOutcomeName(result.outcome)}),
              dbgField("player", player.getXuid()),
              dbgField("pos", dbgPos(region.getDimensionId(), event.pos().x, event.pos().y, event.pos().z)),
-             dbgField("reason", result.message)}
+             dbgField("reason", text::render(result.message))}
         );
     }
 
@@ -114,7 +115,7 @@ void onSignEdit(SignEditBeforeEvent& event) {
     case SignEditOutcome::NotAShopSign:
         return; // 普通告示牌原样放行
     case SignEditOutcome::Rejected: {
-        player.sendMessage(result.message);
+        ui::send(player, ui::Tone::Failure, result.message);
 
         // **不 cancel，改成把原文本写回去**（真机 2026-11-01 换来的做法）。
         //
@@ -127,11 +128,7 @@ void onSignEdit(SignEditBeforeEvent& event) {
             // 方块实体读不到（牌子在读之前被拆掉或被别的方块替掉）：这时**没有**可写回的原文。
             // 以前这里会 `event.text() = ""`，而那会把牌面抹成空白——本层唯一会破坏
             // 玩家数据的兜底。宁可这次编辑不生效，也不能写空串。
-            Shop::getInstance().getSelf().getLogger().warn(
-                "告示牌编辑被拒绝，但读不到方块实体（{}, {}, {}）：这次编辑未写回",
-                event.pos().x,
-                event.pos().y,
-                event.pos().z
+            Shop::getInstance().getSelf().getLogger().warn(ui::msg("shop.log.protection.sign_edit_no_actor", event.pos().x, event.pos().y, event.pos().z)
             );
             return;
         }
@@ -230,7 +227,7 @@ void registerSignEditListener() {
             bus.removeListener<SignEditAfterEvent>(gSignEditedListener);
             gSignEditedListener.reset();
         }
-        logger.error("注册告示牌编辑监听失败（已回滚：Before/After 必须同时在，下次 enable 会重试）");
+        logger.error(ui::msg("shop.log.protection.sign_edit_register_failed"));
     }
 }
 
