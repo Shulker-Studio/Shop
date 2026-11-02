@@ -98,13 +98,14 @@
 1. **买一次 → `jq . transactions-*.jsonl` 看到一行 `ok`，金额与件数与牌面对得上；再卖一次看到 `dir: "sell"`** —— **未验**。
    退路：
    - 文件没生成 → 先看 `plugins/Shop/logs/` 在不在了；不建目录会留一句
-     `流水的目录建不出来（…）`，打不开会留 `流水文件打不开（…）`，两种都只提示一次（同进程）。
+     `日志目录建不出来（…）`，打不开会留 `日志文件打不开（…）`，两种都只提示一次（同进程）。
    - 有文件但没这一行 → 说明 `result.tradeLog` 没被填：检查 `finishTrade` 是否走到了（`/shop debug on`
      之后看 `[shop/dbg] trade_result` 的 `outcome` 是不是 `ok`）。
    - 有行但金额不对 → 先看 `units` / `items` 是否与牌面「第 2 行份量」和实际件数一致；
      `unitPrice` 取的是**这一笔**的方向价（买入价 / 卖出价），不是另一侧。
-   - `reason` 是空串是正常的（`ok` 没有原因）；若真机上出现非空 `reason` 且 `result` 是 `ok`，
-     说明有人手拼了记录，`tradeRecordProblem` 会拦住并打 `error`。
+   - `ok` 的行里**没有** `reason` 这个键（票 01 当时写的是空串，两轴审查后按票面「`ok` 不带 reason」
+     改成省掉；若真机看到 `ok` 行带 `"reason":""`，说明装的是旧构建）。非 `ok` 的行才带 `reason`，
+     且必须是英文短名；若真机上出现中文，说明有人手拼了记录（`tradeRecordProblem` 会拦住并打 `error`）。
 2. **管理员店卖出时 `owner.name` 是 `adminShopName`** —— **未验**。退路：本票按配置取值，
    与牌面第 1 行无关；若真机看到的是创建者名字，说明 `config.adminShopName` 与牌面不一致
    （改了配置但没重启），改配置后重启即可。
