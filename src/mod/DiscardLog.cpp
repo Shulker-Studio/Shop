@@ -5,6 +5,7 @@
 #include "shop/LogRotation.h"
 
 #include "mc/deps/nbt/CompoundTag.h"
+#include "mc/deps/nbt/Tag.h"
 #include "mc/world/actor/player/Player.h"
 #include "mc/world/item/SaveContext.h"
 
@@ -29,8 +30,10 @@ std::vector<DiscardRecord> describeDiscardedItems(
             continue; // 空堆不是「被销毁的东西」，写进去只会是一个没有意义的空记录
         }
 
-        // 完整 SNBT：`ItemStack` 自己没有 `save(CompoundTag&)`，只有这个返回新 `CompoundTag` 的重载。
-        auto const tag = stack.save(SaveContext{SaveContext::SaveUseCase::Clone});
+        // 留档要的是「这件东西在存档里长什么样」，所以用 `SaveToDisk`：它保存的是落盘格式，
+        // 而 `Clone` 是「为了复制一件物品」的语义（`SaveContext` 只有 `mSaveUseCase` 一个字段，
+        // 两者差别就全在这一个枚举上，没有别的地方能补救）。
+        auto const tag = stack.save(SaveContext{SaveContext::SaveUseCase::SaveToDisk});
 
         DiscardRecord record;
         record.ts          = ts;
@@ -43,7 +46,11 @@ std::vector<DiscardRecord> describeDiscardedItems(
         record.item.id     = stack.getTypeName();
         record.item.aux    = static_cast<int>(stack.getAuxValue());
         record.item.name   = stack.getName();
-        record.item.nbt    = tag != nullptr ? tag->toString() : std::string{};
+        // **不能**用 `toString()`：`Tag::toString()` 在 BDS 里返回的是给调试打印用的摘要，
+        // 一个钻石会写成 `4 entries`（就是 NBT 的条目数），数据全丢。
+        // `toSnbt(SnbtFormat::Minimize)` 才是紧凑的 SNBT 单行；默认的 `PrettyFilePrint`
+        // 会带换行与缩进，塞进 NDJSON 虽然仍是合法 JSON（换行被转义），但一行几十 KB 已经够难读了。
+        record.item.nbt = tag != nullptr ? tag->toSnbt(SnbtFormat::Minimize) : std::string{};
         records.push_back(std::move(record));
     }
     return records;
@@ -63,7 +70,7 @@ void writeDiscardRecords(std::vector<DiscardRecord> const& records) {
     for (auto const& record : records) {
         lines.push_back(discardRecordJson(record));
     }
-    appendLogLines(logDirectory(), discardLogFileName(isoDateOf(records.front().ts)), lines);
+    appendLogLines(discardLogDirectory(), discardLogFileName(isoDateOf(records.front().ts)), lines);
 }
 
 } // namespace ss::shop

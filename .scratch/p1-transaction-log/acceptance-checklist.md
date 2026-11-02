@@ -19,16 +19,18 @@
 
 ```
 plugins/Shop/
-├── config/config.json          ← 配置在这里
-└── logs/transactions-*.jsonl   ← 流水在这里（本模组建）
-    logs/discarded-*.jsonl
+├── config/config.json                  ← 配置在这里
+└── logs/
+    ├── transactions/2026-11-02.jsonl   ← 业务流水（一行几十字节）
+    └── discarded/2026-11-02.jsonl      ← 销毁留档（一行可能几十 KB）
 ```
 
-**日志目录**：服务器根目录下 `plugins/Shop/logs/`（不是本机仓库里的）。
+**日志目录**：服务器根目录下 `plugins/Shop/logs/`（不是本机仓库里的），后续命令都进它的两个子目录。
 后面所有命令都在这个目录里跑（Git Bash；PowerShell 用 `Get-Content` / `Select-String` 等价替换）。
 
 ```bash
 cd "<服务器根目录>/plugins/Shop/logs"   # 第一次交易后它才会出现
+ls transactions/ discarded/ 2>/dev/null # 新布局：两个子目录
 ```
 
 先开调试输出，后面每条失败都能靠它定位：
@@ -65,12 +67,25 @@ cd "<服务器根目录>/plugins/Shop/logs"   # 第一次交易后它才会出�
 
 ---
 
+## 0.6 旧文件自动搬家（日志改成按类型分目录）
+
+升级前文件平铺在 `logs/` 根下（`transactions-2026-11-01.jsonl`、`discarded-2026-11-01.jsonl.gz`）。
+
+- [ ] 保留几个旧文件 → 启动 → 它们出现在 `logs/transactions/` 与 `logs/discarded/` 里，**文件名去掉前缀**（`2026-11-01.jsonl`）
+- [ ] `logs/` 根下只剩两个子目录（没有残留的 `transactions-*` / `discarded-*`）
+- [ ] 控制台有 `已把 N 个旧位置的日志文件搬进 transactions/ 与 discarded/ 子目录`
+- [ ] 在 `logs/` 根下放一个自己的文件（`README.md` 或 `我的备份.txt`）→ 重启 → 它**没有被搬走**
+- [ ] 再重启一次 → 不再搬（幂等）
+- [ ] `discarded/*.jsonl.gz` 搬过来后 `zcat` 仍能读（搬家是 rename，不是重新压缩）
+
+---
+
 ## 1. 买一次 → 一行 `ok`（票 01）
 
 **步骤**
 
 1. 玩家 `A` 点普通店的牌子 → 买 1 份 → 确认成交（钱扣了、货到手）。
-2. `jq -c . transactions-$(date +%F).jsonl | tail -1`
+2. `jq -c . transactions/$(date +%F).jsonl | tail -1`
 
 **期望**
 
@@ -102,7 +117,7 @@ cd "<服务器根目录>/plugins/Shop/logs"   # 第一次交易后它才会出�
 
 ## 2. 卖一次 → `dir: "sell"`（票 01）
 
-**步骤**：玩家 `A` 往普通店卖 1 份 → `jq -c . transactions-$(date +%F).jsonl | tail -1`
+**步骤**：玩家 `A` 往普通店卖 1 份 → `jq -c . transactions/$(date +%F).jsonl | tail -1`
 
 - [ ] 新增一行，`result` 是 `ok`、`dir` 是 `"sell"`、`player` 是 `A`
 - [ ] `unitPrice` = **卖出价**；`gross` 与 `total` 都等于 `unitPrice × units`（卖出方向玩家收到的是牌面额，税由店主另付）
@@ -114,8 +129,8 @@ cd "<服务器根目录>/plugins/Shop/logs"   # 第一次交易后它才会出�
 **步骤**
 
 1. 玩家 `A` 往**管理员店**卖 1 份（手里带附魔/自定义名的货最好，`nbt` 才有内容可看）。
-2. `jq -lc 'select(.result=="ok")' transactions-$(date +%F).jsonl | tail -1`
-3. `jq -c . discarded-$(date +%F).jsonl | tail -1`
+2. `jq -lc 'select(.result=="ok")' transactions/$(date +%F).jsonl | tail -1`
+3. `jq -c . discarded/$(date +%F).jsonl | tail -1`
 
 **期望（业务流水）**
 
@@ -129,7 +144,8 @@ cd "<服务器根目录>/plugins/Shop/logs"   # 第一次交易后它才会出�
 
 - [ ] 一行一件：卖 1 份 64 件就是 1 行；卖 3 份就是 3 行
 - [ ] 字段是 `ts` / `shop` / `player` / `item{id,aux,name,nbt}`，`ts` 与上面那条业务流水**同一天**
-- [ ] `item.nbt` 是完整 SNBT（形如 `{Count:64b,Name:"minecraft:…"}`），附魔/改名都在里面
+- [ ] `item.nbt` 是**完整 SNBT**：以 `{` 开头、含 `Count:` / `Name:`（形如 `{Count:1b,Damage:0s,Name:"minecraft:diamond",wasPickedUp:0b}`），附魔/改名/耐久都在里面
+- [ ] **不是** `"4 entries"` 这种摘要（那是 `Tag::toString()` 的输出，出现它说明装的还是旧构建）
 - [ ] 这些行**不在** `transactions-*.jsonl` 里（NBT 几十 KB，绝不能进业务流水）
 
 **没过就这样查**：`discarded` 缺行而业务流水有行 → `sellUnits` 的 `info.adminShop` 分支没填 `TradeResult::discarded`；两个文件都缺 → 看 warn；`owner.name` 是创建者名 → 改过 `adminShopName` 但没重启。
@@ -146,7 +162,7 @@ cd "<服务器根目录>/plugins/Shop/logs"   # 第一次交易后它才会出�
 `B` 应该收到「钱不够」的提示，然后：
 
 ```bash
-jq -c 'select(.result=="fail")' transactions-$(date +%F).jsonl | tail -1
+jq -c 'select(.result=="fail")' transactions/$(date +%F).jsonl | tail -1
 ```
 
 - [ ] 有一行 `result` 是 `"fail"`、`reason` 是 `"no_money"`
@@ -180,27 +196,29 @@ grep -n "fatal\|compensation" ../../logs/*.log 2>/dev/null | tail -20
 判定**只看文件名里的日期，不看 mtime**，所以造素材就是改个名字：
 
 ```bash
-cd "<服务器根目录>/plugins/Shop/logs"
-src=$(ls transactions-*.jsonl | head -1)
-cp "$src" "transactions-$(date -d '8 days ago' +%F).jsonl"   # 8 天前 → 该压
-ls -l transactions-*.jsonl*
+cd "<服务器根目录>/plugins/Shop/logs/transactions"
+src=$(ls *.jsonl | head -1)
+cp "$src" "$(date -d '8 days ago' +%F).jsonl"   # 8 天前 → 该压
+ls -l
 ```
 
 2. **交易一笔**（或重启后的第一次写流水）触发扫描 —— 不需要等定时任务，也没有定时任务。
 
 ```bash
-ls -l transactions-*.jsonl*
-zcat transactions-$(date -d '8 days ago' +%F).jsonl.gz | jq -c . | head -2
-duckdb -c "select result, count(*) from read_json_auto('transactions-*.jsonl*') group by 1;"
+ls -l
+zcat $(date -d '8 days ago' +%F).jsonl.gz | jq -c . | head -2
+duckdb -c "select result, count(*) from read_json_auto('*.jsonl*') group by 1;"
 ```
 
-- [ ] 8 天前那个文件变成 `transactions-<日期>.jsonl.gz`，同名 `.jsonl` **不见了**
+- [ ] 8 天前那个文件变成 `<日期>.jsonl.gz`，同名 `.jsonl` **不见了**
 - [ ] 目录里**没有** `.gz.part` 残留
 - [ ] `zcat … | jq -c .` 能逐行读出（内容与压缩前一致）
 - [ ] `duckdb` 能同时读到 `.jsonl` 与 `.jsonl.gz`（glob `*.jsonl*`）
 - [ ] **今天**的文件与 **7 天内**的文件**没有被压**（`shouldCompress` 是「早于今天 − N 天」，正好 N 天不压）
 
-**没过就这样查**：没被压 → 造文件是不是在「写成功之前」？（触发点在写完日志之后）文件名是不是严格 `transactions-YYYY-MM-DD.jsonl`；有 `.gz` 但原文件还在 → 上一轮删原文件失败（有 warn），下次写流水补删；`zcat` 读不出 → 只可能是截断，删掉 `.gz` 让它重压（原文件还在）。
+**没过就这样查**：没被压 → 造文件是不是在「写成功之前」？（触发点在写完日志之后）文件名是不是严格 `YYYY-MM-DD.jsonl`；有 `.gz` 但原文件还在 → 上一轮删原文件失败（有 warn），下次写流水补删；`zcat` 读不出 → 只可能是截断，删掉 `.gz` 让它重压（原文件还在）。
+
+顺带验一次「跨目录轮转」：把一个 8 天前的文件放进 `logs/discarded/`，然后**只做一笔买入**（不卖东西）——`discarded/` 那个文件也应该被压（压缩扫的是日志根目录下的两个子目录，不要求那个目录自己有新写入）。
 
 ---
 
@@ -222,7 +240,7 @@ duckdb -c "select result, count(*) from read_json_auto('transactions-*.jsonl*') 
 2. 买卖各做一笔（含管理员店卖出——它本来会写 `discarded`）。
 
 ```bash
-wc -l transactions-*.jsonl discarded-*.jsonl
+wc -l transactions/*.jsonl discarded/*.jsonl
 ```
 
 - [ ] 两个文件的行数**都不再增加**（业务流水与 `discarded` 同时停）
@@ -244,13 +262,14 @@ wc -l transactions-*.jsonl discarded-*.jsonl
 ## 10. 收尾自查（不用造场景，30 秒）
 
 ```bash
-cd "<服务器根目录>/plugins/Shop/logs"
-jq -e . transactions-*.jsonl > /dev/null && echo "每一行都是合法 JSON"
-jq -r '.result' transactions-*.jsonl | sort | uniq -c        # 只该有 ok / fail
-jq -r '.backend' transactions-*.jsonl | sort | uniq -c        # 只该有 legacy_money / scoreboard / null
-jq -r 'select(.result=="ok") | has("reason")' transactions-*.jsonl | sort -u   # 只该有 false
-jq -r 'select(.result!="ok") | .reason' transactions-*.jsonl | sort | uniq -c  # 全是英文短名
-grep -c . transactions-*.jsonl | head                           # 行数
+cd "<服务器根目录>/plugins/Shop/logs/transactions"
+jq -e . *.jsonl > /dev/null && echo "每一行都是合法 JSON"
+jq -r '.result' *.jsonl | sort | uniq -c        # 只该有 ok / fail
+jq -r '.backend' *.jsonl | sort | uniq -c       # 只该有 legacy_money / scoreboard / null
+jq -r 'select(.result=="ok") | has("reason")' *.jsonl | sort -u   # 只该有 false
+jq -r 'select(.result!="ok") | .reason' *.jsonl | sort | uniq -c  # 全是英文短名
+wc -l *.jsonl                                   # 行数
+cd ../discarded && jq -e . *.jsonl > /dev/null && echo "留档每一行也是合法 JSON"
 ```
 
 - [ ] 每一行都是合法 JSON（转义没坏）
@@ -265,5 +284,5 @@ grep -c . transactions-*.jsonl | head                           # 行数
 
 1. `/shop debug off`。
 2. `plugins/Shop/config/config.json` 的 `transactionLog` 改回 `{"enabled": true, "compressAfterDays": 7}`，重启。
-3. 删掉造的假文件（`transactions-<8 天前>.jsonl` 及其 `.gz`）。
+3. 删掉造的假文件（`transactions/` 下 `<8 天前>.jsonl` 及其 `.gz`）。
 4. 把每条没过的情况贴回来：`jq` 输出 + 控制台 warn/fatal 原文 + `/shop status` 那几行。

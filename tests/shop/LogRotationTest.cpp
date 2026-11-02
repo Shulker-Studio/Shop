@@ -16,6 +16,15 @@ bool dateIs(std::string_view fileName, char const* expected) {
 
 } // namespace
 
+TEST_CASE("流水轮转：新布局的文件名（日期就在开头）也能解析") {
+    // 分目录之后文件名不再带类型前缀，`logFileDate` 必须认「日期就是整个名字」这一种。
+    CHECK(dateIs("2026-11-01.jsonl", "2026-11-01"));
+    CHECK(dateIs("2024-02-29.jsonl", "2024-02-29"));
+    CHECK_FALSE(logFileDate("2026-11-01.jsonl.gz").has_value());
+    CHECK_FALSE(logFileDate("2026-11-01.jsonl.part").has_value());
+    CHECK_FALSE(logFileDate("notes.jsonl").has_value());
+}
+
 TEST_CASE("流水轮转：日期从文件名解析（不看 mtime）") {
     // 文件被复制、备份还原、`touch` 过之后 mtime 不代表记录是哪天的；文件名是写记录时定下的。
     CHECK(dateIs("transactions-2026-11-01.jsonl", "2026-11-01"));
@@ -73,4 +82,27 @@ TEST_CASE("流水轮转：文件名里的日期来自 ts 的前 10 个字符") {
     // 短到没有日期原样返回（这种记录会被 tradeRecordProblem 拦住，不该走到写文件）
     CHECK(std::string{isoDateOf("2026")} == "2026");
     CHECK(std::string{isoDateOf("")} == "");
+}
+
+TEST_CASE("日志布局：旧位置的文件能算出新位置（前缀 → 子目录）") {
+    // 旧布局把所有文件平铺在 `logs/` 根下：`transactions-2026-11-01.jsonl`。
+    // 新布局每个文件进自己的子目录，文件名里不再带前缀。搬家规则必须幂等且不碰别人的文件。
+    auto const trade = relocatedLogFile("transactions-2026-11-01.jsonl");
+    REQUIRE(trade.has_value());
+    CHECK(trade->subdirectory == "transactions");
+    CHECK(trade->fileName == "2026-11-01.jsonl");
+
+    auto const discard = relocatedLogFile("discarded-2026-11-01.jsonl.gz");
+    REQUIRE(discard.has_value());
+    CHECK(discard->subdirectory == "discarded");
+    CHECK(discard->fileName == "2026-11-01.jsonl.gz"); // `.gz` 原样保留
+
+    // 不认识的、日期不合法的、后缀不对的：一律不碰（那个目录里可能有服主自己放的文件）
+    CHECK_FALSE(relocatedLogFile("README.md").has_value());
+    CHECK_FALSE(relocatedLogFile("transactions-.jsonl").has_value());
+    CHECK_FALSE(relocatedLogFile("transactions-2026-13-01.jsonl").has_value()); // 13 月
+    CHECK_FALSE(relocatedLogFile("transactions-2026-11-01.txt").has_value());
+    CHECK_FALSE(relocatedLogFile("transactions-2026-11-01.jsonl.part").has_value());
+    // 新布局的文件名（已经在子目录里）不该被再搬一次
+    CHECK_FALSE(relocatedLogFile("2026-11-01.jsonl").has_value());
 }

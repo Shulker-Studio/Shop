@@ -187,11 +187,20 @@
   **永不删除**：只压不删，清盘得服主自己 `rm`；顺序是「写 `.part` → 关好 → 原子改名为 `.jsonl.gz` → 删原文件」，
   中途崩服只会留下 `.part`（扫描认得 `.jsonl`，认不出它），不会出现「截断的 .gz 被当成已压过、原文件被删」。
   压缩失败保留原文件、下一轮重试；写成功之后顺手检查一遍目录，不额外开线程、不做定时任务。
+- 日志按类型分目录（服主提议）：`logs/transactions/YYYY-MM-DD.jsonl` 与 `logs/discarded/YYYY-MM-DD.jsonl`。
+  两类记录体量差两个数量级（流水一行几十字节、留档一行可能几十 KB），混在一层时 `du` 分不清谁在涨、
+  `zcat` 查账会顺手解出几百 MB 的 NBT。压缩扫的是日志根目录连同两个子目录（写流水时顺手压留档，
+  不必等那个目录自己有新写入）；旧布局平铺在 `logs/` 根下的文件在启用时自动搬进子目录
+  （同盘 rename、不覆盖、失败只 warn、只认本模组写出来的名字、幂等）。
 - `/shop status` 多一行「交易流水：开 / 关（compressAfterDays=N，目录 …）」；`README.md` 新增「交易流水」一节
   （字段含义、两个文件的分工、`jq` / `zcat` / `duckdb` 三个示例、两个配置项）。
 
 ### 修复
 
+- **销毁留档的 `item.nbt` 写成了 `"4 entries"`**：`Tag::toString()` 在 BDS 里返回的是调试用的摘要
+  （一个钻石正好 4 条 NBT：`Count`/`Damage`/`Name`/`wasPickedUp`），不是 SNBT。改用
+  `Tag::toSnbt(SnbtFormat::Minimize)`（紧凑单行；默认的 `PrettyFilePrint` 会带换行），
+  `SaveContext` 也从 `Clone` 改成 `SaveToDisk`——留档要的是「存档里长什么样」。
 - **升级后配置里少一个新块，整个模组拒绝加载**：`ll::config::loadConfig` 只在文件缺 `version`
   或 `version` 与代码不同时才用默认值补齐，否则严格反序列化——给 `ShopConfig` 加 `transactionLog`
   之后，老 `config.json` 直接报 `missing required field "transactionLog"`，`Shop` 拒绝启用。

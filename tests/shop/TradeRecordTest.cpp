@@ -118,8 +118,9 @@ TEST_CASE("交易流水：中文原样写（UTF-8 不转成 \\u）") {
 }
 
 TEST_CASE("交易流水：文件名按日期生成，跨天就是另一个文件") {
-    CHECK(transactionLogFileName("2026-11-01") == "transactions-2026-11-01.jsonl");
-    CHECK(transactionLogFileName("2026-12-31") == "transactions-2026-12-31.jsonl");
+    // 文件名只留日期：类型由所在目录（`logs/transactions/`）区分，再带前缀就是重复信息。
+    CHECK(transactionLogFileName("2026-11-01") == "2026-11-01.jsonl");
+    CHECK(transactionLogFileName("2026-12-31") == "2026-12-31.jsonl");
 }
 
 TEST_CASE("交易流水：矛盾组合被拒（校验函数是落盘前的最后一道闸）") {

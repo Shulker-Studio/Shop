@@ -37,7 +37,9 @@ struct DiscardRecord {
 /// 字符串里的引号、反斜杠与控制字符都要转义——把一条记录撕成两行就不再是合法 NDJSON 了。
 std::string discardRecordJson(DiscardRecord const& record);
 
-/// `discarded-YYYY-MM-DD.jsonl`。`date` 就是 `ts` 的前 10 个字符，两者因此永远同一天。
+/// `YYYY-MM-DD.jsonl`。`date` 就是 `ts` 的前 10 个字符，两者因此永远同一天。
+///
+/// 与业务流水同一套命名：类型由目录（`logs/discarded/`）区分，文件名只留日期。
 std::string discardLogFileName(std::string_view date);
 
 } // namespace ss::shop

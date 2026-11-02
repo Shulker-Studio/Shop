@@ -117,7 +117,7 @@ std::string tradeRecordJson(TradeRecord const& record) {
     return jsonLine(row);
 }
 
-std::string transactionLogFileName(std::string_view date) { return "transactions-" + std::string{date} + ".jsonl"; }
+std::string transactionLogFileName(std::string_view date) { return std::string{date} + ".jsonl"; }
 
 std::string_view tradeRecordProblem(TradeRecord const& record) {
     if (record.ts.empty()) {

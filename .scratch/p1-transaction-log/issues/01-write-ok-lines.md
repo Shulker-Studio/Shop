@@ -15,7 +15,7 @@
 - [x] 写失败（磁盘满/权限）只 `warn`（**同进程一次**），交易照常成功
 - [x] 接线点**只有** `finishTrade`（两个方向都经过它，且拿得到 `result.plan`）；本票只处理 `Done → ok`，`Rejected`/`Broken` 留到 02
 - [x] 单测：三种记录的快照字符串（锁键序与转义）、含引号与换行的自定义物品名仍是一行、文件名、矛盾组合被拒
-- [ ] 真机（**未验**）：买一次 → `jq . transactions-*.jsonl` 看到一行 `ok`，金额与件数与牌面对得上；再卖一次看到 `dir: "sell"`
+- [ ] 真机（**未验**）：买一次 → `jq . transactions/*.jsonl` 看一行 `ok`，金额与件数与牌面对得上；再卖一次看到 `dir: "sell"`
 - [x] `xmake build Shop` / `xmake test` 全绿，测试数与断言数写进本票
 
 ## 备注
@@ -42,7 +42,9 @@
 - `composeTradeRecord` 把「`admin == true` ⇒ `owner.xuid` 为空串、`tax = 0`」做成**造不出来的矛盾**：
   管理员店的对手方是系统账户（DESIGN §7.4），一条写着「店主收到钱」的管理员店流水会让人去追一个
   不存在的账户。`ts` 由调用方传入，纯逻辑层不读时钟。
-- `transactionLogFileName(date)`：`transactions-YYYY-MM-DD.jsonl`，与 `ts` 前 10 位同源，跨天就是另一个文件。
+- `transactionLogFileName(date)`：`YYYY-MM-DD.jsonl`，与 `ts` 前 10 位同源，跨天就是另一个文件。
+  （**布局后来变了**：文件现在放在 `plugins/Shop/logs/transactions/` 里，文件名因此去掉了
+  `transactions-` 前缀——类型由目录区分。规则不变，仍是纯函数；见票 03 的「追加：日志按类型分目录」。）
 - `tradeRecordProblem(record)`：落盘前的最后一道闸（`ok` 不带 `reason`、`fail`/`frozen` 必须带、
   管理员店的 `tax` 与 `owner.xuid`、`ts` 不能空）。矛盾记录**不写**——比少一行更误导。
 - 依赖方向按票面：`TradeLogResult` 与 mod 的 `TradeStatus` 是两套枚举，

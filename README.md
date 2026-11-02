@@ -75,15 +75,27 @@ OP 把第 1 行写成 `adminShopName`（默认 `Admin Shop`）就是管理员商
 
 ### 交易流水（JSONL，P1）
 
-每笔**终态**交易自己留一行，位置 `plugins/Shop/logs/transactions-YYYY-MM-DD.jsonl`（按天分文件，服务器本地时间）。
+每笔**终态**交易自己留一行，位置 `plugins/Shop/logs/transactions/YYYY-MM-DD.jsonl`（按天分文件，服务器本地时间）。
 一行一个 JSON 对象（NDJSON）、键序固定、UTF-8 无 BOM、中文不转义，`jq` / `duckdb` 直接读。
 
 `result` 只有三种：`ok`（成交）、`fail`（拒绝或没成交，带机器可读的 `reason`，如 `no_money` / `no_stock` /
 `no_space` / `owner_offline` / `shop_closed` / `frozen_pair`）、`frozen`（补偿失败被冻结，
 `reason` 为 `compensation_failed`，同时有一条 `fatal` 日志）。等待玩家确认的那一屏**不记**——它不是终态。
 
-管理员店卖出时被**销毁**的货另写一个文件 `discarded-YYYY-MM-DD.jsonl`：一行一件物品堆，
-带完整 SNBT（`item.nbt`），所以它可能与业务流水不是同一个量级。两个文件同一套轮转规则。
+管理员店卖出时被**销毁**的货另写一个目录 `plugins/Shop/logs/discarded/YYYY-MM-DD.jsonl`：一行一件物品堆，
+`item.nbt` 是完整 SNBT（紧凑单行，如 `{Count:1b,Damage:0s,Name:"minecraft:diamond",wasPickedUp:0b}`）。
+两类记录**分目录**放，因为它们体量差两个数量级（业务流水一行几十字节，留档一行可能几十 KB）：
+
+```
+plugins/Shop/logs/
+├── transactions/2026-11-01.jsonl       ← 业务流水
+├── transactions/2026-10-25.jsonl.gz    ← 超期压缩后
+├── discarded/2026-11-01.jsonl          ← 销毁留档（NBT 很胖）
+└── discarded/2026-10-25.jsonl.gz
+```
+
+两个目录同一套轮转规则。旧版本留下的文件平铺在 `logs/` 根下（带 `transactions-` / `discarded-` 前缀），
+模组启用时会**自动搬进**对应子目录（同盘 rename，不覆盖任何已有文件，失败只留一条 warn）。
 
 **永不删除**：超过 `transactionLog.compressAfterDays` 天（默认 7）的文件压成 `.jsonl.gz`，
 压缩成功后才删原文件。`0` 表示永不压缩；负数被拒（配置非法不加载）。要清盘请服主自己 `rm`。
@@ -91,13 +103,13 @@ OP 把第 1 行写成 `adminShopName`（默认 `Admin Shop`）就是管理员商
 
 ```bash
 # 1. 今天卖了什么：只看成交，挑几个字段
-jq 'select(.result=="ok") | {ts, dir, item: .item.name, units, total}' plugins/Shop/logs/transactions-2026-11-01.jsonl
+jq 'select(.result=="ok") | {ts, dir, item: .item.name, units, total}' plugins/Shop/logs/transactions/2026-11-01.jsonl
 
 # 2. 查已压缩的历史（.jsonl.gz 直接 zcat 进 jq）
-zcat plugins/Shop/logs/transactions-2026-10-2*.jsonl.gz | jq -c 'select(.player.xuid=="2535400000000002")'
+zcat plugins/Shop/logs/transactions/2026-10-2*.jsonl.gz | jq -c 'select(.player.xuid=="2535400000000002")'
 
 # 3. 用 duckdb 聚合（.jsonl 与 .jsonl.gz 都能直读）
-duckdb -c "SELECT owner.name, sum(total) AS 营业额 FROM read_json_auto('plugins/Shop/logs/transactions-*.jsonl*') WHERE result='ok' GROUP BY 1 ORDER BY 2 DESC"
+duckdb -c "SELECT owner.name, sum(total) AS 营业额 FROM read_json_auto('plugins/Shop/logs/transactions/*.jsonl*') WHERE result='ok' GROUP BY 1 ORDER BY 2 DESC"
 ```
 
 ### 配置项（P0 已生效）
@@ -111,7 +123,8 @@ duckdb -c "SELECT owner.name, sum(total) AS 营业额 FROM read_json_auto('plugi
 
 ### 配置文件与补齐规则
 
-配置文件在 `plugins/Shop/config/config.json`（日志在 `plugins/Shop/logs/`，两者是**不同**的两层目录）。
+配置文件在 `plugins/Shop/config/config.json`（日志在 `plugins/Shop/logs/transactions/` 与
+`plugins/Shop/logs/discarded/`，是**不同**的两层目录）。
 
 **缺键不会让模组拒绝加载。** 加载时永远拿本版的默认值打底、用文件里的值覆盖，所以：
 

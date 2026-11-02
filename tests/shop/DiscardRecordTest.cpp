@@ -62,7 +62,8 @@ TEST_CASE("销毁留档：nbt 原样透传，不截断也不改写") {
 }
 
 TEST_CASE("销毁留档：文件名按日期生成") {
-    CHECK(discardLogFileName("2026-11-01") == "discarded-2026-11-01.jsonl");
+    // 类型由目录（`logs/discarded/`）区分，文件名只留日期——与业务流水同一套命名。
+    CHECK(discardLogFileName("2026-11-01") == "2026-11-01.jsonl");
     // 日期直接取 ts 的前 10 个字符，所以两者永远同一天
-    CHECK(discardLogFileName(diamond().ts.substr(0, 10)) == "discarded-2026-11-01.jsonl");
+    CHECK(discardLogFileName(diamond().ts.substr(0, 10)) == "2026-11-01.jsonl");
 }

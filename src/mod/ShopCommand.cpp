@@ -114,15 +114,15 @@ void reportStatus(CommandOutput& output) {
     out += config->transactionLog.enabled ? "开" : "关（业务流水与 discarded 一起停）";
     out += " compressAfterDays=" + std::to_string(config->transactionLog.compressAfterDays);
     out += config->transactionLog.compressAfterDays == 0 ? "（永不压缩）" : "（超期压成 .jsonl.gz，永不删除）";
-    out += "，目录 " + logDirectory().string();
+    out += "，目录 " + transactionLogDirectory().string() + " 与 " + discardLogDirectory().string();
     out += '\n';
 
     // **只读**：不在这里触发解析。解析由 `ServerStartedEvent` 或第一次动钱负责，
     // 敲一条查询命令不该顺手在记分板上建目标。
-    auto const& selection = economySelectionText();
-    out += "经济后端：";
-    out += selection.empty() ? "尚未解析（世界未就绪）" : selection;
-    out += '\n';
+    auto const& selection  = economySelectionText();
+    out                   += "经济后端：";
+    out                   += selection.empty() ? "尚未解析（世界未就绪）" : selection;
+    out                   += '\n';
 
     out += hookLines("破坏防护", destructionHookSlots());
     out += hookLines("内容防盗", contentHookSlots());
@@ -160,11 +160,8 @@ void registerShopCommand() {
 
     auto& logger = Shop::getInstance().getSelf().getLogger();
     auto& command =
-        ll::command::CommandRegistrar::getInstance(/*isClientSide=*/false).getOrCreateCommand(
-            "shop",
-            "商店模组的状态查询与调试开关",
-            CommandPermissionLevel::GameDirectors
-        );
+        ll::command::CommandRegistrar::getInstance(/*isClientSide=*/false)
+            .getOrCreateCommand("shop", "商店模组的状态查询与调试开关", CommandPermissionLevel::GameDirectors);
 
     command.overload().text("status").execute([](CommandOrigin const&, CommandOutput& output) {
         reportStatus(output);

@@ -7,7 +7,8 @@ namespace ss::shop {
 namespace {
 
 /// 我们自己的流水文件后缀。`.jsonl.gz` 不以它结尾，所以「已经压过的」自然被排除。
-constexpr std::string_view kLogExtension = ".jsonl";
+constexpr std::string_view kLogExtension        = ".jsonl";
+constexpr std::string_view kCompressedExtension = ".gz";
 
 /// 日期在文件名里占的宽度（`YYYY-MM-DD`）与它前面那个分隔符。
 constexpr std::size_t kDateLength = 10;
@@ -54,8 +55,13 @@ std::optional<std::string> logFileDate(std::string_view fileName) {
         return std::nullopt;
     }
     auto const stem = fileName.substr(0, fileName.size() - kLogExtension.size());
-    // `-YYYY-MM-DD`：日期前面必须有一个 `-`，这样 `transactions2026-11-01.jsonl` 不会被认下来。
-    if (stem.size() < kDateLength + 1 || stem[stem.size() - kDateLength - 1] != '-') {
+    // 日期要么就是整个名字（新布局 `transactions/2026-11-01.jsonl`——类型已经由目录区分），
+    // 要么前面还有一个 `-`（旧布局 `transactions-2026-11-01.jsonl`，搬家前后都可能遇到）。
+    // 那个分隔符是必要的：`transactions2026-11-01.jsonl` 不该被认成自己的文件。
+    if (stem.size() < kDateLength) {
+        return std::nullopt;
+    }
+    if (stem.size() > kDateLength && stem[stem.size() - kDateLength - 1] != '-') {
         return std::nullopt;
     }
     auto const date = stem.substr(stem.size() - kDateLength);
@@ -76,6 +82,38 @@ bool shouldCompress(std::string_view fileDate, std::string_view today, int days)
     }
     // 严格早于「今天 − N 天」：正好 N 天的文件今天不压，N+1 天才压。
     return *fileDay < *todayDay - std::chrono::days{days};
+}
+
+std::optional<RelocatedLogFile> relocatedLogFile(std::string_view fileName) {
+    struct Prefix {
+        std::string_view prefix;
+        std::string_view subdirectory;
+    };
+    // 顺序无所谓：两个前缀互不为前缀。
+    constexpr Prefix kPrefixes[] = {
+        {"transactions-", "transactions"},
+        {"discarded-",    "discarded"   },
+    };
+    for (auto const& candidate : kPrefixes) {
+        if (!fileName.starts_with(candidate.prefix)) {
+            continue;
+        }
+        auto const rest = fileName.substr(candidate.prefix.size());
+        // 去掉前缀后应当是 `YYYY-MM-DD.jsonl` 或 `YYYY-MM-DD.jsonl.gz`。
+        // 这里不能直接复用 `logFileDate`：它要求日期**前面**有 `-`（那是为了不把
+        // `transactions2026-11-01.jsonl` 认成自己的文件），而前缀已经在这之前被切掉了。
+        auto const body =
+            rest.ends_with(kCompressedExtension) ? rest.substr(0, rest.size() - kCompressedExtension.size()) : rest;
+        if (!body.ends_with(kLogExtension)) {
+            return std::nullopt;
+        }
+        auto const date = body.substr(0, body.size() - kLogExtension.size());
+        if (!parseDate(date)) {
+            return std::nullopt; // 日期不合法：不是我们写的（或者写坏了），不搬
+        }
+        return RelocatedLogFile{std::string{candidate.subdirectory}, std::string{rest}};
+    }
+    return std::nullopt;
 }
 
 std::string compressedLogFileName(std::string_view fileName) {

@@ -7,7 +7,7 @@
 
 namespace ss::shop {
 
-/// 日志的落盘目录：`plugins/Shop/logs/`（业务流水与销毁留档都在这里）。
+/// 日志根目录：`plugins/Shop/logs/`。
 ///
 /// 用 `getModDir()`（= 模组目录 `plugins/Shop`）拼，**不是** `getConfigDir()`：
 /// 后者是 `plugins/Shop/config`（配置文件所在的那一层），拿它拼会变成
@@ -15,9 +15,27 @@ namespace ss::shop {
 /// 也不自己写死 `plugins/Shop`：模组装在哪由加载器决定。
 std::filesystem::path logDirectory();
 
+/// 业务流水目录：`plugins/Shop/logs/transactions/`。
+///
+/// 两类记录分目录放，因为它们**体量差两个数量级**：业务流水一行几十字节，销毁留档一行可能几十 KB
+/// （完整 SNBT）。分开之后 `du -sh logs/*` 一眼能看出是谁在涨，`zcat transactions/*.gz` 查历史账时
+/// 也不会顺手把几百 MB 的 NBT 一起解出来。文件名仍是 `YYYY-MM-DD.jsonl`（按天轮转），
+/// 不再叠年月子目录：一年才 365 个文件，目录不会失控。
+std::filesystem::path transactionLogDirectory();
+
+/// 销毁留档目录：`plugins/Shop/logs/discarded/`。见 `transactionLogDirectory()`。
+std::filesystem::path discardLogDirectory();
+
+/// 把旧布局（所有文件平铺在 `logs/` 根下、带 `transactions-` / `discarded-` 前缀）搬进新布局。
+///
+/// 幂等、只在模组启用时跑一次、失败只 `warn`：搬不动（目标已存在、文件被占用）就留在原地，
+/// **不覆盖**任何已有文件。只搬本模组写出来的名字（`relocatedLogFile` 判定），
+/// 那个目录里服主自己放的东西不会被碰。
+void migrateLegacyLogs();
+
 /// 把一批**已经是完整 NDJSON 行**的文本追加到 `dir / fileName`。
 ///
-/// 这是**所有日志文件的唯一出路**（业务流水 `transactions-*` 与销毁留档 `discarded-*` 都走它），
+/// 这是**所有日志文件的唯一出路**（业务流水与销毁留档都走它），
 /// 所以三件与「这条日志能不能落盘」有关的事都只在这里判一次：
 ///
 /// 1. **总开关**：`transactionLog.enabled == false` 时直接返回，两个文件一起停；

@@ -3,9 +3,10 @@
 
 #include "mod/ContainerProtectionListener.h"
 #include "mod/ContentProtectionHooks.h"
-#include "mod/DestructionProtectionHooks.h"
 #include "mod/DebugLog.h"
+#include "mod/DestructionProtectionHooks.h"
 #include "mod/EconomyService.h"
+#include "mod/LogFile.h"
 #include "mod/SignEditListener.h"
 #include "mod/SignInteractListener.h"
 #include "mod/TradeService.h"
@@ -42,6 +43,12 @@ bool Shop::enable() {
         initTradeService(*mConfig);
         // 经济后端也是懒解析：现在世界往往还没起来，所以这里只挂启动监听 + 打税告警。
         initEconomyService(*mConfig);
+        if (mConfig->transactionLog.enabled) {
+            // 旧布局（文件平铺在 `logs/` 根下）搬进 `transactions/` 与 `discarded/` 子目录。
+            // 只在开着流水时搬：关掉流水的服主不会期望模组去动他的目录。
+            // 幂等，`/ll reload Shop` 再跑一次也安全。
+            migrateLegacyLogs();
+        }
     }
     registerSignEditListener();
     registerSignInteractListener();

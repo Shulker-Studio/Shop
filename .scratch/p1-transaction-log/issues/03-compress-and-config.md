@@ -219,3 +219,32 @@ ERR [Shop] 配置不可用，Shop 拒绝加载
 **这一条验不了单测**（要 BDS 才能跑 `ll::reflection` + `saveConfig`），所以列进了验收清单的
 第 0.5 条「升级路径」，必验项：老配置能加载、日志出现「已补齐并回写」、文件里多出
 `transactionLog` 且原值一个没变、重启一次不再补。
+
+### 追加：日志按类型分目录（服主提议，超出原票面）
+
+**动机**：两类记录混在 `logs/` 一层，而体量差两个数量级——业务流水一行几十字节，销毁留档一行可能几十 KB
+（完整 SNBT）。混在一起看 `du` 分不清是谁在涨，`zcat logs/*.gz` 查账时会顺手把几百 MB 的 NBT 一起解出来。
+
+**新布局**：
+
+```
+plugins/Shop/logs/
+├── transactions/2026-11-02.jsonl
+├── transactions/2026-10-25.jsonl.gz
+├── discarded/2026-11-02.jsonl
+└── discarded/2026-10-25.jsonl.gz
+```
+
+- 文件名仍是 `YYYY-MM-DD.jsonl`（按天轮转不变），**不再叠年月子目录**：一年 365 个文件，目录不会失控，
+  而 `duckdb read_json_auto` 的 glob 已经够长了。
+- `LogFile` 新增 `transactionLogDirectory()` / `discardLogDirectory()`，两个 writer 各传自己的子目录。
+- **压缩扫的是日志根目录 + 它的一级子目录**：写业务流水时顺手把 `discarded/` 也检查一遍。
+  否则一台没人卖东西的服务器上，留档目录永远等不到有人写它，超期文件就一直不压。
+- **旧文件自动搬家**（`migrateLegacyLogs()`，在 `Shop::enable()` 里、且只在 `transactionLog.enabled` 为真时跑）：
+  `logs/transactions-2026-11-01.jsonl` → `logs/transactions/2026-11-01.jsonl`，`discarded-*` 同理。
+  同盘 rename 是原子的；目标已存在就**跳过不覆盖**（`std::filesystem::rename` 在 Windows 上目标存在会报错，
+  正好当作保护）；失败只留一条 warn。只搬 `relocatedLogFile()` 认得出来的名字——前缀对、日期能解析、
+  后缀是 `.jsonl`/`.jsonl.gz`，服主自己放在 `logs/` 下的文件不会被碰。幂等。
+- 纯逻辑新增 `relocatedLogFile`（`LogRotation.h`）+ 1 个用例（正常、`.gz`、13 月、后缀不对、
+  `.part`、新布局名字、无关文件）。
+- `/shop status` 的「目录」一栏改成列出两个子目录。

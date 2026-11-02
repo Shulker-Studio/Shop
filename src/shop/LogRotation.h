@@ -35,4 +35,20 @@ bool shouldCompress(std::string_view fileDate, std::string_view today, int days)
 /// 已经是 `.gz` 的原样返回（幂等：重试压缩时不会变成 `.gz.gz`）。
 std::string compressedLogFileName(std::string_view fileName);
 
+/// 旧布局往新布局搬一个文件时需要知道的事。
+struct RelocatedLogFile {
+    std::string subdirectory; ///< `transactions` / `discarded`
+    std::string fileName;     ///< 去掉前缀后的名字，如 `2026-11-01.jsonl`
+};
+
+/// 旧布局的文件名 → 新布局的位置，`nullopt` = 不搬。
+///
+/// 旧布局把所有文件平铺在 `logs/` 根下（`transactions-2026-11-01.jsonl`）；新布局每个文件进自己的
+/// 子目录（`logs/transactions/2026-11-01.jsonl`），体量差两个数量级的两类记录因此不再混在一层。
+///
+/// 只认**本模组写出来的**名字：前缀对、日期能解析、后缀是 `.jsonl` 或 `.jsonl.gz`。
+/// 别的文件（`README.md`、服主自己放的备份、日期非法的）一律 `nullopt`——搬家不该碰别人的文件。
+/// 因此它对已经是新布局的名字（`2026-11-01.jsonl`）也返回 `nullopt`，重复调用是安全的。
+std::optional<RelocatedLogFile> relocatedLogFile(std::string_view fileName);
+
 } // namespace ss::shop

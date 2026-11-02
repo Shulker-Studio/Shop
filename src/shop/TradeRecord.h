@@ -134,7 +134,10 @@ TradeRecord composeTradeRecord(
 /// 转成 `\u94bb` 之后 `jq` 还是那个字，但人眼在文件里就找不到了。
 std::string tradeRecordJson(TradeRecord const& record);
 
-/// `transactions-YYYY-MM-DD.jsonl`。`date` 就是 `ts` 的前 10 个字符，两者因此永远同一天。
+/// `YYYY-MM-DD.jsonl`。`date` 就是 `ts` 的前 10 个字符，两者因此永远同一天。
+///
+/// 文件名里**不带**类型前缀：文件就放在 `logs/transactions/` 里，再带一次 `transactions-`
+/// 是重复信息，也让 `zcat *.jsonl.gz` 之类的命令读起来更啰嗦。
 std::string transactionLogFileName(std::string_view date);
 
 /// 落盘前的最后一道闸：返回第一条不合规的说明（空 = 合规）。

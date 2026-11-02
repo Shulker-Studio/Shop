@@ -132,17 +132,8 @@ void compressLogFile(std::filesystem::path const& dir, std::string const& fileNa
     }
 }
 
-/// 把 `dir` 里过期的 `.jsonl` 压掉（`transactions-*` 与 `discarded-*` 一视同仁——
-/// 它们共用 `logFileDate` 的命名规则，spec D5 要求同一套轮转）。
-///
-/// 每一轮都真的扫一遍目录，不做「一天只扫一次」的节流：节流会让**压缩失败**的文件一直等到
-/// 第二天才重试，而 spec 要的是「下一轮再试」。目录里最多几十个文件，写一次日志扫一遍的代价
-/// 可以忽略。
-void compressOldLogs(std::filesystem::path const& dir, std::string const& today, int compressAfterDays) {
-    if (compressAfterDays <= 0) {
-        return; // 0 = 永不压缩：连目录都不必看
-    }
-
+/// 压掉**一个目录**里过期的 `.jsonl`。文件名里带日期（`logFileDate` 认得的那种）才碰。
+void compressOneDirectory(std::filesystem::path const& dir, std::string const& today, int compressAfterDays) {
     std::error_code                     ec;
     std::filesystem::directory_iterator it(dir, ec);
     if (ec) {
@@ -150,7 +141,7 @@ void compressOldLogs(std::filesystem::path const& dir, std::string const& today,
     }
     for (auto const& entry : it) {
         if (entry.is_directory(ec) || ec) {
-            continue; // 只认自己的日志文件；子目录不碰
+            continue; // 子目录交给外层递归，这里只压本层的文件
         }
         auto const name = entry.path().filename().string();
         auto const date = logFileDate(name);
@@ -161,11 +152,90 @@ void compressOldLogs(std::filesystem::path const& dir, std::string const& today,
     }
 }
 
+/// 压掉 `root` 与它的**一级子目录**（`transactions/`、`discarded/`）里过期的文件。
+///
+/// 一次扫两边是有意为之：写业务流水时顺手把 `discarded/` 也检查一遍。否则一台「没人卖东西」的
+/// 服务器上，销毁留档那个目录永远等不到有人写它，超期文件就一直不压——压缩不该取决于
+/// 另一个文件有没有新行。
+///
+/// 每一轮都真的扫一遍，不做「一天只扫一次」的节流：节流会让**压缩失败**的文件一直等到第二天
+/// 才重试，而 spec 要的是「下一轮再试」。每个目录最多几十个文件，写一次日志扫一遍的代价可以忽略。
+void compressOldLogs(std::filesystem::path const& root, std::string const& today, int compressAfterDays) {
+    if (compressAfterDays <= 0) {
+        return; // 0 = 永不压缩：连目录都不必看
+    }
+    compressOneDirectory(root, today, compressAfterDays);
+
+    std::error_code                     ec;
+    std::filesystem::directory_iterator it(root, ec);
+    if (ec) {
+        return;
+    }
+    for (auto const& entry : it) {
+        std::error_code dirEc;
+        if (!entry.is_directory(dirEc) || dirEc) {
+            continue;
+        }
+        compressOneDirectory(entry.path(), today, compressAfterDays);
+    }
+}
+
 } // namespace
 
 std::filesystem::path logDirectory() {
     // `getModDir()` = `plugins/<模组名>`，与配置目录（`plugins/<模组名>/config`）平级。
     return Shop::getInstance().getSelf().getModDir() / "logs";
+}
+
+std::filesystem::path transactionLogDirectory() { return logDirectory() / "transactions"; }
+
+std::filesystem::path discardLogDirectory() { return logDirectory() / "discarded"; }
+
+void migrateLegacyLogs() {
+    auto const root = logDirectory();
+
+    std::error_code                     ec;
+    std::filesystem::directory_iterator it(root, ec);
+    if (ec) {
+        return; // 还没有任何日志：没什么可搬的，也不是失败
+    }
+
+    auto&       logger = Shop::getInstance().getSelf().getLogger();
+    std::size_t moved  = 0;
+    for (auto const& entry : it) {
+        std::error_code fileEc;
+        if (!entry.is_regular_file(fileEc) || fileEc) {
+            continue;
+        }
+        auto const target = relocatedLogFile(entry.path().filename().string());
+        if (!target) {
+            continue; // 不是本模组写的名字（或者已经是新布局）：不碰
+        }
+
+        auto const      dir = root / target->subdirectory;
+        std::error_code mkdirEc;
+        std::filesystem::create_directories(dir, mkdirEc);
+        if (mkdirEc) {
+            warnOnce("migrate", "旧日志搬不进去：目录建不出来（" + dir.string() + "）：" + mkdirEc.message());
+            continue;
+        }
+
+        std::error_code renameEc;
+        std::filesystem::rename(entry.path(), dir / target->fileName, renameEc);
+        if (renameEc) {
+            // 目标已存在（之前搬过一半）或文件被占用：留在原地，不覆盖。
+            warnOnce(
+                "migrate",
+                "旧日志搬不动（" + entry.path().string() + "）：" + renameEc.message() + "；它留在 logs/ 根下"
+            );
+            continue;
+        }
+        ++moved;
+    }
+
+    if (moved > 0) {
+        logger.info("已把 {} 个旧位置的日志文件搬进 transactions/ 与 discarded/ 子目录", moved);
+    }
 }
 
 bool appendLogLines(
@@ -212,8 +282,10 @@ bool appendLogLines(
 
     // 写完顺手看一眼轮转（spec D4：不额外开线程、不做定时任务）。
     // 「今天」直接来自刚写的这个文件名——它的日期就是今天，不必再读一次时钟。
+    // 扫的是**日志根目录**（含两个子目录）：写业务流水时顺手把 discarded/ 也检查一遍，
+    // 免得那个目录因为一直没人写而永远等不到压缩。
     if (auto const today = logFileDate(fileName)) {
-        compressOldLogs(dir, *today, config->transactionLog.compressAfterDays);
+        compressOldLogs(logDirectory(), *today, config->transactionLog.compressAfterDays);
     }
     return true;
 }

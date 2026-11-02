@@ -19,6 +19,6 @@ std::string discardRecordJson(DiscardRecord const& record) {
     return jsonLine(row);
 }
 
-std::string discardLogFileName(std::string_view date) { return "discarded-" + std::string{date} + ".jsonl"; }
+std::string discardLogFileName(std::string_view date) { return std::string{date} + ".jsonl"; }
 
 } // namespace ss::shop

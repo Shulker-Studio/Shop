@@ -111,6 +111,23 @@
 **接到同一套落盘策略**上（同一份 `appendLogLines`、同一种「失败只 warn 一次」），
 所以票 03 的开关只要加在这一个入口上就同时管住两个文件——不会出现「只关了一个」。
 
+### 真机反馈后的修复（`item.nbt` 写成了 `"4 entries"`）
+
+**现象**：`discarded-*.jsonl` 里每行的 `item.nbt` 都是 `"4 entries"` 这种字符串，附魔/改名/耐久全不在。
+
+**根因**：`Tag::toString()` 在 BDS 里返回的是给调试打印用的**摘要**（一个钻石正好 4 条 NBT：
+`Count` / `Damage` / `Name` / `wasPickedUp`），不是 SNBT。真正的 SNBT 出口是
+`Tag::toSnbt(SnbtFormat)`；默认的 `SnbtFormat::PrettyFilePrint` 会带换行与缩进，
+塞进 NDJSON 虽然仍是合法 JSON（换行被转义），但一行几十 KB 已经够难读，所以用
+`SnbtFormat::Minimize`（紧凑单行）。
+
+**顺带改的**：`SaveContext` 从 `Clone` 改成 `SaveToDisk`。留档要的是「这件东西在存档里长什么样」，
+而 `Clone` 是「为了复制一件物品」的语义——`SaveContext` 只有 `mSaveUseCase` 一个字段，
+差别全在这一个枚举上，没有别的地方能补救。
+
+（这一条只能在真机上验：`CompoundTag` 的实现要 BDS 才在。修完后 `nbt` 形如
+`{Count:1b,Damage:0s,Name:"minecraft:diamond",wasPickedUp:0b}`，已列进验收清单第 3 条的判据。）
+
 **缺口已闭合**（票 03 落地后补记）：`transactionLog.enabled = false` 时两个文件一起停、以及
 `compressAfterDays` 的 `.jsonl.gz` 压缩，两项都在票 03 落在 `LogFile::appendLogLines` 这一个入口上。
 本票的 `discarded` 不需要任何额外接线就同时受开关与轮转管住。
