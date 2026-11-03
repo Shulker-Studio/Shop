@@ -68,7 +68,8 @@ void recordShopOwner(
     }
 
     // 附着容器不可用（牌子被挪走了、容器被换掉了）就不算商店，不写店主。
-    ContainerLookupOptions const options{config.shopContainers, signConfig};
+    // 只判 `.ref`（附着格是不是容器），与禁售无关：传 `nullptr` 让这条路径不受禁售影响。
+    ContainerLookupOptions const options{config.shopContainers, signConfig, nullptr};
     if (!inspectAttachedContainer(region, signPos, options).ref) {
         return;
     }

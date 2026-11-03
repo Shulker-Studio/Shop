@@ -155,7 +155,10 @@ duckdb -c "SELECT owner.name, sum(total) AS 营业额 FROM read_json_auto('plugi
 
 ### 配置项（P0 已生效）
 
-`adminShopName`、`shopContainers`、`maxShopAmount`、`allowPartialTransactions`、`blockSellPriceHigherThanBuy`、
+`adminShopName`、`shopContainers`、`bannedItems`（禁售物品：正则，整串匹配物品 ID 如
+`minecraft:bedrock`；装进潜影盒里嵌套也算；只管玩家开的店，管理员店不受影响。
+收纳袋一律不能当商品——内容存在服务端的动态容器里读不出来，与禁售表无关）、
+`maxShopAmount`、`allowPartialTransactions`、`blockSellPriceHigherThanBuy`、
 `allowOwnerOpenChest`、`shopInteractionCooldownMs`、`ignoreCreativeMode`、`economy.backend`（`legacy_money` /
 `scoreboard` / `null`；`auto` 已删除）、`economy.scoreboardObjective`、`economy.createObjectiveIfMissing`、
 `economy.requireOwnerOnline`、`economy.currencySymbol`、`tax.shopTaxRate`、

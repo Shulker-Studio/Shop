@@ -71,6 +71,12 @@ struct ShopConfig {
     int                      version                     = 1;
     std::string              adminShopName               = "Admin Shop";
     std::vector<std::string> shopContainers              = {"minecraft:chest", "minecraft:trapped_chest"};
+    /// 禁售物品：一组**正则**，整串匹配物品 ID（`minecraft:bedrock`）。命中的物品不能当商品，
+    /// 装进潜影盒里嵌套也不行（递归看）。**只管玩家开的店**，管理员店不受影响。
+    ///
+    /// 用法与理由见 DESIGN §5.3。这里存**原文**（要跟着 config.json 序列化），编译成
+    /// `ItemBanList` 只做一次、放在 `Shop` 里；写不成正则会拒绝加载（见 `Config.cpp`）。
+    std::vector<std::string> bannedItems;
     int                      maxShopAmount               = 3456;
     bool                     blockSellPriceHigherThanBuy = true;
     /// 部分成交：箱子里的货、余额或背包不够时按实际可用量成交，而不是整笔拒绝（DESIGN §10.3）。

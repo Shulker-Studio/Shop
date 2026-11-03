@@ -5,6 +5,7 @@
 #include "ll/api/io/FileUtils.h"
 #include "ll/api/io/Logger.h"
 #include "shop/ConfigPatch.h"
+#include "shop/ItemBanList.h"
 #include "shop/TradePricing.h"
 
 #include <cmath>
@@ -68,6 +69,24 @@ bool validate(ShopConfig& config, ll::io::Logger& logger) {
         if (isBlank(type)) {
             logger.error(ui::msg("shop.log.config.containers_blank"));
             return false;
+        }
+    }
+
+    // 禁售物品表：正则写错就**拒绝加载**。丢一条禁售规则是静默失效——店主照样能卖服主
+    // 明令禁掉的东西，而服主只会看到“我明明配了”。与税率那种“写错就不收税”不同，
+    // 这里的默认方向必须是安全的那一侧。
+    ItemBanList const banList{config.bannedItems};
+    if (!banList.invalidPatterns().empty()) {
+        logger.error(ui::msg("shop.log.config.banned_regex_invalid", joinKeys(banList.invalidPatterns())));
+        return false;
+    }
+    for (auto const& pattern : config.bannedItems) {
+        // 只写名字、不写命名空间是最常见的一处错：整串匹配下 `bedrock` 匹配不到
+        // `minecraft:bedrock`，而这条规则会静静地什么也不拦。不拒绝（正则本来就允许这么写），
+        // 但得说一句。带通配符的规则（`.*shulker_box`）不提醒：服主显然知道自己在写正则。
+        bool const hasMetaChars = pattern.find_first_of(".[]{}()*+?\\|^$") != std::string::npos;
+        if (!isBlank(pattern) && !hasMetaChars && pattern.find(':') == std::string::npos) {
+            logger.warn(ui::msg("shop.log.config.banned_no_namespace", pattern));
         }
     }
     auto const backend = economy::parseBackend(config.economy.backend);
@@ -242,10 +261,13 @@ std::optional<ShopConfig> loadShopConfig(std::filesystem::path const& path, ll::
         }
     }
 
+    // 禁售规则条数现算一次：这里比 `Shop` 里那份缓存（还没建）更准，而且空规则不计入。
+    ItemBanList const banList{config->bannedItems};
     logger.info(ui::msg(
             "shop.log.config.loaded",
             config->maxShopAmount,
             config->shopContainers.size(),
+            banList.size(),
             config->adminShopName,
             config->economy.backend,
             config->tax.shopTaxRate,

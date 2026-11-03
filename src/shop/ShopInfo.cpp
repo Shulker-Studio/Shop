@@ -75,6 +75,35 @@ Text unavailableReasonForEmptyBox(bool adminShop) {
     return text::keyed("shop.form.reason.admin_no_sample");
 }
 
+Text onlySampleLeftReason() { return text::keyed("shop.form.reason.only_sample_left"); }
+
+Text mixedContainerContentsReason() { return text::keyed("shop.form.reason.mixed_container_contents"); }
+
+Text bannedItemReason() { return text::keyed("shop.form.reason.banned_item"); }
+
+Text bundleProductReason() { return text::keyed("shop.form.reason.bundle_product"); }
+
+Text unavailableReasonForStockState(BoxStockState state, bool adminShop) {
+    switch (state) {
+    case BoxStockState::MixedContents:
+        // 两家店同文：管理员店的样品盒也得整理好才能当模板，这条不分店的性质。
+        // 这个状态两个方向都不能用（商品的身份已经说不清了），所以它拦按钮。
+        return mixedContainerContentsReason();
+    case BoxStockState::Empty:
+        return unavailableReasonForEmptyBox(adminShop);
+    case BoxStockState::OnlySampleLeft:
+        // 不拦按钮：店收购方向仍然可用，它的说明在 `stockNoteForStockState`。
+        break;
+    case BoxStockState::Saleable:
+        break;
+    }
+    return {};
+}
+
+Text stockNoteForStockState(BoxStockState state) {
+    return state == BoxStockState::OnlySampleLeft ? onlySampleLeftReason() : Text{};
+}
+
 Text taxChargeFailureReason(Text const& detail) {
     return text::keyed("shop.form.reason.tax_failed", Tone::Default, {detail});
 }
@@ -103,6 +132,26 @@ Text pricePerUnitText(ShopInfoData const& data, std::int64_t price) {
     });
 }
 
+/// 盒内内容那一行：`钻石 ×64`。
+///
+/// **只在盒里只有一种东西时显示**（`cells.size() == 1`）：那时盒子必然整齐（每格内容一样），
+/// 合并后就是一项，读者一眼能答出“这一份里到底是什么、有多少”。
+///
+/// 盒里有两样以上就不显示：那种盒子本来就不能当商品，正文已经有一句红字说「盒里装得不整齐」
+/// ——再列一串内容只是把同一件事说第二遍，还把玩家的注意力从“该去整理盒子”上引开。
+/// （`ContainerLookup::boxContents` 仍然如实给出盒里的一切：要给店主看的时候有得看，
+/// 只是这行字不拿它来铺列表。）
+Text boxContentsLine(std::vector<BoxCell> const& cells) {
+    if (cells.size() != 1) {
+        return {};
+    }
+    return text::keyed(
+        "shop.form.box_cell",
+        Tone::Default,
+        {text::lit(cells.front().name), text::lit(std::to_string(cells.front().count))}
+    );
+}
+
 std::vector<Text> infoLinesOf(ShopInfoData const& data) {
     std::vector<Text> lines;
     lines.reserve(8);
@@ -117,6 +166,13 @@ std::vector<Text> infoLinesOf(ShopInfoData const& data) {
         text::keyed("shop.form.item"),
         data.itemName.empty() ? text::keyed("shop.form.none") : text::lit(data.itemName)
     ));
+    // 盒子商品的“一份”是**盒子里装的东西**：牌面写不出内容，正文得写。
+    // 判据是**这一行有没有内容**，不是 `boxContents` 空不空：盒里两样以上时 `boxContentsLine`
+    // 会返回空 Text（那种盒子已被判成“装得不整齐”，正文另有红字说明），而标签还在——
+    // 只看容器空不空就会留下一行 `盒内:` 后面什么都没有。
+    if (auto contents = boxContentsLine(data.boxContents); !text::empty(contents)) {
+        lines.push_back(text::field(text::keyed("shop.form.box_contents"), std::move(contents)));
+    }
     lines.push_back(text::field(
         text::keyed("shop.form.per_unit"),
         text::keyed("shop.form.per_unit_value", Tone::Default, {
@@ -158,6 +214,11 @@ std::vector<Text> infoLinesOf(ShopInfoData const& data) {
         // 空有两个原因（没有可用后端、读不到这名玩家的账户），不猜是哪一个：
         // 不能交易时正文下面还会多一行「状态：<具体原因>」（DESIGN §8.2）。
         lines.push_back(text::field(text::keyed("shop.form.balance"), text::keyed("shop.form.balance_unreadable")));
+    }
+
+    // 说明性的一句话（目前只有「只剩样品了」）：它不拦按钮，所以用普通白色，不用红色。
+    if (!text::empty(data.stockNote)) {
+        lines.push_back(text::field(text::keyed("shop.form.status"), data.stockNote));
     }
 
     // 不能交易就直说，别让玩家点进去才被拒（DESIGN §8.5）。
@@ -212,7 +273,10 @@ std::vector<ShopFormButton> shopFormButtons(ShopInfoData const& data, ShopFormRo
     // `购买（1 份 64 个 / $ 10）` 只是把同样的三个数字念第二遍，还把按钮撑得老长。
     // 按钮文字也**一个颜色码都不发**（`Tone::Default`）：按钮底有浅灰（未选中）与深绿
     // （悬停）两种状态，任何固定颜色都只能在其中一种里可读。让客户端用它自己的主题色。
-    if (data.buyPrice) {
+    // 买入按钮多一个条件：可成交份数是 0 时不给（只剩样品就是这种情形）。
+    // 拿“箱子这一侧卖不出去”当“整个店不能交易”是错的：店收购方向还能用，所以那边不组条件。
+    // 少了这一句，玩家点进去只会得到一句“商店的货不够”。
+    if (data.buyPrice && !data.stockUnits.empty()) {
         buttons.push_back({text::keyed("shop.form.button.buy", Tone::Default), ShopFormAction::Buy});
     }
     if (data.sellPrice) {

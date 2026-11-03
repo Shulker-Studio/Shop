@@ -11,6 +11,15 @@
 
 namespace ss::shop {
 
+/// 容器类商品（潜影盒）盒里的一格，按格内内容去重合并后的结果。
+///
+/// 为什么要显示它：盒子商品的“一份”是**盒子里装的东西**，牌面第 4 行只写得出“潜影盒”三个字。
+/// 买家掏钱前得知道这一盒里到底是什么、各有多少，否则只能凭信任。
+struct BoxCell {
+    std::string name;  ///< 展示名（`ItemStack::getName()`，游戏已按客户端语言本地化）
+    int         count = 0;
+};
+
 /// 信息表单要显示的全部内容，已经解析与统计好。
 ///
 /// 纯逻辑：不含引擎类型，也不知道谁来点这块牌。文案对齐 DESIGN §10.1。
@@ -22,6 +31,14 @@ struct ShopInfoData {
     /// 这个是店主自己拉的闸，两种状态得能同时说清楚。
     bool                        closed = false;
     std::string                 itemName;          ///< 商品展示名；容器空时用牌面第 4 行
+    /// 箱子里现在**有没有**商品（第一个非空槽位）。
+    ///
+    /// 与 `itemName` 必须分开：`itemName` 在箱子空时退回牌面第 4 行，所以它回答不了
+    /// “商品还在不在”。“更新商品名”这个按钮就靠这一位决定给不给（没有商品时点了只是
+    /// 把牌面原文抄回牌上）。
+    bool                        hasProduct = false;
+    /// 容器类商品（潜影盒）盒里装的东西，按格内内容去重合并；空 = 不是容器类商品或盒子是空的。
+    std::vector<BoxCell>        boxContents;
     int                         amountPerUnit = 0; ///< 一份的件数（牌面第 2 行）
     std::optional<std::int64_t> buyPrice;          ///< 一份的买入价，玩家付给店主
     std::optional<std::int64_t> sellPrice;         ///< 一份的卖出价，店主付给玩家
@@ -39,9 +56,16 @@ struct ShopInfoData {
     /// 余额。空 = **读不到**（没有可用后端，或后端没给出这个账户的余额），
     /// 不是「余额为 0」——两者必须分开（DESIGN §8.2）。
     std::optional<std::int64_t> balance;
-    /// 这家店现在不能交易的原因（店主收不了钱、或服务器没有可用经济后端）。
+    /// 这家店现在**不能交易**的原因（店主收不了钱、或服务器没有可用经济后端）。
     /// 非空时不给买卖按钮，正文直接写这条原因，免得玩家点进去才被拒（DESIGN §8.5）。
+    ///
+    /// 与 `stockNote` 分开：这个是“一个按钮都不给”，那个只是解释一个数字。
+    /// 把“只剩样品”塞进这里会连「店收购」一起关掉，而那个方向是好的。
     Text        unavailableReason;
+    /// 箱子这一侧的补充说明：**不拦任何按钮**。目前只有一种：「只剩样品了」——
+    /// 店主看到「可成交份数 0 份」时，箱子里明明还摆着一整堆商品，不解释一句会以为坏了。
+    /// 店收购（玩家把货卖给店）在同一个箱子里照常能用，所以不能关按钮。
+    Text        stockNote;
     /// 货币符号。只由调用方从 `economy.currencySymbol` 填进来，这里不留默认值：
     /// 默认值只能有一处定义，否则配置改了表单不跟着变。
     std::string currencySymbol;
@@ -110,9 +134,70 @@ Text emptyBoxReason();
 ///   「卖光了」与「还没设商品」是两件事：前者等补货，后者只能由 OP 放一件样品，
 ///   报错报成前一种会让玩家以为过一个小时就自动有了。
 ///
-/// 判据在 mod 层是同一句「第一个非空槽位不存在」（`firstProductStack`），所以这里按店的性质分叉，
+/// 判据在 mod 层是同一句「第一个非空槽位不存在」（`productSlotOf`），所以这里按店的性质分叉，
 /// 而不是让调用方各自拼一句文案。
 Text unavailableReasonForEmptyBox(bool adminShop);
+
+/// 商品还在箱子里，但**一件都不能卖**：剩下的全是样品槽那一份。
+///
+/// 样品槽永远不出售（`SampleSlot.h` 的 `saleableSlotOrder`），所以「箱子里有商品」不再等于
+/// 「有货可卖」：店主只放了一份的店会看到这条原因，而不是「商店箱里没有货」。
+/// 两者必须分开：“没货”= 等补货，“只剩样品”= 店主得再补一批货到样品槽以外。
+Text onlySampleLeftReason();
+
+/// 商品是容器类物品（潜影盒），但**盒内物品不整齐**：混装或每格数量不同。
+///
+/// 为什么拦：容器类商品的“同一种”包含盒内内容（`sameShopItem`），而“每格都和第一格一样”
+/// 才能让店主和买家对“这一份到底是什么”有一个无需逐格检查的说法。不整齐的盒子不能当商品，
+/// 也不排除是店主想用一盒杂货冒充一盒钻石——那句文案得说清楚是内容的问题，不是缺货。
+Text mixedContainerContentsReason();
+
+/// 商品被服主禁售（`bannedItems`）：要么它自己的 ID 命中，要么盒内嵌套的某一件命中。
+///
+/// 与“盒内不整齐”分开说：那个是“整理一下就能卖”，这个是“服主不许卖”——店主去整理盒子
+/// 白忙一趟。两条都不谈缺货。管理员店永远不会走到这里（禁售不管管理员店）。
+Text bannedItemReason();
+
+/// 商品是**收纳袋**：内容存在服务端的动态容器注册表里，读不出来（`ProductRules.h`）。
+///
+/// 与「禁售」分开说：禁售是服主的政策（换一件就能开），收纳袋是能力限制（读不到内容就没法
+/// 核对、也没法把内容算进商品身份），而且不分店的性质——管理员店也一样。
+Text bundleProductReason();
+
+/// 商店箱现在能不能交易（只看箱子这一侧的状态）。**取值顺序就是判定优先级**：
+/// 混装 > 空箱 > 只剩样品。混装排最前，因为它是“商品定义本身”有问题，比缺不缺货更根本；
+/// 空箱排第二，因为那连商品都没有，“只剩样品”就无从谈起。
+enum class BoxStockState : std::uint8_t {
+    Saleable,       ///< 有货可卖
+    OnlySampleLeft, ///< 商品还在，只是都算样品那份
+    MixedContents,  ///< 商品是容器类物品但盒内不整齐
+    Empty,          ///< 箱子里没有商品
+};
+
+/// 箱子这一侧的状态。`hasSaleableItems` 是**扣掉样品槽之后**还有没有货
+/// （不是“总共有几件”）。
+constexpr BoxStockState boxStockStateOf(bool empty, bool mixedContents, bool hasSaleableItems) {
+    if (mixedContents) {
+        return BoxStockState::MixedContents;
+    }
+    if (empty) {
+        return BoxStockState::Empty;
+    }
+    if (!hasSaleableItems) {
+        return BoxStockState::OnlySampleLeft;
+    }
+    return BoxStockState::Saleable;
+}
+
+/// 与 `boxStockStateOf` 一一对应：只有**真的一个按钮都不能给**的状态才有原因。
+///
+/// `Saleable` 与 `OnlySampleLeft` 都返回空：后者箱子这一侧确实卖不出去了，但「店收购」
+/// （玩家把货卖给店）是好的——把按钮全关掉等于把一个能用的方向也封了。它的说明走 `stockNoteForStockState`。
+Text unavailableReasonForStockState(BoxStockState state, bool adminShop);
+
+/// 箱子状态的**说明性**补句（不拦任何按钮）：目前只有「只剩样品了」。
+/// 除 `OnlySampleLeft` 外都返回空。
+Text stockNoteForStockState(BoxStockState state);
 
 /// 表单标题：普通店 `<店主> 的商店`，管理员店 `管理员商店`（DESIGN §10.1）。
 Text shopFormTitle(ShopInfoData const& data);
@@ -148,6 +233,7 @@ enum class ShopFormAction : std::uint8_t {
     ManageBuyPrice,  ///< 管理表单：改买入价
     ManageSellPrice, ///< 管理表单：改卖出价
     ManageAmount,    ///< 管理表单：改每份件数
+    ManageRefreshItemName, ///< 管理表单：按箱子里第一格重写牌面第 4 行（商品名）
     ToggleClosed,    ///< 管理表单：停业 / 恢复营业（03）
 };
 

@@ -38,6 +38,14 @@ void requestManageInputForm(Player& viewer, Cell const& sign, ShopFormAction act
 /// `requestManageInputForm` 提交那一段的同一条链（重新取牌 → 重新解析 → 规范化 → 写牌 → 发包）。
 void requestManageToggleClosed(Player& viewer, Cell const& sign);
 
+/// 管理表单上「更新商品名」的入口：按箱子里第一个非空槽位重写牌面第 4 行。
+///
+/// 牌面那行字只是商品名的**快照**，权威是箱子里的商品（DESIGN §5.3）：店主（或管理员店的 OP）
+/// 换掉箱子里的东西之后，那行会一直是旧的，路人读到的是已经不卖的东西。与停业同构——
+/// 没有输入框，直接走 `submitManageEdit` 那条链（重新取牌 → 重新鉴权 → 重新解析 → 写牌 → 发包）。
+/// 箱子里没有商品时不写牌，只提示一句。
+void requestManageRefreshItemName(Player& viewer, Cell const& sign);
+
 /// 打开「几份」表单（DESIGN §10.1 第 3 步）。买卖共用同一张表单：档位与上限都是「份数」的事。
 ///
 /// `maxUnits` 由调用方算好（货的份数、收货方容量、付款方余额三者取最小）；这里只负责

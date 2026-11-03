@@ -176,6 +176,11 @@ void reportStatus(CommandOutput& output) {
             text::lit(decimalText(config->tax.shopTaxRate)),
             text::lit(std::to_string(config->shopInteractionCooldownMs)),
         }));
+        // 禁售表是一个“安静地拦人”的配置：写错了、或漏了一条，平时看不出任何异样，
+        // 所以把生效条数摆在这里（写错正则会拒绝加载，不会带着半份表跑）。
+        lines.push_back(text::keyed("shop.command.status.config.banned", Tone::Default, {
+            text::lit(std::to_string(Shop::getInstance().banList().size())),
+        }));
     }
 
     lines.push_back(section(text::keyed("shop.command.section.economy")));

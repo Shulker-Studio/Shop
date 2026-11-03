@@ -9,6 +9,35 @@
 
 ### 新增
 
+- 信息表单在「商品」下面多一行 `盒内: 钻石 ×64`：潜影盒商品的盒内内容按格去重合并后列出
+  （mod 层 `productBoxContents` 读 NBT，纯层只排版）。只在盒里只有一种东西时显示：两种以上已经
+  报「盒内不整齐」，不必再列一遍；被禁售时照样显示，那一眼能看出是哪件被禁。
+- 管理表单多一个「更新商品名」按钮：牌面第 4 行只是商品名的快照，权威是箱子第一个
+  非空槽位。它不改价格 / 件数 / 停业位，只按现在的商品重写第 4 行（`ItemLineSource` 指定来源，
+  与改价共用同一条提交链）；箱子里没有商品时不给按钮，硬提交只提示、不写牌。
+- `/shop debug on` 多一行 `[shop/dbg] product_nbt`：商品物品的用户数据形状（`items_at` /
+  `cells` / `keys` / `be_keys` / `snbt`），只在结论变化时打。真机已用它确认潜影盒的内容挂在
+  顶层 `Items`（`id=minecraft:undyed_shulker_box … items_at=top cells=3`），也顺带纠正了
+  文档里"无色潜影盒叫 `minecraft:shulker_box`"的错误（实际是 `minecraft:undyed_shulker_box`）。
+- 收纳袋（`minecraft:bundle` 与带颜色的 `*_bundle`）**不能当商店商品，装在潜影盒里也一样**，不分普通店与管理员店
+  （`productHoldsBundle` 递归到底，深度上限 8：那一格 tag 里只有 `bundle_id` 引用，袋里换东西 tag 不变，
+  身份比较会继续判"同一种"）：
+  现代基岩版把它的内容存在服务端的动态容器注册表里（`bundle_id`），服务端没有读取入口，
+  于是既没法核对里面有没有禁售物品，也没法把内容算进商品身份。判据只有一处
+  （`src/shop/ProductRules.h` 的 `isBundleItemId`，`tests/shop/ProductRulesTest.cpp` 覆盖），
+  生效点与禁售同一套三处（建店报 `BundleProduct`、点牌正文写原因、提交走 `RejectReason::BundleProduct`）。
+  潜影盒不受影响：内容在物品 NBT 的 `Items` 里，读得出来。
+- 禁售物品（配置 `bannedItems`）：一组**正则**，整串匹配物品 ID（`ItemStackBase::getTypeName()`，
+  如 `minecraft:bedrock`），命中的物品不能当商品——直接摆在商店箱里不行，**装进潜影盒里
+  当商品也不行**（盒内任意一格命中都算，含多层嵌套，深度上限 8；收纳袋按上一条整类拒掉）。判据一处组装
+  （`src/mod/ContainerFinderBds.cpp` 的 `productBanned`），开店/改牌报 `BannedItem`、点牌正文写原因
+  且不给买卖按钮、提交时走 `RejectReason::BannedItem`。**只管玩家开的店：管理员店不受影响**
+  （`ContainerLookupOptions::bannedItems` 传 `nullptr`）。
+  正则写错**拒绝加载**（丢掉一条禁售规则等于悄悄放行）；不带命名空间且没有通配符的规则会 WARN
+  提醒整串匹配下多半什么也禁不到。纯逻辑在 `src/shop/ItemBanList.*`（`tests/shop/ItemBanListTest.cpp` 覆盖
+  空表、整串匹配、大小写、通配符、空白裁剪、坏正则的记法）。
+  `/shop status` 多一行「禁售物品规则 N 条」，配置加载日志也带上条数。
+
 - `/shop status` 与 `/shop debug on|off`（P0.1 观测包）：前者随时输出配置快照、经济后端
   「配置值 → 实际值」、10 条 hook 的「已尝试注册 + attach 返回码」、模组与 iListenAttentively 版本；
   后者打开后在五个**结果点**各打一行 `[shop/dbg]`（`sign_decision` / `protection_block` /
@@ -92,6 +121,7 @@
 
 ### 修复
 
+- **i18n 体检修正：6 条文案丢掉了代码传入的份数、3 条改名残留、若干英文错字**：`shop.form.confirm_buy` / `confirm_sell` 与 4 条 `shop.trade.partial_*` 在代码里仍传着实际成交份数，词表里却没有 `{}` —— `fmt::vformat` 会**静默忽略多余实参**，玩家看到的是「确认买入」和「只成交了一部分」，i18n 改造前的「确认买入（3 份）」「只成交了 3 份」里的数字就这么没了；现把占位符补回去（两份词表都补）。`shop.log.trade.done` 的无税分支不再多传一个 `tax`（拆成两支各传各的参数，调用点与模板从此对得上）。删掉 `shop.command.status.hook.attached` / `log.compressed` / `log.never` 三条**改名残留**（现用 `hook.attached_dirty` / `log.line` / `log.line.never`，它们没有任何源码引用）。英文侧修：`paid_suffix` / `income_suffix` 逗号前多一个空格（以前渲染成 `… (64 items) , paid $10`）、`units_reduced.sell` 的语病（`only be {} units`）、`over_unit_limit` 把动词当名词（`per buy` → `in one buy`），以及 `section.manage` / `reason.empty_box` / `reason.owner_offline` / `price_not_integer` 四处少翻的内容（「提示」「补货后恢复」「现在不能交易」「非负」）。`tests/TextLangTest.cpp` 新增两条用例堵住这一类：词表里**不许有**源码没引用的 key（原来只查 zh↔en 一致，反方向没人查），以及 `keyed()` / `msg()` 的实参个数必须等于占位符个数（原来只有测试渲染器在**被用例覆盖到**的路径上才报，`ShopForm` / `TradeService` 那两层没覆盖）。
 - **交易冷却与冻结键补上维度**（`TradeGate` / `TradeService`）：`Cell` 只有坐标，主世界与下界/末地同坐标的两家店以前会共享 250ms 冷却，补偿失败的冻结还会跨维度连坐（提示写「上一次交易未完成」，玩家根本想不起是哪一次）。键改成「玩家 + 维度 + 坐标」，`tests/shop/TradeGateTest.cpp` 补一条跨维度用例。
 - **冻结名单不再由 `disable()` 主动清除**：`/ll reload` 与关服都走 `disable()`，以前运维为了改一个无关配置重载一次，就把「钱货还没对上」的交易对静默解冻了。现在只在卸载时打一条 WARN 说明还有 N 对没核对。注意这只能挡住「主动清」——加载器若把 DLL 整块卸载再载入，静态对象仍会消失；要真跨过那个边界必须把冻结记录落盘（未做）。
 - **监听器部分注册失败后能补**：`ContainerProtectionListener` 的三条保护改成逐条判空注册（原来任一非空就整体跳过，半边保护永远修不回来）；`SignEditListener` 的 Before/After 改成「全有或全无」——半挂会让归属交接留在 4 槽环里被下一次编辑捡走，把店主写到不相干的人头上。
@@ -177,6 +207,31 @@
   `readShop` 与提交路径的预校验都走它；空箱时买卖按钮一个不给、管理入口照给。
 - 模板箱语义写进 DESIGN §7.4 / §5.3：不参与库存增减、卖进来的物品销毁（留档）、其余格子忽略、
   不做持久化（换商品 = 换第一格）；GLOSSARY 新增「样品槽」。
+
+### 变更（样品槽永不出售 + 容器类商品的盒内内容算身份）
+
+- **样品槽永不出售**（普通店与管理员店同一条规则）。新增纯逻辑 `saleableSlotOrder(slots, sampleSlot)`：
+  **从最后一格往前**、**跳过样品槽**——可卖范围与扣货顺序只有这一处定义，计数与扣货都按它走。
+  `ContainerLookup::saleableItemCount`（可卖件数）取代原先的 `itemCount`，`readShop` 的可成交份数改用它，
+  买入口货也跳过样品槽。只放一份的店因此显示 0 份，配合新原因 `only_sample_left`
+  （「只剩样品了」）——它与「卖光了」不是一回事。
+- **容器类物品（潜影盒、收纳袋）的盒内内容算商品身份**：`sameShopItem` 先比 id + aux，再比盒内内容**多重集**
+  （格位不算、空格不算），最后比去掉 `Items` 之后的其余用户数据；「没有用户数据」与「只有一条空 `Items`」
+  不再被判成不同种。盒内内容从用户数据的 `Items` 列表读（顶层或 `BlockEntityTag` 一层），
+  读不出来时退到「整段用户数据相等」——猜错只会让混装检查失效，不会把不同内容当成同一种。
+- **盒内必须整齐**：新增 `containerProductMixed`（所有非空格与盒内第一格同物品同数量），混装的盒子不能当商品，
+  开店 / 点牌 / 提交三处共用这一份判据，报新原因 `mixed_container_contents`（「盒子里装得不整齐」）。
+- 新增纯逻辑 `boxStockStateOf(empty, mixedContents, hasSaleableItems)`：优先级 混装 > 空箱 > 只剩样品 > 有货可卖。
+  「只剩样品」走新字段 `ShopInfoData::stockNote`（正文里一句说明，**不藏「出售」**——店收购方向还能用）；
+  「盒内混装」与「空箱」走 `unavailableReason`（拦买卖按钮，管理入口照给）。四种状态各有单测。
+  另外「购买」按钮多一个条件：可成交份数为 0 时不给（否则点进去只会得到“商店的货不够”）。
+- 流水新增 `mixed_contents` 这一条原因键（世界状态那一套），文案另算。
+- **双箱份数不再可能翻倍**：`containerAt` 不再无条件把另一半的格数加到 `ContainerRef::size` 上。
+  BDS 的 `ChestBlockActor::getContainerSize()` 是非 `MCFOLD` 的真函数，配对后报 27 还是 54 头文件里看不出，
+  所以按物理事实判（单半个箱子 27 格）：**超过 27 = 引擎已经把两半合成一个逻辑容器**，这时直接用它的格数、
+  `secondary` 置空；否则按原样两半相加。两种情形下每一格都只被数一次。
+- 文档：DESIGN §5.3 / §7.3 / §7.4 写清「样品槽永不出售」「容器类商品的内容算身份」「引擎可能自己合并双箱」；
+  GLOSSARY 新增「可卖件数」「可卖槽位」「严格同种」「盒内整齐」，改写「样品槽」。
 
 ### 新增（P1 票 01：每笔成交落一行流水）
 

@@ -2,6 +2,7 @@
 
 #include "mod/ContainerFinderBds.h"
 #include "mod/EconomyService.h"
+#include "mod/Shop.h"
 #include "mod/ShopOwner.h"
 #include "shop/SignProtection.h"
 #include "shop/TradePricing.h"
@@ -49,6 +50,15 @@ Text messageFor(ContainerError error) {
         return text::keyed("shop.trade.sign.container_not_allowed");
     case ContainerError::Empty:
         return text::keyed("shop.trade.sign.chest_empty");
+    case ContainerError::MixedContainerContents:
+        // 盒子有货，只是里面装得不整齐：这不是“缺货”，不能让店主去补货。
+        return text::keyed("shop.trade.sign.mixed_container_contents");
+    case ContainerError::BannedItem:
+        // 服主禁售：既不谈缺货也不谈整理，换一件商品才能开店。
+        return text::keyed("shop.trade.sign.banned_item");
+    case ContainerError::BundleProduct:
+        // 收纳袋的内容读不出来（不是缺货、也不是被禁），换别的容器或散装。
+        return text::keyed("shop.trade.sign.bundle_product");
     case ContainerError::AlreadyBound:
         return text::keyed("shop.trade.sign.chest_taken");
     case ContainerError::None:
@@ -106,8 +116,14 @@ SignEditResult planSignEdit(
         return {.outcome = SignEditOutcome::Rejected, .message = messageFor(parsed.error, config.maxShopAmount)};
     }
 
-    ContainerLookupOptions const options{config.shopContainers, signConfig};
-    auto const                   lookup = inspectAttachedContainer(region, signPos, options);
+    ContainerLookupOptions const options{
+        config.shopContainers,
+        signConfig,
+        // 禁售只管玩家开的店：管理员店传 `nullptr`（服主自己摆的货架，卖什么由他定）。
+        // 这里已经知道这块牌会变成什么店（`parsed.spec->adminShop`），所以判据与牌面同源。
+        parsed.spec->adminShop ? nullptr : &currentBanList(),
+    };
+    auto const lookup = inspectAttachedContainer(region, signPos, options);
     if (!lookup.ok()) {
         // 这一次没成，牌的文本不会被改，归属也不该变（不交交接）。
         return {.outcome = SignEditOutcome::Rejected, .message = messageFor(lookup.error)};
@@ -142,13 +158,18 @@ std::optional<ShopSnapshot> readShop(BlockSource& region, BlockPos const& signPo
         return std::nullopt; // 普通牌、非法牌
     }
 
-    ContainerLookupOptions const options{config.shopContainers, signConfig};
-    auto const                   lookup = inspectAttachedContainer(region, signPos, options);
+    // 店主先读：它能告诉下面“这是不是管理员店”，而禁售只管普通店。
+    ShopOwner const owner = readShopOwner(*sign, parsed);
+
+    ContainerLookupOptions const options{
+        config.shopContainers,
+        signConfig,
+        owner.adminShop ? nullptr : &currentBanList(),
+    };
+    auto const lookup = inspectAttachedContainer(region, signPos, options);
     if (!lookup.ref) {
         return std::nullopt; // 附着格不是可用容器：这块牌现在还不是商店
     }
-
-    ShopOwner const owner = readShopOwner(*sign, parsed);
 
     ShopInfoData info;
     info.ownerName = owner.displayName;
@@ -156,20 +177,36 @@ std::optional<ShopSnapshot> readShop(BlockSource& region, BlockPos const& signPo
     // 卖光了就没有商品可读，退回牌面第 4 行（规范化时写的就是商品名）。
     info.itemName = lookup.itemName.empty() ? splitSignText(sign->getMessage(SignTextSide::Front))[SignLine::ItemLine]
                                             : lookup.itemName;
+    // 与 `itemName` 分开两位：上面那行在箱子空时会退回牌面原文，所以 `itemName` 非空**不代表**
+    // 商品还在箱子里。管理表单的「更新商品名」按 `hasProduct` 决定给不给。
+    info.hasProduct  = lookup.hasProduct;
+    info.boxContents = lookup.boxContents;
     info.amountPerUnit = parsed.spec->amount;
     info.buyPrice      = parsed.spec->buyPrice;
     info.sellPrice     = parsed.spec->sellPrice;
     // 停业是牌面上的状态（第 3 行末尾的 `:x`）：牌子一读就带过来，不靠内存标记。
     info.closed        = parsed.spec->closed;
-    // 件数 → 份数的除法只有 `unitsFromItems` 一处，商店箱的货与背包容量共用。
+
+    // 箱子这一侧到底能不能卖：三种“不能”的状态由纯逻辑判（`boxStockStateOf`），
+    // 这里只把结论换成数字与一句话。顺序固定：混装 > 空箱 > 只剩样品。
     //
-    // 管理员店的箱子是**模板箱**：里面那几件只用来定「这家店卖什么」，不是库存。
-    // 所以它的可成交份数是无限，而不是 `itemCount / 每份件数`（否则箱子只放一件样品时
-    // 表单会写「0 份」，而 `planTrade` 说无限——两套真相，spec D2）。
+    // 可成交份数用**可卖件数**（样品槽永远不出售），不是箱子里的总件数——两者在“只放了一份”
+    // 的店里差得很明显：总件数说“有 1 份”，可卖件数说“0 份”。
+    //
+    // 管理员店不参与这条：它的箱子是模板箱，可成交份数无限（spec D2），也没有“只剩样品”这回事。
+    BoxStockState const boxState = boxStockStateOf(
+        lookup.error == ContainerError::Empty,
+        lookup.error == ContainerError::MixedContainerContents,
+        info.adminShop || lookup.saleableItemCount > 0
+    );
+    // 件数 → 份数的除法只有 `unitsFromItems` 一处，商店箱的货与背包容量共用。
     info.stockUnits = info.adminShop
                         ? StockView::makeUnlimited()
                         : StockView::makeFinite(unitsFromItems(
-                              static_cast<int>(std::min<std::int64_t>(lookup.itemCount, std::numeric_limits<int>::max())),
+                              static_cast<int>(std::min<std::int64_t>(
+                                  lookup.saleableItemCount,
+                                  std::numeric_limits<int>::max()
+                              )),
                               info.amountPerUnit
                           ));
     // 货币符号只从配置来：这里不留第二个默认值。
@@ -177,9 +214,22 @@ std::optional<ShopSnapshot> readShop(BlockSource& region, BlockPos const& signPo
 
     // 箱子全空：既没东西可卖，也看不出这家店收什么（商品权威是第一个非空槽位，DESIGN §5.3）。
     // 牌子还是商店（不会被当成普通牌），只是现在什么都交易不了，原因写在正文里。
-    // 管理员店的说法不同：它的箱子是模板，空着 = **还没设商品**（票 03），不是「卖光了」。
-    if (lookup.error == ContainerError::Empty) {
-        info.unavailableReason = unavailableReasonForEmptyBox(info.adminShop);
+    // 管理员店的说法不同：它的箱子是模板，空着 = **还没设商品**（票 03），不是“卖光了”。
+    // “只剩样品”与“盒内混装”也都不是“没货”：前者要补货、后者得整理盒子。
+    // 两者走两个通道：混装拦按钮（两个方向都用不了），只剩样品只作说明（店收购方向还能用）。
+    // 禁售不走 `BoxStockState`：它不是“数量”能描述的状态，而且这里的可卖件数为 0，
+    // 会被算成 `OnlySampleLeft`，那句“只剩样品了”就把店主引到错的修理方向去了。
+    if (lookup.error == ContainerError::BannedItem) {
+        info.unavailableReason = bannedItemReason();
+    } else if (lookup.error == ContainerError::BundleProduct) {
+        info.unavailableReason = bundleProductReason();
+    } else if (lookup.error == ContainerError::AlreadyBound) {
+        // 这块牌贴在**别人已经占着的**箱子上（同一容器挂了两块牌）：箱子里的货不归它，
+        // 所以既不能说“没货”，更不能说“只剩样品”——那会把店主指到一条不存在的修理路子上。
+        info.unavailableReason = messageFor(ContainerError::AlreadyBound);
+    } else {
+        info.unavailableReason = unavailableReasonForStockState(boxState, info.adminShop);
+        info.stockNote         = stockNoteForStockState(boxState);
     }
 
     return ShopSnapshot{.info = info, .ownerXuid = owner.xuid};

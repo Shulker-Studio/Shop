@@ -28,8 +28,13 @@ ShopConfig const* currentShopConfig() {
 
 ShopSignConfig const* currentSignConfig() { return Shop::getInstance().signConfig(); }
 
-void Shop::refreshSignConfig() {
+ItemBanList const& currentBanList() { return Shop::getInstance().banList(); }
+
+void Shop::refreshDerivedConfig() {
     mSignConfig = mConfig ? std::optional<ShopSignConfig>{toSignConfig(*mConfig)} : std::nullopt;
+    // 禁售表在这里一起重建：它也是从 `mConfig` 投影出来的，而且**必须**跟配置同时生效
+    // ——`/shop reload` 之后还拿旧正则拦东西是说不通的。
+    mBanList = mConfig ? ItemBanList{mConfig->bannedItems} : ItemBanList{};
 }
 
 bool Shop::load() {
@@ -48,7 +53,7 @@ bool Shop::load() {
         logger.error(ui::msg("shop.log.lifecycle.refused"));
         return false;
     }
-    refreshSignConfig();
+    refreshDerivedConfig();
     return true;
 }
 
@@ -66,7 +71,7 @@ std::optional<std::string> Shop::reloadConfig() {
 
     // 原地赋值而不是换对象：所有现取 `config()` 指针的地方（hook、监听器）继续有效。
     *mConfig = std::move(*loaded);
-    refreshSignConfig();
+    refreshDerivedConfig();
 
     // 这两样是启动时建的，配置变了必须重建：
     // - 提交冷却窗口来自 `shopInteractionCooldownMs`；
@@ -138,6 +143,7 @@ bool Shop::disable() {
     resetLogWarnings();
     mConfig.reset();
     mSignConfig.reset();
+    mBanList = ItemBanList{};
     return true;
 }
 

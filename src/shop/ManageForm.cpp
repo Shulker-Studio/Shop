@@ -111,16 +111,26 @@ std::vector<Text> shopManageFormContent(ShopInfoData const& data, bool waxed) {
 }
 
 std::vector<ShopFormButton> shopManageFormButtons(ShopInfoData const& data) {
-    return {
+    std::vector<ShopFormButton> buttons{
         {priceButtonLabel("shop.manage.button.buy_price"), ShopFormAction::ManageBuyPrice},
         {priceButtonLabel("shop.manage.button.sell_price"), ShopFormAction::ManageSellPrice},
         {priceButtonLabel("shop.manage.button.amount"), ShopFormAction::ManageAmount},
-        // 停业与恢复营业是同一个动作的两个方向，按当前状态只给一个：两个按钮同时挂着，
-        // 店主得自己先想明白哪个才算话。
-        {data.closed ? text::keyed("shop.manage.button.reopen", Tone::Default)
-                     : text::keyed("shop.manage.button.close", Tone::Default),
-         ShopFormAction::ToggleClosed},
     };
+
+    // 「更新商品名」：牌面第 4 行只是商品名字的**快照**，权威是箱子里第一个非空槽位
+    // （DESIGN §5.3）。店主（或管理员店的 OP）换掉箱子里的东西之后，那行字会一直是旧的，
+    // 路人读到的是已经不卖的东西。箱子空着时不给这个按钮：那时它只会把牌面原文抄一遍。
+    if (data.hasProduct) {
+        buttons.push_back({text::keyed("shop.manage.button.refresh_item_name", Tone::Default),
+                           ShopFormAction::ManageRefreshItemName});
+    }
+
+    // 停业与恢复营业是同一个动作的两个方向，按当前状态只给一个：两个按钮同时挂着，
+    // 店主得自己先想明白哪个才算话。
+    buttons.push_back({data.closed ? text::keyed("shop.manage.button.reopen", Tone::Default)
+                                   : text::keyed("shop.manage.button.close", Tone::Default),
+                       ShopFormAction::ToggleClosed});
+    return buttons;
 }
 
 ManageEdit applyManageEdit(ShopSpec const& current, ManageEditRequest const& request, ShopSignConfig const& config) {

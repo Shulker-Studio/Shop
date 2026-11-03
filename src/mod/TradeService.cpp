@@ -12,6 +12,7 @@
 #include "mod/TransactionLog.h"
 #include "mod/WallClock.h"
 #include "shop/ShopInfo.h"
+#include "shop/SampleSlot.h"
 #include "shop/TradeGate.h"
 #include "shop/TradePlan.h"
 #include "shop/TradePricing.h"
@@ -144,7 +145,10 @@ enum class RejectReason : std::uint8_t {
     NoSystemAccount,    ///< 后端当不了管理员店的系统账户
     BoxMissing,         ///< 商店的箱子不见了
     NoProduct,          ///< 箱子里没有商品（卖光了 / 还没设商品）
-    ItemMismatch,       ///< 玩家手里有同类物品，但不是严格同种（附魔/耐久/自定义名对不上）
+    MixedContents,      ///< 商品是容器类物品但盒内不整齐（混装 / 每格数量不同）
+    BannedItem,         ///< 商品被服主禁售（本身或盒内嵌套的物品命中禁售表）
+    BundleProduct,      ///< 商品是收纳袋（内容在服务端读不出来，一律不许当商品）
+    ItemMismatch,       ///< 玩家手里有同类物品，但不是严格同种（附魔/耐久/自定义名/盒内内容对不上）
     PlayerFundsUnknown, ///< 读不到玩家余额（不是「余额是 0」）
     OwnerFundsUnknown,  ///< 读不到店主余额
     PaymentFailed,      ///< 付款那一步失败（不是后端坏了，是这一笔没成）
@@ -176,6 +180,12 @@ std::string_view rejectReasonName(RejectReason reason) {
         return "box_missing";
     case RejectReason::NoProduct:
         return "no_product";
+    case RejectReason::MixedContents:
+        return "mixed_contents";
+    case RejectReason::BannedItem:
+        return "banned_item";
+    case RejectReason::BundleProduct:
+        return "bundle_product";
     case RejectReason::ItemMismatch:
         return "item_mismatch";
     case RejectReason::PlayerFundsUnknown:
@@ -316,6 +326,10 @@ bool holdsSimilarItem(Inventory& inventory, ItemStack const& product) {
 /// 凑不够就返回 false，调用方按快照把容器写回去（本函数自己不管补偿）。
 /// 买入从商店箱扣、卖出从玩家背包扣，所以容器是参数而不是写死的那一个。
 ///
+/// `sampleSlot` 非空时走**可卖顺序**（`saleableSlotOrder`：从最后一格往前、跳过样品槽）：
+/// 样品槽永远不出售，于是牌子上写的商品始终有实物兜底，卖光其他格子也不会突然变成
+/// “还没设商品”。卖出方向扣的是玩家背包，没有样品槽这个概念，传空即可。
+///
 /// `taken` 非空时把「扣下来的那几个堆」各复制一份塞进去：管理员店卖出方向的货要被**销毁**，
 /// 而销毁之后再没有任何地方能读到它——SNBT 留档只能靠这一份副本（票 02）。
 /// 买入方向传空：那些货是发给玩家的，不销毁，也没有留档可言。
@@ -325,14 +339,17 @@ bool takeMatchingItems(
     int                     slots,
     ItemStack const&        product,
     int                     items,
-    std::vector<ItemStack>* taken = nullptr
+    std::vector<ItemStack>* taken,
+    std::optional<int>      sampleSlot
 ) {
-    int remaining = items;
-    for (auto const& slot : mergedSlots(primary, secondary, slots)) {
+    auto const merged    = mergedSlots(primary, secondary, slots);
+    int        remaining = items;
+    for (int const index : saleableSlotOrder(static_cast<int>(merged.size()), sampleSlot)) {
         if (remaining <= 0) {
             break;
         }
-        ItemStack const& stack = slot.container->getItem(slot.slot);
+        MergedSlot const& at    = merged[static_cast<std::size_t>(index)];
+        ItemStack const&  stack = at.container->getItem(at.slot);
         if (stack.isNull() || !sameShopItem(stack, product)) {
             continue;
         }
@@ -343,7 +360,7 @@ bool takeMatchingItems(
             copy.set(take); // 被扣走的那部分才是「被销毁的物品堆」
             taken->push_back(std::move(copy));
         }
-        slot.container->removeItem(slot.slot, take);
+        at.container->removeItem(at.slot, take);
         remaining -= take;
     }
     return remaining <= 0;
@@ -561,6 +578,9 @@ void fillTradeFacts(
 struct TradeContext {
     AttachedContainer         container;
     ItemStack                 product; ///< 商品模板的副本（箱子一被改动，槽位里的那份就失效了）
+    /// 商品模板在合并顺序里的下标（= 样品槽）。买入扣货要跳过它（样品槽永不出售），
+    /// 而“第几格”只有 `productSlotOf` 算得出来，所以不能到了扣货那一步再重新猜。
+    int                       sampleSlot = 0;
     ShopSnapshot              shop;
     economy::EconomyProvider* provider = nullptr;
     TradeRequest              request;
@@ -660,8 +680,8 @@ PreparedTrade prepareCommon(
     if (!attached.ok()) {
         return {.error = text::keyed("shop.trade.box_missing"), .reason = rejectReasonName(RejectReason::BoxMissing)};
     }
-    ItemStack const* found = firstProductStack(*attached.container);
-    if (found == nullptr) {
+    auto const product = productSlotOf(*attached.container);
+    if (!product) {
         // 商品权威是商店箱里第一个非空槽位（DESIGN §5.3）：箱子空了就没人知道这家店收什么，
         // 也没东西可卖。牌面第 4 行只有显示名，拿它反查物品会造出第二个真相源，P0 不做。
         //
@@ -679,13 +699,42 @@ PreparedTrade prepareCommon(
             .reason = tradeRejectionReasonName(TradeRejection::NotEnoughGoods),
         };
     }
+    // 收纳袋一律不能当商品，装在潜影盒里也一样：内容在服务端的动态容器注册表里，
+    // 读不出来（`ProductRules.h` / `productHoldsBundle`）。
+    // 与禁售不同，这一条**不分店的性质**：读不到内容是能力限制，管理员店也一样。
+    if (productHoldsBundle(*product->stack)) {
+        return {
+            .error  = bundleProductReason(),
+            .reason = rejectReasonName(RejectReason::BundleProduct),
+        };
+    }
+    // 禁售物品：玩家开的店不能卖被服主禁售的东西（含装在盒子里嵌套的）。
+    // 表单那边由 `readShop` 报同一句原因；旧表单里没这条、玩家又硬提交时，这里就是唯一能拦住它的地方。
+    // **管理员店不受影响**：那是服主自己摆的货架，样品箱与凭空造货都由他决定，
+    // 禁又禁不掉（他本来就能 `/give`），只会把自己想卖的东西卡住。
+    if (!shop->info.adminShop && productBanned(*product->stack, currentBanList())) {
+        return {
+            .error  = bannedItemReason(),
+            .reason = rejectReasonName(RejectReason::BannedItem),
+        };
+    }
+    // 容器类商品的盒内必须整齐（同物品、同数量）：不整齐的盒子不能当商品。
+    // 表单那边由 `readShop` 报同一句话（`mixedContainerContentsReason`）——
+    // 旧表单里没这条原因、玩家又硬提交时，这里就是唯一能拦住它的地方。
+    if (containerProductMixed(*product->stack)) {
+        return {
+            .error  = mixedContainerContentsReason(),
+            .reason = rejectReasonName(RejectReason::MixedContents),
+        };
+    }
 
     TradeContext context;
     context.container = *attached.container;
-    // 商品模板当场拷一份：`found` 指向箱子里的槽位，扣货之后那个引用就失效了。
-    context.product  = *found;
-    context.shop     = std::move(*shop);
-    context.provider = &provider;
+    // 商品模板当场拷一份：`product->stack` 指向箱子里的槽位，扣货之后那个引用就失效了。
+    context.product    = *product->stack;
+    context.sampleSlot = product->index;
+    context.shop       = std::move(*shop);
+    context.provider   = &provider;
 
     context.request.amountPerUnit = context.shop.info.amountPerUnit;
     context.request.maxUnits      = config.maxShopAmount;
@@ -1118,18 +1167,33 @@ void finishTrade(Player& player, Cell const& sign, TradeDirection direction, Tra
         // 管理员店卖出销毁的货留档（`p1-transaction-log` spec D5）。写失败只 warn：
         // 交易已经成交，留档不是它的一部分——不许因为磁盘满了把一笔生意判成失败。
         writeDiscardRecords(result.discarded);
-        Shop::getInstance().getSelf().getLogger().debug(ui::msg(
-                result.plan.tax > 0 ? "shop.log.trade.done_with_tax" : "shop.log.trade.done",
+        // 两个分支各传各的参数：`done` 的模板没有「商店税」这一格，多传一个实参
+        // 虽然会被 `fmt` 忽略，但调用点与词表就对不上了（测试按调用点逐个核对个数）。
+        auto const verb = ui::plain(text::keyed(std::string{directionVerb(direction)}));
+        if (result.plan.tax > 0) {
+            Shop::getInstance().getSelf().getLogger().debug(ui::msg(
+                "shop.log.trade.done_with_tax",
                 player.getXuid(),
                 sign.x,
                 sign.y,
                 sign.z,
-                ui::plain(text::keyed(std::string{directionVerb(direction)})),
+                verb,
                 result.plan.units,
                 result.plan.total,
                 result.plan.tax
-            )
-        );
+            ));
+        } else {
+            Shop::getInstance().getSelf().getLogger().debug(ui::msg(
+                "shop.log.trade.done",
+                player.getXuid(),
+                sign.x,
+                sign.y,
+                sign.z,
+                verb,
+                result.plan.units,
+                result.plan.total
+            ));
+        }
     }
 }
 
@@ -1238,7 +1302,9 @@ TradeResult buyUnits(
             context->container.secondary,
             context->container.ref.size,
             context->product,
-            plan.items
+            plan.items,
+            /*taken=*/nullptr,
+            /*sampleSlot=*/context->sampleSlot
         )) {
         return withFacts(
             undoAndRefund(
@@ -1389,7 +1455,8 @@ TradeResult sellUnits(
             inventory.getContainerSize(),
             context->product,
             plan.items,
-            info.adminShop ? &destroyed : nullptr
+            info.adminShop ? &destroyed : nullptr,
+            /*sampleSlot=*/std::nullopt
         )) {
         // 取货失败（背包在他打开表单之后变少了）：快照把背包写回、退款，一件也不会被销毁。
         return withFacts(

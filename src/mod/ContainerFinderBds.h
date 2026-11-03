@@ -3,6 +3,8 @@
 #include "mod/Config.h"
 #include "mod/ShopOwner.h"
 #include "shop/ContainerFinder.h"
+#include "shop/ItemBanList.h"
+#include "shop/ShopInfo.h" // BoxCell：盒内内容要在表单上显示
 
 #include <cstdint>
 #include <optional>
@@ -28,6 +30,18 @@ enum class ContainerError {
     NotAllowedContainer,
     /// 容器是空的：没有商品可卖。
     Empty,
+    /// 商品是容器类物品（潜影盒），但**盒内物品不整齐**：混装、或每格数量不同。
+    /// 与 `Empty` 是两件事：箱子有货，只是这份货没法用一个说的清的身份定价。
+    MixedContainerContents,
+    /// 商品被服主禁售（`bannedItems`）：要么商品本身的 ID 命中，要么它盒子里嵌套的
+    /// 某一件物品命中。这种店开不起来，已经开着的也交易不了。
+    /// **管理员店不会看到这个错误**：禁售只管玩家开的店（见 `ContainerLookupOptions`）。
+    BannedItem,
+    /// 商品里**有收纳袋**（它自己就是，或者装在潜影盒里）：收纳袋的内容存在服务端的动态容器
+    /// 注册表里，读不出来，于是既不能核对里面有什么，也没法把内容算进商品身份 —— 所以不许当商品
+    /// （`shop/ProductRules.h` 的 `isBundleItemId` + `productHoldsBundle` 的递归）。
+    /// 这一条**不分店的性质**：它是能力限制（读不到内容），不是服主的政策，管理员店也一样。
+    BundleProduct,
     /// 这个容器已经被另一块合法商店牌绑定了。
     AlreadyBound,
 };
@@ -39,9 +53,19 @@ struct ContainerLookup {
     ContainerError              error = ContainerError::None;
     /// 商品（第一个非空槽位的物品）的展示名；容器为空时是空串。
     std::string itemName;
-    /// 商店箱里与商品**严格匹配**的总件数（双箱合并；类型 + aux + 用户数据），
-    /// 空容器时为 0。可成交份数 = `itemCount / 一份的件数`（见 `unitsFromItems`）。
-    std::int64_t itemCount = 0;
+    /// 箱子里**有没有**商品（第一个非空槽位）。`itemName` 不能代替它：
+    /// 展示名可能为空，而且「更新商品名」按钮只该在有货时给。
+    bool hasProduct = false;
+    /// 容器类商品（潜影盒）盒里装的东西，按格内内容去重合并（`productBoxContents`）。
+    /// 空 = 不是容器类商品，或盒子是空的。
+    ///
+    /// **如实给出盒里的一切**（不整齐、被禁售时也照给），但表单只在它只有一项时才显示：
+    /// 两种以上就已经被 `MixedContainerContents` 拦下来了，正文那句红字比一份内容清单有用。
+    std::vector<BoxCell> boxContents;
+    /// 商店箱里与商品**严格匹配**、且**可卖**的件数（双箱合并；类型 + aux + 用户数据/盒内内容）。
+    /// 不含样品槽那一份（样品槽永不出售，`saleableSlotOrder`），也不含内容不一致的其他盒。
+    /// 可成交份数 = 它 / 一份的件数（见 `unitsFromItems`）。
+    std::int64_t saleableItemCount = 0;
 
     [[nodiscard]] bool ok() const { return error == ContainerError::None && ref.has_value(); }
 };
@@ -51,19 +75,40 @@ struct ContainerLookupOptions {
     std::vector<std::string> const& allowedBlockTypes;
     /// 判断「这个容器已经被别的商店牌绑定了」需要解析别人的牌面。
     ShopSignConfig const& signConfig;
+    /// 禁售表。**传 `nullptr` 就是不判禁售**，而且这是**管理员店**的唯一写法：
+    /// 管理员店是服主自己摆的货架（样品箱、凭空造货），要卖什么由服主决定，
+    /// 禁售表是拦玩家的。
+    ItemBanList const* bannedItems = nullptr;
 };
 
 /// 附着容器的本体：主容器 + 另一半（双箱）。
 ///
 /// `ContainerLookup` 回答「这个容器能不能当商店」；这里只回答「它是哪个对象」，
 /// 给真正要读写物品的代码（交易）用。
+///
+/// `secondary` **只有在引擎没把两半合成一个逻辑容器时**才有值：
+/// BDS 的 `ChestBlockActor` 配对之后可能已经把自己当成 54 格逻辑容器（见 `containerAt` 的实测说明），
+/// 那时候再把另一半当成第二份库存就会把每一格数两遍。
 struct AttachedContainer {
     /// 牌子的几何（位置 + 形态 + 朝向）。定位时已经算过一次，带上免得再读一遍方块状态。
     SignRef      sign;
     ContainerRef ref;
     Container*   primary   = nullptr; ///< 牌子贴着的那一半（或单箱、木桶）
-    Container*   secondary = nullptr; ///< 双箱的另一半；木桶与单箱为空
+    Container*   secondary = nullptr; ///< 双箱的另一半；木桶、单箱、以及引擎已自己合并时为空
 };
+
+/// 商品模板在合并顺序里的位置。
+struct ProductSlot {
+    int              index = 0;         ///< 合并顺序里的下标，也就是**样品槽**
+    ItemStack const* stack = nullptr;   ///< 那一格里的物品（引用箱子槽位，**一改动就失效**）
+};
+
+/// 商品模板 = 商店箱里（双箱合并）**第一个非空槽位**及其下标（`sampleSlotIndex`）。
+/// 容器空了返回空。
+///
+/// 下标必须一起返回：样品槽永不出售（`saleableSlotOrder`），而“第几格”只有这里算得出来。
+/// 只给 `ItemStack const*` 会让调用方再扫一遍箱子找位置——同一件事两个真相。
+std::optional<ProductSlot> productSlotOf(AttachedContainer const& attached);
 
 struct AttachedContainerResult {
     std::optional<AttachedContainer> container;
@@ -90,23 +135,62 @@ attachedContainerOf(BlockSource& region, BlockPos const& signPos, std::vector<st
 /// 合并后的全部槽位；`size` 是合并后的总格数（`ContainerRef::size`）。
 std::vector<MergedSlot> mergedSlots(Container& primary, Container* secondary, int size);
 
-/// 严格同种：类型 + aux + 用户数据（附魔、自定义名）。
+/// 严格同种：类型 + aux + 用户数据（附魔、自定义名），**容器类物品再加上盒内内容**。
 ///
 /// 只看展示名或 ID 会把「钻石剑」和「附魔钻石剑」算成同一种商品，
 /// 那会让一个商店用错价的物品结账（DESIGN §5.3）。
+///
+/// 容器类物品（潜影盒）的商品身份包含盒内内容，而且是**当作多重集**比的
+/// （收纳袋读不出内容，整类不许当商品，见 `productHoldsBundle`）：
+/// 盒内每格的物品与数量都要对得上，**格位不算**（空格更不算）。这样一来“装满钻石的盒子”
+/// 与“空的盒子”、“64 个钻石的盒子”与“1 个钻石的盒子”都是不同的商品——否则空盒可以
+/// 按满盒价卖出、或者 1 个钻石按 64 个卖出，两边都是套利。
 bool sameShopItem(ItemStackBase const& lhs, ItemStackBase const& rhs);
+
+/// 商品是不是「容器类物品但盒内不整齐」：有内容的容器，却存在某格和非空第一格不一致
+/// （同物品、同数量）；空格不参与判定。非容器类物品一律返回 `false`。
+///
+/// 判据只有这一份：开店时（`inspectAttachedContainer`）、点牌时（`readShop`）
+/// 与提交交易时（`prepareCommon`）都问它，免得“表单说能买、提交说不能”。
+bool containerProductMixed(ItemStackBase const& product);
+
+/// 这件商品是不是禁售的：ID 命中禁售表，或者它是容器类物品、而盒内（含多层嵌套）
+/// 有任何一件物品的 ID 命中禁售表。
+///
+/// “嵌套也算”是刻意的：一条 `minecraft:bedrock` 规则如果只看外层，玩家把基岩装进
+/// 潜影盒就能绕过去——而盒子的内容也是商品身份的一部分，绕过去的就是“卖禁售品”本身。
+/// 读不出盒内结构时退到外层判断（猜错只可能多放行一层，不会把能卖的东西禁掉）。
+///
+/// 只看 ID，不看展示名与 aux：展示名随语言/资源包变，aux 区分不了颜色相同的同一个 ID。
+bool productBanned(ItemStackBase const& product, ItemBanList const& bannedItems);
+
+/// 容器类商品（潜影盒）盒里装的东西，按格内内容去重合并后的清单（给表单显示用）。
+///
+/// 同一格内容的重复出现合并成一项、件数相加；不是容器类商品、盒子是空的、或 NBT 读不出来时
+/// 返回空。**只读**：不判整齐、不判禁售，那些各有各的判据（`containerProductMixed` /
+/// `productBanned`）——这里回答的只有“买家看到的是什么”。
+[[nodiscard]] std::vector<BoxCell> productBoxContents(ItemStackBase const& product);
+
+/// 商品本身、或它盒子里（任意一层）有没有**收纳袋**。
+///
+/// 收纳袋的内容存在服务端的动态容器注册表里（`bundle_id`），服务端读不出来——所以它既不能自己
+/// 当商品，也不能被装进潜影盒当商品：那一格的 tag 里只有个引用，袋里的东西换了 tag 不会变，
+/// 身份比较会继续判"同一种"，等于留了一条偷换的缝。**与禁售表无关**，也**不分普通店/管理员店**。
+[[nodiscard]] bool productHoldsBundle(ItemStackBase const& product);
 
 /// 一组容器里（`slots` 是合并后的总格数，单容器就是 `getContainerSize()`）
 /// 与 `product` **严格同种**的总件数。
 ///
+/// `sampleSlot` 非空时只数**可卖的那些格**（`saleableSlotOrder`：倒序、跳过样品槽），
+/// 于是“总件数”与“可卖件数”是同一个函数、同一个谓词，只是范围不同。
 /// 商店箱的商品统计与「玩家手里有几份」都用它：容器是参数，比较在那里只有一份。
-std::int64_t countMatchingItems(Container& primary, Container* secondary, int slots, ItemStackBase const& product);
-
-/// 商品模板 = 商店箱里（双箱合并）第一个非空槽位的物品（附着那一半优先，DESIGN §5.3）。
-/// 容器空了返回空指针。
-///
-/// 返回的指针指向箱子里的槽位，**一被改动就失效**；要跨一步用它，先拷一份 `ItemStack`。
-ItemStack const* firstProductStack(AttachedContainer const& attached);
+std::int64_t countMatchingItems(
+    Container&            primary,
+    Container*            secondary,
+    int                   slots,
+    ItemStackBase const&  product,
+    std::optional<int>    sampleSlot = std::nullopt
+);
 
 /// 读出牌子的形态与朝向。不是告示牌、或判不出形态时返回空。
 std::optional<SignRef> readSignGeometry(BlockSource& region, BlockPos const& signPos);

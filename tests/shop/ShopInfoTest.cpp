@@ -1,7 +1,9 @@
+#include "shop/ManageForm.h" // shopManageFormButtons
 #include "shop/ShopInfo.h"
 #include "shop/ShopSign.h" // stripColorCodes： 断言时去掉颜色码
 #include "../TextHelper.h"
 
+#include <algorithm>
 #include <doctest/doctest.h>
 #include <string>
 
@@ -23,6 +25,13 @@ ShopInfoData sampleShop() {
     return data;
 }
 
+/// 按钮列表里有没有某个文案（按玩家看到的那段字比）。
+bool hasButton(std::vector<ShopFormButton> const& buttons, std::string const& label) {
+    return std::any_of(buttons.begin(), buttons.end(), [&](ShopFormButton const& button) {
+        return plainText(button.label) == label;
+    });
+}
+
 /// 断言的永远是**去掉颜色码之后**的文本： 颜色是外观，不该把每个测试都钉死在 `§7` 上。
 bool hasLine(std::vector<Text> const& lines, std::string const& line) {
     for (auto const& candidate : lines) {
@@ -34,6 +43,61 @@ bool hasLine(std::vector<Text> const& lines, std::string const& line) {
 }
 
 } // namespace
+
+TEST_CASE("盒内内容: 盒里只有一种东西时列在「商品」下面") {
+    auto data         = sampleShop();
+    data.itemName     = "潜影盒";
+    data.hasProduct   = true;
+    data.boxContents  = {{"钻石", 64}};
+
+    auto const lines = shopInfoLines(data);
+    CHECK(hasLine(lines, "盒内: 钻石 ×64"));
+    // 它在「商品」下面、「每份」上面：买家先看到卖的是什么，再看到盒子里装的是什么。
+    auto const itemAt  = std::find_if(lines.begin(), lines.end(), [](Text const& line) {
+        return plainText(line).rfind("商品", 0) == 0;
+    });
+    auto const boxAt   = std::find_if(lines.begin(), lines.end(), [](Text const& line) {
+        return plainText(line).rfind("盒内", 0) == 0;
+    });
+    auto const unitAt  = std::find_if(lines.begin(), lines.end(), [](Text const& line) {
+        return plainText(line).rfind("每份", 0) == 0;
+    });
+    REQUIRE(itemAt != lines.end());
+    REQUIRE(boxAt != lines.end());
+    REQUIRE(unitAt != lines.end());
+    CHECK(itemAt < boxAt);
+    CHECK(boxAt < unitAt);
+}
+
+TEST_CASE("盒内内容: 不是容器类商品就没有这一行") {
+    auto data        = sampleShop();
+    data.hasProduct  = true;
+    data.boxContents = {};
+    for (auto const& line : shopInfoLines(data)) {
+        CHECK(plainText(line).rfind("盒内", 0) != 0);
+    }
+}
+
+TEST_CASE("盒内内容: 盒里有两样以上就不列（正文已经说「盒里装得不整齐」）") {
+    auto data        = sampleShop();
+    data.hasProduct  = true;
+    data.boxContents = {{"钻石", 3}, {"铁锭", 1}};
+    for (auto const& line : shopInfoLines(data)) {
+        CHECK(plainText(line).rfind("盒内", 0) != 0);
+    }
+}
+
+TEST_CASE("管理表单: 箱子里有商品才给「更新商品名」") {
+    auto data       = sampleShop();
+    data.hasProduct = true;
+    std::size_t const withProduct = shopManageFormButtons(data).size();
+    CHECK(hasButton(shopManageFormButtons(data), "更新商品名"));
+
+    data.hasProduct = false;
+    CHECK_FALSE(hasButton(shopManageFormButtons(data), "更新商品名"));
+    // 没有商品只是少这一个按钮，改价/改件数/停业照旧在。
+    CHECK(shopManageFormButtons(data).size() == withProduct - 1);
+}
 
 TEST_CASE("表单标题: 普通店是「<店主> 的商店」，管理员店是「管理员商店」") {
     auto data = sampleShop();
@@ -330,6 +394,66 @@ TEST_CASE("模板箱空: 管理员店说「还没设商品」，与普通店「�
     // 普通店的原因一个字都没变： 箱子空了就是缺货，补货就恢复
     CHECK(plainText(regularReason) == plainText(emptyBoxReason()));
     CHECK(plainText(regularReason).find("没有货") != std::string::npos);
+}
+
+TEST_CASE("箱子的四种状态: 优先级是 混装 > 空箱 > 只剩样品 > 有货可卖") {
+    CHECK(boxStockStateOf(false, false, true) == BoxStockState::Saleable);
+    CHECK(boxStockStateOf(false, false, false) == BoxStockState::OnlySampleLeft);
+    CHECK(boxStockStateOf(true, false, false) == BoxStockState::Empty);
+    // 混装是“商品定义本身”有问题，比缺不缺货更根本：空箱与“有货”都要让位
+    CHECK(boxStockStateOf(true, true, false) == BoxStockState::MixedContents);
+    CHECK(boxStockStateOf(false, true, true) == BoxStockState::MixedContents);
+    CHECK(boxStockStateOf(false, true, false) == BoxStockState::MixedContents);
+}
+
+TEST_CASE("箱子的状态: 只有「有货可卖」与「只剩样品」没有拦按钮的原因") {
+    CHECK(text::empty(unavailableReasonForStockState(BoxStockState::Saleable, /* adminShop=*/false)));
+    // 只剩样品时店收购方向还能用，所以不能拦按钮；它的说明走 `stockNoteForStockState`
+    CHECK(text::empty(unavailableReasonForStockState(BoxStockState::OnlySampleLeft, false)));
+
+    auto const mixed = plainText(unavailableReasonForStockState(BoxStockState::MixedContents, false));
+    auto const empty = plainText(unavailableReasonForStockState(BoxStockState::Empty, false));
+    CHECK(mixed != empty);
+    // 空箱仍按店的性质分叉（管理员店是“还没设商品”）
+    CHECK(empty == plainText(unavailableReasonForEmptyBox(/* adminShop=*/false)));
+    CHECK(
+        plainText(unavailableReasonForStockState(BoxStockState::Empty, /* adminShop=*/true))
+        == plainText(unavailableReasonForEmptyBox(/* adminShop=*/true))
+    );
+    // “只剩样品”绝不能说成“没货”：那是叫店主再补一批，不是等补货
+    auto const onlySample = plainText(stockNoteForStockState(BoxStockState::OnlySampleLeft));
+    CHECK(onlySample.find("样品") != std::string::npos);
+    CHECK(onlySample != empty);
+    CHECK(mixed.find("整齐") != std::string::npos);
+    // 其他状态没有说明句
+    CHECK(text::empty(stockNoteForStockState(BoxStockState::Saleable)));
+    CHECK(text::empty(stockNoteForStockState(BoxStockState::Empty)));
+}
+
+TEST_CASE("只剩样品: 只留「出售」按钮（店收购方向可用），正文明说为什么 0 份") {
+    auto data      = sampleShop();
+    data.stockUnits = StockView::makeFinite(0);
+    data.stockNote  = stockNoteForStockState(BoxStockState::OnlySampleLeft);
+
+    // 可成交份数是 0，“购买”进去只会得到一句“商店的货不够”，所以不给；
+    // 而玩家把货卖给店能让可卖件数变多，那个方向必须留着。
+    auto const buttons = shopFormButtons(data, ShopFormRole::Visitor, /*canManage=*/false);
+    REQUIRE(buttons.size() == 1);
+    CHECK(buttons[0].action == ShopFormAction::Sell);
+
+    auto const lines = shopInfoLines(data);
+    CHECK(hasLine(lines, "可成交份数: 0 份"));
+    CHECK(hasLine(lines, "状态: " + plainText(data.stockNote)));
+}
+
+TEST_CASE("盒内混装: 拦按钮，正文写「装得不整齐」而不是「没有货」") {
+    auto data               = sampleShop();
+    data.unavailableReason  = unavailableReasonForStockState(BoxStockState::MixedContents, /* adminShop=*/false);
+
+    CHECK(shopFormButtons(data, ShopFormRole::Visitor, /*canManage=*/false).empty());
+    auto const lines = shopInfoLines(data);
+    CHECK(hasLine(lines, "状态: " + plainText(data.unavailableReason)));
+    CHECK_FALSE(hasLine(lines, "状态: " + plainText(emptyBoxReason())));
 }
 
 TEST_CASE("模板箱空: 正文写「还没设商品」，不是「商店箱里没有货」") {

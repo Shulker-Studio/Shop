@@ -71,6 +71,10 @@ void onButton(Player& player, Cell const& sign, ShopFormAction action) {
         // 停业不需要输入框：直接走提交那一段（与三个输入框共用 `submitManageEdit` 的链）。
         requestManageToggleClosed(player, sign);
         return;
+    case ShopFormAction::ManageRefreshItemName:
+        // 与停业同构：没有输入框，直接把牌面第 4 行按箱子里的商品重写。
+        requestManageRefreshItemName(player, sign);
+        return;
     }
 }
 
@@ -186,9 +190,19 @@ ManageTarget inspectManageTarget(BlockSource& region, BlockPos const& pos, Playe
 using ManageEditFn  = ManageEdit (*)(ShopSpec const&, std::string_view, ShopSignConfig const&);
 using EditMessageFn = std::string (*)(ShopSpec const&, ShopConfig const&);
 
+/// 写牌时第 4 行（商品名）从哪儿来。
+///
+/// 商品名的权威是**箱子里第一个非空槽位**（DESIGN §5.3），牌面那行只是快照。改价、改件数、停业
+/// 一律沿用牌面原文（店主没要求动它）；「更新商品名」反过来，专门按现在的商品重写这一行。
+enum class ItemLineSource : std::uint8_t {
+    SignText,     ///< 沿用牌面第 4 行
+    ChestProduct, ///< 用商店箱里第一个非空槽位的展示名
+};
+
 struct ManageChange {
-    ManageEditFn  apply;          ///< 把输入框原文合成为新的商店定义
-    EditMessageFn successMessage; ///< 写完之后跟玩家说的那句
+    ManageEditFn   apply;          ///< 把输入框原文合成为新的商店定义
+    EditMessageFn  successMessage; ///< 写完之后跟玩家说的那句
+    ItemLineSource itemLine = ItemLineSource::SignText; ///< 第 4 行从哪儿来
 };
 
 /// 买卖两侧的提示只差名字与「清空」的说法，句子只有这一份。
@@ -224,6 +238,17 @@ std::string amountEditMessage(ShopSpec const& spec, ShopConfig const&) {
         ss::shop::Tone::Default,
         {text::lit(std::to_string(spec.amount))}
     ));
+}
+
+/// 「更新商品名」不改定义：价格、件数、停业位原样返回，只有第 4 行换成箱子里的商品
+/// （由 `submitManageEdit` 用 `ItemLineSource::ChestProduct` 接管）。
+ManageEdit withRefreshedItemName(ShopSpec const& current, std::string_view, ShopSignConfig const&) {
+    return ManageEdit{current};
+}
+
+std::string refreshedItemNameMessage(ShopSpec const&, ShopConfig const&) {
+    // 不复述商品名：牌面就在玩家眼前，第二遍名字只会让这一行更长。
+    return ui::msg("shop.form.refresh_item_name.done");
 }
 
 std::string closedEditMessage(ShopSpec const& spec, ShopConfig const&) {
@@ -290,6 +315,7 @@ manageInputField(ShopFormAction action, ShopInfoData const& data, ShopSignConfig
     case ShopFormAction::Sell:
     case ShopFormAction::Manage:
     case ShopFormAction::ToggleClosed:
+    case ShopFormAction::ManageRefreshItemName:
         break;
     }
     return std::nullopt;
@@ -318,6 +344,12 @@ void submitManageEdit(Player& player, Cell const& sign, ManageChange change, std
             return;
         }
 
+        // 「更新商品名」要有商品可抄：箱子空着时它只会把牌面原文抄回牌上，不如直说。
+        if (change.itemLine == ItemLineSource::ChestProduct && !target.shop->info.hasProduct) {
+            ui::send(who, ui::Tone::Failure, "shop.form.refresh_item_name.no_product");
+            return;
+        }
+
         auto const signConfig = toSignConfig(config);
         auto const text       = signActor->getMessage(SignTextSide::Front);
         // `editorIsOp` 固定 `true`：它只影响「是不是管理员店」，与此刻是谁在改无关
@@ -336,10 +368,13 @@ void submitManageEdit(Player& player, Cell const& sign, ManageChange change, std
             return;
         }
 
-        // 规范化回写：第 1 行（店主名）与第 4 行（商品名）沿用牌面原文。
-        // 商品由容器决定，店主名不该被一次改价动到。
-        auto const lines     = splitSignText(text);
-        auto const formatted = formatShopSign(*edit.spec, lines[SignLine::OwnerLine], lines[SignLine::ItemLine]);
+        // 规范化回写：第 1 行（店主名）沿用牌面原文——店主名不该被一次改价动到。
+        // 第 4 行（商品名）按 `change.itemLine` 取：改价那几个动作原样带过去，
+        // 「更新商品名」取箱子里现在的商品（`inspectManageTarget` 刚读过，`itemName` 就是它）。
+        auto const  lines = splitSignText(text);
+        auto const& itemLine =
+            change.itemLine == ItemLineSource::ChestProduct ? target.shop->info.itemName : lines[SignLine::ItemLine];
+        auto const formatted = formatShopSign(*edit.spec, lines[SignLine::OwnerLine], itemLine);
 
         // 管理员店的归属靠「第 1 行 == adminShopName + 编辑者是 OP」，不靠 XUID
         // （流水里管理员店的 `owner.xuid` 也是空串）。
@@ -495,6 +530,17 @@ void requestManageToggleClosed(Player& viewer, Cell const& sign) {
     // 不做任何前置检查，也不弹输入框：`submitManageEdit` 自己会重新取牌、重新鉴权、
     // 重新解析牌面，然后才写牌。停业与改价在这里必须是同一条路。
     submitManageEdit(viewer, sign, ManageChange{&withToggledClosed, &closedEditMessage}, std::string{});
+}
+
+void requestManageRefreshItemName(Player& viewer, Cell const& sign) {
+    // 与停业一样不做前置检查：`submitManageEdit` 会重新取牌、重新鉴权、重新解析，
+    // 再读一遍箱子里的商品，然后才写牌。
+    submitManageEdit(
+        viewer,
+        sign,
+        ManageChange{&withRefreshedItemName, &refreshedItemNameMessage, ItemLineSource::ChestProduct},
+        std::string{}
+    );
 }
 
 void openTradeForm(Player& viewer, Cell const& sign, TradeDirection direction, ShopInfoData const& data, int maxUnits) {

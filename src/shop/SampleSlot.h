@@ -1,6 +1,7 @@
 #pragma once
 
 #include <optional>
+#include <vector>
 
 namespace ss::shop {
 
@@ -23,6 +24,32 @@ std::optional<int> sampleSlotIndex(int slots, IsEmpty&& isEmpty) {
         }
     }
     return std::nullopt;
+}
+
+/// 可卖的槽位顺序：**从最后一格往前**，并且**跳过样品槽**。
+///
+/// 两条规则合起来就是「样品槽永远不出售」：
+/// - 跳过样品槽：那一格是商品定义的实物兜底。卖光它之后牌子第 4 行的商品名就没有依据了，
+///   店会静悄悄变回「还没设商品」——店主必须自己盯着别把最后一件卖掉。
+/// - 从后往前：先动离样品槽最远的那一端，前面的格子留得久，店主一眼能看出「还没动过的有哪些」。
+///
+/// 返回的是**合并槽位下标**（`mergedSlots` 的顺序，双箱先附着那一半）。计数与扣货都按它走，
+/// 于是「哪几格可卖、按什么顺序卖」只有这一处定义——不会出现「数的时候算了、扣的时候没算」。
+///
+/// `sampleSlot` 为空 = 没有样品槽的概念（玩家背包、空箱子）：这时就是单纯倒序。
+inline std::vector<int> saleableSlotOrder(int slots, std::optional<int> sampleSlot) {
+    std::vector<int> order;
+    if (slots <= 0) {
+        return order;
+    }
+    order.reserve(static_cast<std::size_t>(slots));
+    for (int slot = slots - 1; slot >= 0; --slot) {
+        if (sampleSlot.has_value() && slot == *sampleSlot) {
+            continue;
+        }
+        order.push_back(slot);
+    }
+    return order;
 }
 
 } // namespace ss::shop
