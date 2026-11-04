@@ -44,8 +44,21 @@ end
 
 target("Shop")
     add_rules("@levibuildscript/linkrule")
-    -- 版本号与 tooth.json 保持一致；发布时同步修改两处
-    add_rules("@levibuildscript/modpacker", {modVersion = "0.1.0"})
+    -- 版本号的唯一来源是 `tooth.json`（与 STweaks / LK-Stats 同款做法）：tooth 的 `version`
+    -- 决定 lip 包与 release tag（`v{{version}}`）；构建出的 `manifest.json` 再带上
+    -- `+<短 sha>`，同版本的不同构建在 `/shop status` 里分得开（`ll::data::Version` 认 build metadata）。
+    -- 不写死 modVersion：那样改版本要改两处；也不靠 `git describe`：本地没 tag 时会退成 0.0.0。
+    on_load(function(target)
+        import("core.base.json")
+        local modVersion = json.loadfile("tooth.json")["version"]
+        local major, minor, patch = modVersion:match("^(%d+)%.(%d+)%.(%d+)$")
+        if not major then
+            raise("tooth.json 的 version 必须是 major.minor.patch：" .. tostring(modVersion))
+        end
+        local buildMetadata = os.iorun("git rev-parse --short HEAD"):gsub("\n", "")
+        target:set("version", modVersion)
+        target:add("rules", "@levibuildscript/modpacker", {modVersion = modVersion .. "+" .. buildMetadata})
+    end)
     if is_plat("windows") then
         add_defines("NOMINMAX", "UNICODE")
         set_exceptions("none") -- To avoid conflicts with /EHa.

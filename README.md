@@ -213,7 +213,7 @@ xmake test        # 构建并运行纯逻辑层单元测试（doctest）
 ## 安装
 
 ```bash
-lip install github.com/lwenk/Shop
+lip install github.com/Shulker-Studio/Shop
 ```
 
 或手动把 `bin/Shop/` 放到服务器的 `plugins/Shop/`。
