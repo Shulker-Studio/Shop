@@ -3,9 +3,9 @@
 > 目标：把 Java 版 ChestShop-3 的「告示牌 + 箱子」商店复刻到基岩版，作为 LeviLamina 原生模组实现。
 > 本文档只描述设计与接口契约，不含实现代码。实现阶段按第 12 节分阶段推进。
 
-- 参考实现：`ChestShop-authors/ChestShop-3`（LGPL-2.1），本机参考副本 `本地副本`，线上仓库 <https://github.com/ChestShop-authors/ChestShop-3>
-- 模组工程：`Shop`（LeviLamina 模组模板，依赖 `levilamina 26.20.*`）
-- 接口参考：`LeviLamina 源码`（main，v26.51.6）
+- 参考实现：`ChestShop-authors/ChestShop-3`（LGPL-2.1），线上仓库 <https://github.com/ChestShop-authors/ChestShop-3>
+- 模组工程：本仓库（LeviLamina 模组模板，依赖 `levilamina 26.51.*`）
+- 接口参考：LeviLamina 源码 v26.51.6（main）
 - 命名空间：`ss::shop`（沿用模板的 `ss` 前缀）
 
 ---
@@ -1526,7 +1526,7 @@ struct Text {
 
 ---
 
-## 17. 参考实现：ChestLock（`ChestLock`）
+## 17. 参考实现：ChestLock
 
 用户此前实现的通用箱子锁，LeviLamina 1.6.1、C++20、xmake，共 448 行。它验证了本模组需要的大部分保护路径，但**存储载体与商店场景不兼容**，因此定位为「hook 点参考」而非直接依赖。
 

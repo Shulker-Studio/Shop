@@ -86,7 +86,7 @@ Shop 已加载 / 已加载 9 个模组
 | iListenAttentively | `0.17.2`，`passive: true` |
 | Shop | `0.1.0`，manifest 已带 `dependencies`；**13:23 那次启动已加载成功**（`已加载 9 个模组`） |
 | 配置 | `plugins/Shop/config/config.json`，全默认（＝ `K0`） |
-| 端口 / 局域网 IP | `19132` / `<服务器的局域网地址>`（手机连这个；`<虚拟网卡地址>` 是虚拟网卡，手机走同个虚拟局域网时才用它） |
+| 端口 / 局域网地址 | `19132` / `<服务器的局域网地址>`（手机连这个；搭了虚拟局域网时用它给的地址） |
 | allow-list | 开着，只有 `lwenk` 一个号 |
 | 共存模组 | `LegacyMoney 0.22.0`（`economy.backend: "legacy_money"` 即 `E-LM` 档）、`LegacyRemoteCall`、`LegacyScriptEngine` 两个引擎、`LeviOptimize`、`LeviAntiCheat`、`BackupHelper` |
 
