@@ -1,8 +1,0 @@
-{
-    "type": "lse-quickjs",
-    "name": "ShopColorTest",
-    "entry": "color-test.js",
-    "author": "Shop",
-    "version": "0.1.0",
-    "description": "Shop 配色实机预览：聊天栏与表单的颜色/格式码效果对比"
-}
