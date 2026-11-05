@@ -124,7 +124,7 @@ MVC 的三个角色横跨两侧：View 是 `form/`，Controller 是 `event/` 加
 | 2c `ShopInfo` → `ShopInfoData` / `Reason` / `ShopFormRole` / `FormModel` | 完成 | `5dd5d4e` |
 | 2d `ShopService` → `SignEditPlan` / `ShopReader` / `ShopInspector` | 完成 | `90ff1ed` |
 | 2e `Text` → `Text` / `Locale` / `Message` | 完成 | `eda8b7d` |
-| 2f `ShopForm` → `InfoForm` + `ConfirmForm` | **未做** | — |
+| 2f `ShopForm` 拆成信息 / 管理 / 份数 / 确认四张表单 | 完成（比原计划细：多出 `FormSupport`、`ActionDispatch`、`ManageView`） | `73105ad` |
 | 3 引擎类型迁移与镜像删除 | 未开始 | — |
 | 4 删测试设施 | **提前到步骤 1**（目录移动后 `src/shop/**` 不存在，`ShopTests` 无法定位） | `000b3c3` |
 | 5 `/shoptest` | 未开始 | — |
