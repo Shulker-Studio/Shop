@@ -52,7 +52,7 @@ using TextArgs = std::vector<Text>;
 /// - `key` 非空：查词表拿模板（`"还差 {} 元"`），再用 `args` 填 `{}`；
 /// - `key` 为空：`literal` 原样输出（数字、玩家名、金额这些不需要翻译的片段）。
 ///
-/// 渲染由 `render()` 做，实际格式化器是**注入**的：模组启用时 `util/i18n/TextRender.cpp`
+/// 渲染由 `render()` 做，实际格式化器是**注入**的：模组启用时 `util/i18n/Locale.cpp`
 /// 注入 `ll::i18n` + `fmt`，单元测试注入自己那份。纯逻辑层因此可以 include
 /// `fmt` 之外什么都不用，也不会违反 `check_pure_logic_headers`。
 struct Text {
@@ -69,13 +69,13 @@ namespace text {
 /// 文本查表的注入点。
 ///
 /// 纯逻辑层不能 include `ll/api/i18n`（构建期的 `check_pure_logic_headers` 会拦），
-/// 所以这里只留一个函数指针：模组启用时由 `util/i18n/TextRender.cpp` 注入 `ll::i18n` 的查表，
+/// 所以这里只留一个函数指针：模组启用时由 `util/i18n/Locale.cpp` 注入 `ll::i18n` 的查表，
 /// 单元测试与「模组没加载」时没人注入，`tr` 就原样返回 key。
 using Lookup = std::string_view (*)(std::string_view key);
 
 /// 渲染器的注入点。签名是「一段文本 → 已上色的字符串」。
 ///
-/// 由 `util/i18n/TextRender.cpp` 用 `ll::i18n` 的模板 + `fmt::vformat` 实现；测试注入自己那份。
+/// 由 `util/i18n/Locale.cpp` 用 `ll::i18n` 的模板 + `fmt::vformat` 实现；测试注入自己那份。
 /// 没注入时退回 `tr(key)`，只保证「能读」，不保证 `{}` 被填。
 using Renderer = std::string (*)(Text const& text, std::string_view localeCode);
 
