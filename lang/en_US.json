@@ -350,5 +350,19 @@
   "shop.command.status.log.line.never": "  {} · never compressed",
   "shop.command.status.log.dir": "  dir {} (transactions, discarded)",
   "shop.command.status.hook.attached_dirty": "    [!] {} (attach returned {}, which does not mean success)",
-  "shop.command.status.frozen.note": "  frozen pairs {} (frozen after compensation_failed, needs review; listed in the shutdown log)"
+  "shop.command.status.frozen.note": "  frozen pairs {} (frozen after compensation_failed, needs review; listed in the shutdown log)",
+  "shop.command.test.description": "Real-server self-check for shop trades (buy / compensate)",
+  "shop.command.test.only_player": "/shoptest can only be run by a player",
+  "shop.command.test.no_config": "Mod is not enabled (config unavailable)",
+  "shop.command.test.no_shop": "No tradable shop sign within {} blocks",
+  "shop.command.test.unknown": "Unknown scenario: only buy / compensate",
+  "shop.command.test.done": "Traded: {}",
+  "shop.command.test.not_done": "Not traded ({}): {}",
+  "shop.command.test.unreadable_shop": "This sign currently reads as no shop",
+  "shop.command.test.no_buy_price": "This shop has no buy price",
+  "shop.command.test.need_full": "Fill your inventory first (so delivery fails), then run /shoptest compensate",
+  "shop.command.test.sold_through": "This one went through: the inventory could still accept the goods, so the compensation path was not triggered",
+  "shop.command.test.no_balance": "Cannot read balance, unable to tell whether the refund happened",
+  "shop.command.test.refund_ok": "Refund correct: balance unchanged ({})",
+  "shop.command.test.refund_missing": "Balance changed from {} to {}: no refund"
 }

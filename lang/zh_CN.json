@@ -350,5 +350,19 @@
   "shop.command.status.log.line.never": "  {} · 永不压缩",
   "shop.command.status.log.dir": "  目录 {} (transactions, discarded)",
   "shop.command.status.hook.attached_dirty": "    [!] {} (attach 返回 {}, 返回值不代表成功)",
-  "shop.command.status.frozen.note": "  冻结交易对 {} (compensation_failed 后冻结, 需人工核对; 关服日志里会列出)"
+  "shop.command.status.frozen.note": "  冻结交易对 {} (compensation_failed 后冻结, 需人工核对; 关服日志里会列出)",
+  "shop.command.test.description": "商店交易的真机自检（buy / compensate）",
+  "shop.command.test.only_player": "/shoptest 只能由玩家执行",
+  "shop.command.test.no_config": "模组未启用（配置不可用）",
+  "shop.command.test.no_shop": "周围 {} 格内没有可交易的商店牌",
+  "shop.command.test.unknown": "未知场景：只有 buy / compensate",
+  "shop.command.test.done": "成交：{}",
+  "shop.command.test.not_done": "未成交（{}）：{}",
+  "shop.command.test.unreadable_shop": "这块牌现在读不出商店",
+  "shop.command.test.no_buy_price": "这家店没有买入价",
+  "shop.command.test.need_full": "先把背包塞满（让发货失败），再执行 /shoptest compensate",
+  "shop.command.test.sold_through": "这次成交了：背包仍能接收这批货，前置条件没满足——补偿路径没有被触发",
+  "shop.command.test.no_balance": "读不到余额，无法判断是否退款",
+  "shop.command.test.refund_ok": "退款正确：余额未变（{}）",
+  "shop.command.test.refund_missing": "余额从 {} 变成 {}：没有退款"
 }

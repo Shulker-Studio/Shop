@@ -36,9 +36,23 @@ struct TestParam {
 
 namespace {
 
-/// 找不到商店牌时说的一句。命令输出不走 i18n（它是给开发者看的），
-/// 但余额与状态仍是数字，直接写进 `output`。
 constexpr int kScanRadius = 4;
+
+/// `/shoptest` 的输出同样走词表：它虽然只给管理员看，但项目里只有一条文案通道
+/// （`Locale.cpp` 的两条 bootstrap 日志是唯一例外，那两条不能查表）。
+Text out(std::string_view key) {
+    return text::keyed(std::string{key});
+}
+
+/// 带一个字符串参数（数字、状态名）。
+Text out(std::string_view key, std::string value) {
+    return text::keyed(std::string{key}, Tone::Default, {text::lit(std::move(value))});
+}
+
+/// 带两个字符串参数。
+Text out(std::string_view key, std::string first, std::string second) {
+    return text::keyed(std::string{key}, Tone::Default, {text::lit(std::move(first)), text::lit(std::move(second))});
+}
 
 /// 在玩家周围找第一块**可交易**的商店牌。
 ///
@@ -111,21 +125,21 @@ std::optional<TradeSubmission> buyOneSubmission(ShopInfoData const& info) {
 void reportResult(CommandOutput& output, TradeResult const& result) {
     std::string const detail = ui::plain(result.message);
     if (result.status == TradeStatus::Done) {
-        output.success(std::string{"成交："} + detail);
+        output.success(ui::plain(out("shop.command.test.done", detail)));
         return;
     }
-    output.error(std::string{"未成交（"} + std::string{statusName(result.status)} + "）：" + detail);
+    output.error(ui::plain(out("shop.command.test.not_done", std::string{statusName(result.status)}, detail)));
 }
 
 void scenarioBuy(Player& player, CommandOutput& output, ShopConfig const& config, Cell const& sign) {
     auto const shop = readShop(player.getDimensionBlockSource(), toBlockPos(sign), config);
     if (!shop) {
-        output.error("这块牌现在读不出商店");
+        output.error(ui::plain(out("shop.command.test.unreadable_shop")));
         return;
     }
     auto const submission = buyOneSubmission(shop->info);
     if (!submission) {
-        output.error("这家店没有买入价");
+        output.error(ui::plain(out("shop.command.test.no_buy_price")));
         return;
     }
     reportResult(output, buyUnits(player.getDimensionBlockSource(), sign, player, config, *submission));
@@ -140,17 +154,17 @@ void scenarioBuy(Player& player, CommandOutput& output, ShopConfig const& config
 /// 因此只有 `buyUnits` 明确失败时才比对余额——成交时余额变了是正常交易，不是没退款。
 void scenarioCompensate(Player& player, CommandOutput& output, ShopConfig const& config, Cell const& sign) {
     if (!inventoryHasNoEmptySlots(player)) {
-        output.error("先把背包塞满（让发货失败），再执行 /shoptest compensate");
+        output.error(ui::plain(out("shop.command.test.need_full")));
         return;
     }
     auto const shop = readShop(player.getDimensionBlockSource(), toBlockPos(sign), config);
     if (!shop) {
-        output.error("这块牌现在读不出商店");
+        output.error(ui::plain(out("shop.command.test.unreadable_shop")));
         return;
     }
     auto const submission = buyOneSubmission(shop->info);
     if (!submission) {
-        output.error("这家店没有买入价");
+        output.error(ui::plain(out("shop.command.test.no_buy_price")));
         return;
     }
 
@@ -162,37 +176,37 @@ void scenarioCompensate(Player& player, CommandOutput& output, ShopConfig const&
 
     if (result.status == TradeStatus::Done) {
         // 背包里还有能接收这批货的部分堆叠：这一次走的是正常路径，没进入补偿。
-        output.error("这次成交了：背包仍能接收这批货，前置条件没满足——补偿路径没有被触发");
+        output.error(ui::plain(out("shop.command.test.sold_through")));
         return;
     }
     if (!before || !after) {
-        output.error("读不到余额，无法判断是否退款");
+        output.error(ui::plain(out("shop.command.test.no_balance")));
         return;
     }
     if (*before == *after) {
-        output.success("退款正确：余额未变（" + std::to_string(*before) + "）");
+        output.success(ui::plain(out("shop.command.test.refund_ok", std::to_string(*before))));
         return;
     }
-    output.error("余额从 " + std::to_string(*before) + " 变成 " + std::to_string(*after) + "：没有退款");
+    output.error(ui::plain(out("shop.command.test.refund_missing", std::to_string(*before), std::to_string(*after))));
 }
 
 void runScenario(CommandOrigin const& origin, CommandOutput& output, std::string_view scenario) {
     auto* actor = origin.getEntity();
     if (actor == nullptr || !actor->isPlayer()) {
-        output.error("/shoptest 只能由玩家执行");
+        output.error(ui::plain(out("shop.command.test.only_player")));
         return;
     }
     auto& player = static_cast<Player&>(*actor);
 
     auto const& config = Shop::getInstance().config();
     if (!config) {
-        output.error("模组未启用（配置不可用）");
+        output.error(ui::plain(out("shop.command.test.no_config")));
         return;
     }
 
     auto const sign = findNearbyShop(player, *config);
     if (!sign) {
-        output.error("周围 " + std::to_string(kScanRadius) + " 格内没有可交易的商店牌");
+        output.error(ui::plain(out("shop.command.test.no_shop", std::to_string(kScanRadius))));
         return;
     }
 
@@ -204,7 +218,7 @@ void runScenario(CommandOrigin const& origin, CommandOutput& output, std::string
         scenarioCompensate(player, output, *config, *sign);
         return;
     }
-    output.error("未知场景：只有 buy / compensate");
+    output.error(ui::plain(out("shop.command.test.unknown")));
 }
 
 } // namespace
@@ -220,7 +234,7 @@ void registerTestCommand() {
     auto& command = ll::command::CommandRegistrar::getInstance(/*isClientSide=*/false)
                         .getOrCreateCommand(
                             "shoptest",
-                            "商店交易的真机自检（buy / compensate）",
+                            ui::plain(text::keyed("shop.command.test.description")),
                             CommandPermissionLevel::GameDirectors
                         );
 
