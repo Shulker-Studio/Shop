@@ -222,3 +222,16 @@ LegacyMoney 是 `LLMoney_Trans(from, "", n)`，记分板是「只 `reduce` 付�
 商店税靠它落地；后端声明不了这个能力（`supportsMoneySink()` 为 false）时**整笔商店税都不算**
 ——钱还在买家身上，账目对不上，所以不是「少记一条流水」。（2026-11-01 起两个后端都支持。）
 _Avoid_: 系统回收、销毁账户
+
+## 源码
+
+### 源码组织
+
+**门面头**:
+一个模块对外唯一暴露的头，其余实现头放进 `detail/`，跨模块不许直接 include `detail/`。
+现在够格的只有 `Economy.h`（`EconomyProvider` 是纯虚接口，三个后端各做实现）。
+_Avoid_: 接口头、公开 API、public header
+
+目录结构按 ADR-0007：`src/` 单层功能目录（event / command / form / core / policy / util），
+不分子层、不保留可测清单；代码可以直接用 `mc/`、`ll/` 类型，不做“普通结构 + 转换函数”的镜像。
+_Avoid_: 分层、适配层、纯逻辑层

@@ -195,12 +195,14 @@ duckdb -c "SELECT owner.name, sum(total) AS 营业额 FROM read_json_auto('mods/
 ```bash
 xmake f -a x64 -m release -p windows -y
 xmake -y          # 构建 Shop.dll
-xmake test        # 构建并运行纯逻辑层单元测试（doctest）
 ```
 
 产物在 `bin/Shop/`。
 
-`xmake test` 只编译 `src/shop/` 与 `tests/`，不链接 LeviLamina，所以没有 BDS 也能跑；解析器与计价模块不允许 `#include` 任何 `mc/` 头，这条在 `xmake` 与 `xmake test` 两种构建里都会断言。
+回归验收不进 CI：进服务器用 `/shoptest buy|reject|partial|compensate|admin` 跑一遍交易场景（见 ADR-0007）。
+
+`tests/` 与 `xmake test` 的目标是删除（目录合并时一并处理）：项目只针对 LL 一个平台，
+不需要为一层“能脱离引擎编译”的代码付维护成本。
 
 需要：
 
