@@ -3,7 +3,7 @@
 #include "core/container/ContainerFinder.h"
 #include "core/economy/Service.h"
 #include "Shop.h"
-#include "core/shop/ShopOwner.h"
+#include "core/shop/SignOwner.h"
 #include "core/sign/SignProtection.h"
 #include "core/trade/TradePricing.h"
 
@@ -90,7 +90,7 @@ SignEditResult planSignEdit(
     if (auto* sign = signBlockActorAt(region, signPos); sign != nullptr) {
         auto const existing = parseShopSignFront(*sign, signConfig);
         if (existing.looksLikeShopSign()) {
-            auto const owner = readShopOwner(*sign, existing);
+            auto const owner = readSignOwner(*sign, existing);
             auto const actor = shopActorOf(owner.xuid, editor.getXuid(), editor.isOperator(), owner.adminShop);
 
             // 归属交接：改之前已经是商店就不该跟着编辑者走（除管理员店 ⇄ 普通店之外）。
@@ -159,7 +159,7 @@ std::optional<ShopSnapshot> readShop(BlockSource& region, BlockPos const& signPo
     }
 
     // 店主先读：它能告诉下面“这是不是管理员店”，而禁售只管普通店。
-    ShopOwner const owner = readShopOwner(*sign, parsed);
+    SignOwner const owner = readSignOwner(*sign, parsed);
 
     ContainerLookupOptions const options{
         config.shopContainers,
@@ -201,8 +201,8 @@ std::optional<ShopSnapshot> readShop(BlockSource& region, BlockPos const& signPo
     );
     // 件数 → 份数的除法只有 `unitsFromItems` 一处，商店箱的货与背包容量共用。
     info.stockUnits = info.adminShop
-                        ? StockView::makeUnlimited()
-                        : StockView::makeFinite(unitsFromItems(
+                        ? UnitCount::makeUnlimited()
+                        : UnitCount::makeFinite(unitsFromItems(
                               static_cast<int>(std::min<std::int64_t>(
                                   lookup.saleableItemCount,
                                   std::numeric_limits<int>::max()
@@ -249,7 +249,7 @@ inspectShop(BlockSource& region, BlockPos const& signPos, Player& viewer, ShopCo
     }
 
     // 「谁是店主」只由 `shopActorOf` 判（ADR-0005），表单角色只是它的一种用法。
-    ShopOwner const owner = readShopOwner(*sign, parsed);
+    SignOwner const owner = readSignOwner(*sign, parsed);
     ShopActor const actor = shopActorOf(owner.xuid, viewer.getXuid(), viewer.isOperator(), owner.adminShop);
 
     ShopInteraction interaction{

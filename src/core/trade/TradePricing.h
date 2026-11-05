@@ -1,6 +1,6 @@
 #pragma once
 
-#include "core/trade/StockView.h"
+#include "core/trade/UnitCount.h"
 
 #include <cstdint>
 #include <optional>
@@ -19,11 +19,11 @@ int affordableUnits(std::int64_t unitPrice, std::int64_t funds);
 
 /// 部分成交：在请求量与各上限之间取最小值（DESIGN §10.1 第 3 步 / §10.3）。
 ///
-/// 「货」与「收货方空间」是 `StockView`：**无限那一项不参与 `min`**（管理员店的模板箱）。
-/// 不参与的意思不是「传一个很大的数」，而是它根本不进 `min`——见 `StockView::finiteUnits`。
+/// 「货」与「收货方空间」是 `UnitCount`：**无限那一项不参与 `min`**（管理员店的模板箱）。
+/// 不参与的意思不是「传一个很大的数」，而是它根本不进 `min`——见 `UnitCount::finiteUnits`。
 ///
 /// 请求量或付得起的份数 <= 0 时返回 0（视为无法成交）。
-int tradeUnits(int requested, StockView stock, StockView room, int affordable);
+int tradeUnits(int requested, UnitCount stock, UnitCount room, int affordable);
 
 /// 件数 → 份数（向下取整）。商店箱的货与背包容量共用这一个算式，别在别处再除一遍。
 ///

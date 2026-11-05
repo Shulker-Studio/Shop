@@ -1,4 +1,4 @@
-#include "core/shop/ShopOwner.h"
+#include "core/shop/SignOwner.h"
 
 #include "core/container/ContainerFinder.h"
 
@@ -21,8 +21,8 @@ bool isShopSignFront(SignBlockActor& sign, ShopSignConfig const& config) {
     return parseShopSignFront(sign, config).ok();
 }
 
-ShopOwner readShopOwner(SignBlockActor& sign, ShopSignResult const& parsedFront) {
-    ShopOwner owner;
+SignOwner readSignOwner(SignBlockActor& sign, ShopSignResult const& parsedFront) {
+    SignOwner owner;
 
     // 管理员店靠牌面文字判定：规范化时普通店的第 1 行会被写成编辑者名字，
     // 所以牌面上还留着 `adminShopName` 的，只可能是 OP 建的管理员店（或外部工具写入）。

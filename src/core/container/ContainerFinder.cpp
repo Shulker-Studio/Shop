@@ -4,7 +4,7 @@
 
 #include "util/log/Debug.h"
 #include "Shop.h"
-#include "core/shop/ShopOwner.h"
+#include "core/shop/SignOwner.h"
 
 #include "mc/deps/core/string/HashedString.h"
 #include "mc/deps/nbt/CompoundTag.h"
@@ -248,7 +248,7 @@ bool isShopSign(BlockSource& region, BlockPos const& pos, ShopSignConfig const& 
 ///
 /// 与 `isShopSign`（现在严格合法）故意不同：只看正面文本**像不像**商店牌，
 /// 不看附着容器。改配置、脏数据、箱子被拆掉，都不该让商店牌失去保护。
-std::optional<ShopOwner> shopSignOwnerHere(BlockSource& region, BlockPos const& pos, ShopSignConfig const& signConfig) {
+std::optional<SignOwner> shopSignOwnerHere(BlockSource& region, BlockPos const& pos, ShopSignConfig const& signConfig) {
     auto* sign = signBlockActorAt(region, pos);
     if (sign == nullptr) {
         return std::nullopt;
@@ -257,7 +257,7 @@ std::optional<ShopOwner> shopSignOwnerHere(BlockSource& region, BlockPos const& 
     if (!parsed.looksLikeShopSign()) {
         return std::nullopt;
     }
-    return readShopOwner(*sign, parsed);
+    return readSignOwner(*sign, parsed);
 }
 
 /// 容器（含双箱另一半）六个面周围的每一块告示牌：回调拿到位置与几何。
@@ -817,7 +817,7 @@ attachedShopSignsAt(BlockSource& region, BlockPos const& containerPos, ShopConfi
     return bound;
 }
 
-std::optional<ShopOwner> shopSignOwnerAt(BlockSource& region, BlockPos const& signPos, ShopConfig const& config) {
+std::optional<SignOwner> shopSignOwnerAt(BlockSource& region, BlockPos const& signPos, ShopConfig const& config) {
     // 同上：走缓存。爆炸的方块列表动辄上百格，每一格都会问到这里。
     ShopSignConfig fallback;
     auto const*    signConfig = currentSignConfig();

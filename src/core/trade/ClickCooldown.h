@@ -16,7 +16,7 @@ namespace ss::shop {
 /// **维度必须进键**：`Cell` 只有整数坐标，主世界与下界/末地完全可能各有一块同坐标的牌，
 /// 少了维度就会让两个不相干的商店共享一个冷却窗口（玩家在 A 店点完，回 B 店点第一下被吞）。
 /// 时钟由调用方注入（毫秒），因此这里不碰 `std::chrono`，可以纯逻辑测试。
-class TradeGate {
+class ClickCooldown {
 public:
     /// 同时跟踪的点击数上限。超过后先清过期项，再清空——这是防刷兜底，
     /// 不是正常路径（正常路径下 `prune` 就够）。
@@ -24,7 +24,7 @@ public:
 
     /// `cooldownMs` 由配置提供（`shopInteractionCooldownMs`），这里不给默认值：
     /// 250 这个数只能有一处定义，否则两边会慢慢走神。
-    explicit TradeGate(std::int64_t cooldownMs);
+    explicit ClickCooldown(std::int64_t cooldownMs);
 
     /// 尝试放行一次。窗口内重复点击返回 false，且**不刷新**窗口。
     ///

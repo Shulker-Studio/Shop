@@ -1,4 +1,4 @@
-#include "core/trade/TradeGate.h"
+#include "core/trade/ClickCooldown.h"
 
 #include <string>
 
@@ -27,9 +27,9 @@ std::string keyOf(std::string_view xuid, int dimensionId, Cell const& sign) {
 
 } // namespace
 
-TradeGate::TradeGate(std::int64_t cooldownMs) : mCooldownMs(cooldownMs) {}
+ClickCooldown::ClickCooldown(std::int64_t cooldownMs) : mCooldownMs(cooldownMs) {}
 
-bool TradeGate::allow(std::string_view xuid, int dimensionId, Cell const& sign, std::int64_t nowMs) {
+bool ClickCooldown::allow(std::string_view xuid, int dimensionId, Cell const& sign, std::int64_t nowMs) {
     if (mCooldownMs <= 0) {
         return true; // 冷却关掉了：不记录，表永远空着
     }
@@ -51,7 +51,7 @@ bool TradeGate::allow(std::string_view xuid, int dimensionId, Cell const& sign, 
     return true;
 }
 
-void TradeGate::prune(std::int64_t nowMs) {
+void ClickCooldown::prune(std::int64_t nowMs) {
     for (auto it = mLastHit.begin(); it != mLastHit.end();) {
         if (nowMs - it->second >= mCooldownMs) {
             it = mLastHit.erase(it);

@@ -9,7 +9,7 @@
 #include "form/ShopForm.h"
 #include "core/shop/ShopService.h"
 #include "core/sign/SignProtection.h"
-#include "core/trade/TradeGate.h"
+#include "core/trade/ClickCooldown.h"
 
 #include "ll/api/event/EventBus.h"
 #include "ll/api/event/ListenerBase.h"
@@ -28,7 +28,7 @@ namespace ss::shop {
 namespace {
 
 ll::event::ListenerPtr   gSignInteractListener;
-std::optional<TradeGate> gTradeGate;
+std::optional<ClickCooldown> gTradeGate;
 
 /// 牌面改动被拦下时，`protection_block` 的分类。
 char const* signTouchKind(SignTouch touch) {

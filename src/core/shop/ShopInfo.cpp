@@ -9,7 +9,7 @@ namespace {
 /// 无限**不编数字**：编出来的那个数会被玩家当成「还剩这么多」，而这正是票 01/02 要拆掉的
 /// 两套真相。也**不解释为什么无限**——「无限」两个字说完了，再补一句「管理员店永远有货」
 /// 只是把同一件事说第二遍。
-Text countUnitsText(StockView const& stock) {
+Text countUnitsText(UnitCount const& stock) {
     if (auto const finite = stock.finiteUnits()) {
         return text::keyed("shop.form.units_count", Tone::Default, {text::lit(std::to_string(*finite))});
     }
@@ -35,11 +35,11 @@ std::string moneyText(std::string const& symbol, std::int64_t amount) {
     return symbol + " " + std::to_string(amount);
 }
 
-Text stockUnitsText(StockView const& stock) {
+Text stockUnitsText(UnitCount const& stock) {
     return countUnitsText(stock);
 }
 
-Text boxRoomText(StockView const& stock) {
+Text boxRoomText(UnitCount const& stock) {
     return countUnitsText(stock);
 }
 

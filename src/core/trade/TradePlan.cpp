@@ -58,8 +58,8 @@ double payerTaxRate(TradeRequest const& request) { return request.taxOnPayer ? r
 
 int maxTradeUnits(
     int          maxUnits,
-    StockView    goodsUnits,
-    StockView    roomUnits,
+    UnitCount    goodsUnits,
+    UnitCount    roomUnits,
     std::int64_t unitPrice,
     std::int64_t payerFunds,
     double       taxRate
@@ -70,7 +70,7 @@ int maxTradeUnits(
     return maxTradeUnits(maxUnits, goodsUnits, roomUnits, affordableUnitsWithTax(unitPrice, payerFunds, taxRate));
 }
 
-int maxTradeUnits(int maxUnits, StockView goodsUnits, StockView roomUnits, int affordableUnits) {
+int maxTradeUnits(int maxUnits, UnitCount goodsUnits, UnitCount roomUnits, int affordableUnits) {
     // `maxUnits` 就是「请求量」那一项：不拿 `INT_MAX` 当「不限制」的哨兵，
     // 少的这两行正是「无限库存要不要参与 min」这件事只有一个出口的原因（见 `tradeUnits`）。
     return tradeUnits(maxUnits, goodsUnits, roomUnits, affordableUnits);

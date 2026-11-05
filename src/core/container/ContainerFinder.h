@@ -1,7 +1,7 @@
 #pragma once
 
 #include "util/config/Config.h"
-#include "core/shop/ShopOwner.h"
+#include "core/shop/SignOwner.h"
 #include "core/sign/SignGeometry.h"
 #include "core/shop/ItemBanList.h"
 #include "core/shop/ShopInfo.h" // BoxCell：盒内内容要在表单上显示
@@ -210,7 +210,7 @@ inspectAttachedContainer(BlockSource& region, BlockPos const& signPos, Container
 /// 绑在一块容器上的商店牌：几何（拆牌用坐标）+ 店主（保护判定用）。
 struct AttachedShopSign {
     SignRef   sign;
-    ShopOwner owner;
+    SignOwner owner;
 };
 
 /// 反查：这一格容器被哪些商店牌绑着（DESIGN §9.3）。
@@ -273,6 +273,6 @@ bool isShopContainerBlockAt(BlockSource& region, BlockPos const& pos, ShopConfig
 ///
 /// 判据与容器保护一致：只看正面文本「像不像商店牌」，不看附着容器
 /// （DESIGN §9.2：箱子被拆了牌面仍然受保护）。普通告示牌返回空。
-std::optional<ShopOwner> shopSignOwnerAt(BlockSource& region, BlockPos const& signPos, ShopConfig const& config);
+std::optional<SignOwner> shopSignOwnerAt(BlockSource& region, BlockPos const& signPos, ShopConfig const& config);
 
 } // namespace ss::shop

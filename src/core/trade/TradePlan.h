@@ -1,6 +1,6 @@
 #pragma once
 
-#include "core/trade/StockView.h"
+#include "core/trade/UnitCount.h"
 #include "util/i18n/Text.h"
 
 #include <cstdint>
@@ -94,10 +94,10 @@ struct TradeRequest {
     int          requested     = 1; ///< 玩家要成交几份
     int          amountPerUnit = 0; ///< 一份的件数（牌面第 2 行）
     std::int64_t unitPrice     = 0; ///< 一份的价格（买入价或卖出价）
-    /// 货现在够几份。上限来自「这一个数字」，无限时它不参与 `min`（`StockView::finiteUnits`）。
-    StockView goodsUnits;
+    /// 货现在够几份。上限来自「这一个数字」，无限时它不参与 `min`（`UnitCount::finiteUnits`）。
+    UnitCount goodsUnits;
     /// 收货方还能收几份。同上：无限时不参与 `min`。
-    StockView roomUnits;
+    UnitCount roomUnits;
     /// 付款方当前余额。**读不到时不能填 0**（那会把「读不到」当成「没钱」），
     /// 调用方要么先拒绝，要么这一笔根本不涉及钱（免费店）。
     std::int64_t payerFunds = 0;
@@ -148,8 +148,8 @@ struct TradeDecision {
 /// 份数表单显示的上限与交易执行的上限都调它，别在两处各自 `std::min` 一遍。
 int maxTradeUnits(
     int          maxUnits,
-    StockView    goodsUnits,
-    StockView    roomUnits,
+    UnitCount    goodsUnits,
+    UnitCount    roomUnits,
     std::int64_t unitPrice,
     std::int64_t payerFunds,
     double       taxRate = 0.0
@@ -157,7 +157,7 @@ int maxTradeUnits(
 
 /// 同上，但「付款方能承受几份」已经算好了（`planTrade` 要拿它区分是哪一条上限挡住的，
 /// 自己算一次再传进来，免得同一个二分跑两三遍）。
-int maxTradeUnits(int maxUnits, StockView goodsUnits, StockView roomUnits, int affordableUnits);
+int maxTradeUnits(int maxUnits, UnitCount goodsUnits, UnitCount roomUnits, int affordableUnits);
 
 /// 算出这次能成交几份、搬几件、多少钱；不能成交就说明是哪一条上限挡住的。
 ///

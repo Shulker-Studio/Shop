@@ -20,7 +20,7 @@ SignBlockActor* signBlockActorAt(BlockSource& region, BlockPos const& pos);
 
 /// 一块商店牌的店主身份。来源是牌子正面的 `SignBlockActor::Text::mLastEditXuid`
 /// （ADR-0005），与第 1 行的文字无关——第 1 行只是显示名。
-struct ShopOwner {
+struct SignOwner {
     /// 正面记录的编辑者 XUID。引擎没写时是空串（DESIGN §6.5 第 3 条）。
     std::string xuid;
     /// 由 XUID 反查到的当前名字；查不到时退回牌面第 1 行的文字，再查不到就是空串。
@@ -36,7 +36,7 @@ struct ShopOwner {
 ///
 /// 管理员商店按**牌面文字**判定，不按「此刻是谁在看」判定：如果用点击者的 OP 状态
 /// 冒充 `editorIsOp`，非 OP 访客会把已有的管理员店解析成普通店，店主名也会错。
-ShopOwner readShopOwner(SignBlockActor& sign, ShopSignResult const& parsedFront);
+SignOwner readSignOwner(SignBlockActor& sign, ShopSignResult const& parsedFront);
 
 /// 解析这块牌子**正面**的文本。
 ///

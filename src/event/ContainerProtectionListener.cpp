@@ -38,7 +38,7 @@ using DestroyBlockEvent        = ll::event::player::PlayerDestroyBlockEvent;
 /// 这一格方块对商店保护来说是什么。
 struct ShopBlockSubject {
     bool                          isSign = false; ///< true = 商店牌；false = 商店箱
-    ShopOwner                     signOwner;      ///< `isSign` 时有效
+    SignOwner                     signOwner;      ///< `isSign` 时有效
     std::vector<AttachedShopSign> boundSigns;     ///< 商店箱上绑着的牌；`isSign` 时为空
 };
 
@@ -59,7 +59,7 @@ std::optional<ShopBlockSubject> shopSubjectAt(BlockSource& region, BlockPos cons
 }
 
 /// 把「商店牌上记的店主」换成一次判定。身份只由 `shopActorOf` 算（ADR-0005）。
-ShopBlockDecision decide(ShopOwner const& owner, ShopBlockTouch touch, Player const& player, ShopConfig const& config) {
+ShopBlockDecision decide(SignOwner const& owner, ShopBlockTouch touch, Player const& player, ShopConfig const& config) {
     auto const actor = shopActorOf(owner.xuid, player.getXuid(), player.isOperator(), owner.adminShop);
     return planShopBlockTouch({
         .touch               = touch,

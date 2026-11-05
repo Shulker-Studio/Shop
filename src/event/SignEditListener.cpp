@@ -4,7 +4,7 @@
 #include "core/container/ContainerFinder.h"
 #include "util/log/Debug.h"
 #include "Shop.h"
-#include "core/shop/ShopOwner.h"
+#include "core/shop/SignOwner.h"
 #include "core/shop/ShopService.h"
 
 #include "ila/event/world/actor/player/PlayerEditSignEvent.h"

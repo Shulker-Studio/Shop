@@ -15,27 +15,27 @@ namespace ss::shop {
 /// `INT_MAX` 会被当真成「真的能成交 INT_MAX 份」（件数乘法、表单档位全跟着走到溢出边缘），
 /// 而 `-1` 与「一件都没有」共用一个值之后就没人分得清「无限」与「空」。
 /// 所以它是一个显式标志位：`unlimited` 为真时 `units` **必须为空**。
-struct StockView {
+struct UnitCount {
     /// 有限库存的份数；`unlimited` 为真时为空。默认是「有限 0 份」——与旧字段的默认值一致。
     std::optional<int> units = 0;
     bool               unlimited = false;
 
-    StockView() = default;
+    UnitCount() = default;
 
-    /// 隐式转换 `StockView view = 5;`：写出来就是「有限 5 份」。
+    /// 隐式转换 `UnitCount view = 5;`：写出来就是「有限 5 份」。
     ///
     /// 保留它是因为既有调用点与既有测试写的是 `goodsUnits = 5` 这种形式，
     /// 而那个写法本来就只有一种读法。负数按 0 处理（负数不是合法的份数）。
-    StockView(int finiteUnits); // NOLINT(google-explicit-constructor)
+    UnitCount(int finiteUnits); // NOLINT(google-explicit-constructor)
 
     /// 有限库存。负数按 0 处理。
-    static StockView makeFinite(int units);
+    static UnitCount makeFinite(int units);
 
     /// 无限库存：没有「几份」这个数。
     ///
     /// 它与有限状态**互斥**，而构造口只有这一个，所以「无限 + 数字」这种两种真相的组合
     /// 在工厂这一侧造不出来（成员仍是公开的，读的一侧另有兜底，见 `finiteUnits`）。
-    static StockView makeUnlimited();
+    static UnitCount makeUnlimited();
 
     /// 状态自洽：`unlimited` 与 `units` 不许同时成立。
     [[nodiscard]] bool valid() const;

@@ -63,8 +63,8 @@ Wording const& wordingOf(TradeDirection direction) {
 }
 
 /// 剩下的货有几份：买入看商店箱（`stockUnits`，管理员店是无限）、卖出看玩家手里（`heldUnits`，永远有限）。
-StockView goodsOf(ShopInfoData const& data, TradeDirection direction) {
-    return direction == TradeDirection::Sell ? StockView::makeFinite(data.heldUnits) : data.stockUnits;
+UnitCount goodsOf(ShopInfoData const& data, TradeDirection direction) {
+    return direction == TradeDirection::Sell ? UnitCount::makeFinite(data.heldUnits) : data.stockUnits;
 }
 
 /// 「一份」的金额文本；价格缺失时给占位。

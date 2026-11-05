@@ -31,7 +31,7 @@ int affordableUnits(std::int64_t unitPrice, std::int64_t funds) {
     return static_cast<int>(std::min<std::int64_t>(units, std::numeric_limits<int>::max()));
 }
 
-int tradeUnits(int requested, StockView stock, StockView room, int affordable) {
+int tradeUnits(int requested, UnitCount stock, UnitCount room, int affordable) {
     if (requested <= 0) {
         return 0;
     }

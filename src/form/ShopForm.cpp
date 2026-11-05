@@ -6,7 +6,7 @@
 #include "core/container/ContainerFinder.h"
 #include "core/economy/Service.h"
 #include "Shop.h"
-#include "core/shop/ShopOwner.h"
+#include "core/shop/SignOwner.h"
 #include "core/shop/ShopService.h"
 #include "core/trade/TradeService.h"
 #include "form/ManageForm.h"

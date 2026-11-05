@@ -13,7 +13,7 @@
 #include "util/time/Time.h"
 #include "core/shop/ShopInfo.h"
 #include "core/container/SampleSlot.h"
-#include "core/trade/TradeGate.h"
+#include "core/trade/ClickCooldown.h"
 #include "core/trade/TradePlan.h"
 #include "core/trade/TradePricing.h"
 #include "form/UnitsForm.h"
@@ -43,7 +43,7 @@ namespace {
 
 /// 提交冷却。与「点牌」的连点冷却分开：点开表单后立刻按「购买」是两个动作，
 /// 共用一个窗口会把正经操作误伤掉（DESIGN §10.4）。
-std::optional<TradeGate> gSubmitGate;
+std::optional<ClickCooldown> gSubmitGate;
 
 /// 被冻结的「玩家 + 商店」。
 ///
@@ -563,7 +563,7 @@ void fillTradeFacts(
 ) {
     facts.ownerXuid = shop.ownerXuid;
     // 管理员店的「店主」是配置里那个名字（spec：`owner.name = adminShopName`），
-    // 不是牌上记的创建者——`readShopOwner` 在 `PlayerInfo` 里查得到时会拿创建者的名字。
+    // 不是牌上记的创建者——`readSignOwner` 在 `PlayerInfo` 里查得到时会拿创建者的名字。
     facts.ownerName = shop.info.adminShop ? config.adminShopName : shop.info.ownerName;
     facts.admin     = shop.info.adminShop;
     facts.backend   = std::string{provider.name()};
@@ -846,11 +846,11 @@ PreparedTrade prepareSell(BlockSource& region, Cell const& sign, Player& seller,
     int const heldUnits = unitsFromItems(strictCount, context.shop.info.amountPerUnit);
     // 管理员店收进来的货是**销毁**的（票 02）：箱子不是收货方，所以「还能装几份」不存在。
     // 普通店照旧算商店箱（双箱按合并顺序）还能装几份。
-    StockView const boxRoomUnits =
+    UnitCount const boxRoomUnits =
         adminShop
-            ? StockView::makeUnlimited()
-            : StockView::makeFinite(shopBoxUnits(context.container, context.product, context.shop.info.amountPerUnit));
-    context.request.goodsUnits = StockView::makeFinite(heldUnits);
+            ? UnitCount::makeUnlimited()
+            : UnitCount::makeFinite(shopBoxUnits(context.container, context.product, context.shop.info.amountPerUnit));
+    context.request.goodsUnits = UnitCount::makeFinite(heldUnits);
     context.request.roomUnits  = boxRoomUnits;
 
     // 「我手里根本没有」与「我手里有钻石剑但不是这一把」得分开说（DESIGN §5.3 的严格同种）。
