@@ -124,9 +124,17 @@ MVC 的三个角色横跨两侧：View 是 `form/`，Controller 是 `event/` 加
 | 2c `ShopInfo` → `ShopInfoData` / `Reason` / `ShopFormRole` / `FormModel` | 完成 | `5dd5d4e` |
 | 2d `ShopService` → `SignEditPlan` / `ShopReader` / `ShopInspector` | 完成 | `90ff1ed` |
 | 2e `Text` → `Text` / `Locale` / `Message` | 完成 | `eda8b7d` |
-| 2f `ShopForm` 拆成信息 / 管理 / 份数 / 确认四张表单 | 完成（比原计划细：多出 `FormSupport`、`ActionDispatch`、`ManageView`） | `73105ad` |
+| 2f `ShopForm` 拆成信息 / 管理 / 份数 / 确认四张表单 | 完成 | `73105ad` |
 | 3 引擎类型迁移与镜像删除 | 未开始 | — |
 | 4 删测试设施 | **提前到步骤 1**（目录移动后 `src/shop/**` 不存在，`ShopTests` 无法定位） | `000b3c3` |
 | 5 `/shoptest`（buy / compensate） | 完成 | `7b35178` |
 
 与原计划的偏差：`StockView` 改名为 `UnitCount` 而不是 `Units`（`ChangeReason::Units` 已占用该名字）；`ScoreboardEconomy` 改为 `ScoreboardBackend` 而不是 `Scoreboard`（后者与引擎的 `Scoreboard` 类型同名）；测试设施在步骤 1 一并删除，否则中间状态无法构建。
+
+### 实施发现：表单实际拆成八个模块
+
+原计划把 `ShopForm` 拆成 `InfoForm` / `ConfirmForm` 两块，实际落地是八个：`InfoForm`（信息表单）、`ManageForm`（管理表单的**纯逻辑**：把改动算成新的 `ShopSpec`）、`ManageView`（管理表单的渲染与提交链）、`UnitsForm`（份数表单 + 提交）、`ConfirmForm`（二次确认）、`FormModel`（表单模型与正文，来自 ShopInfo 的拆分）、`FormSupport`（字段名、切服务端线程、输入框读取）、`ActionDispatch`（按钮动作分发）。
+
+多出来的四块各有不得不拆的理由：`ManageForm` 原本就是纯逻辑，与渲染分开才不会让表单文件重新长回 600 行；`ManageView` 是 `ShopForm` 里最长的一段（管理渲染 + 提交 + 重新鉴权），单独成文件才看得清边界；`FormSupport` 的三个辅助被四张表单共用，留在任何一张里都会让另外三张反向依赖它；`ActionDispatch` 分发十种动作，它必须独立，否则 `InfoForm` 与 `ManageView` 会互相 include（都调对方的分发函数）形成同层循环。
+
+这条记录是实施发现，不是对原决策的推翻：**表单仍然是四张**（信息、管理、份数、确认），另外四个是它们共用的部件与模型。

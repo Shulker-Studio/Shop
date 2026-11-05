@@ -62,8 +62,11 @@ std::optional<Cell> findNearbyShop(Player& player, ShopConfig const& config) {
     return std::nullopt;
 }
 
-/// 背包一格空位都没有。补偿场景靠它保证「发货必然失败」。
-bool inventoryFull(Player& player) {
+/// 背包一格空位都没有。
+///
+/// **这不等于「发货必然失败」**：同类物品的部分堆叠仍能接收新货。所以补偿场景
+/// 不拿它当结论，只当前置筛选，真正的判定看 `buyUnits` 返回的状态。
+bool inventoryHasNoEmptySlots(Player& player) {
     auto& inventory = player.getInventory();
     int   count     = inventory.getContainerSize();
     for (int slot = 0; slot < count; ++slot) {
@@ -130,11 +133,14 @@ void scenarioBuy(Player& player, CommandOutput& output, ShopConfig const& config
 
 /// 补偿场景：扣钱成功、发货失败时钱必须原样退回。
 ///
-/// 发货失败的唯一现实原因是背包放不下，所以这里**不替玩家塞背包**（那会毁掉他的物品），
-/// 只在他自己塞满之后跑一次买入，然后比对余额。
+/// 发货失败的现实原因是背包放不下，所以这里**不替玩家塞背包**（那会毁掉他的物品），
+/// 只在他自己塞满之后跑一次买入。
+///
+/// 「塞满」只是前置筛选，不是结论：同类物品的部分堆叠仍能接收新货，那一单会正常成交。
+/// 因此只有 `buyUnits` 明确失败时才比对余额——成交时余额变了是正常交易，不是没退款。
 void scenarioCompensate(Player& player, CommandOutput& output, ShopConfig const& config, Cell const& sign) {
-    if (!inventoryFull(player)) {
-        output.error("先把背包塞满（发货必须失败），再执行 /shoptest compensate");
+    if (!inventoryHasNoEmptySlots(player)) {
+        output.error("先把背包塞满（让发货失败），再执行 /shoptest compensate");
         return;
     }
     auto const shop = readShop(player.getDimensionBlockSource(), toBlockPos(sign), config);
@@ -148,11 +154,17 @@ void scenarioCompensate(Player& player, CommandOutput& output, ShopConfig const&
         return;
     }
 
-    auto const   before  = economyBackend().get(player.getXuid());
-    TradeResult  result = buyUnits(player.getDimensionBlockSource(), sign, player, config, *submission);
-    auto const   after   = economyBackend().get(player.getXuid());
+    auto const  before = economyBackend().get(player.getXuid());
+    TradeResult result = buyUnits(player.getDimensionBlockSource(), sign, player, config, *submission);
+    auto const  after  = economyBackend().get(player.getXuid());
 
     reportResult(output, result);
+
+    if (result.status == TradeStatus::Done) {
+        // 背包里还有能接收这批货的部分堆叠：这一次走的是正常路径，没进入补偿。
+        output.error("这次成交了：背包仍能接收这批货，前置条件没满足——补偿路径没有被触发");
+        return;
+    }
     if (!before || !after) {
         output.error("读不到余额，无法判断是否退款");
         return;
