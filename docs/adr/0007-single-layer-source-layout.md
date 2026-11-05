@@ -75,11 +75,11 @@ src/
 | `ShopInfoData` | **保留原名** | 与已有的 `ShopSnapshot`（`ShopInfoData` + `ownerXuid`）区分，52 处引用不动 |
 | `ShopForm` | `InfoForm` + `UnitsForm` + `ConfirmForm` + `ManageForm` + `FormModel` | 表单布局与领域角色分开 |
 | `Clock.h` + `WallClock.h` | `util/time/Time` | 单调钟 + 本地时间戳，18 行 |
-| `Economy` / `EconomyService` / `LegacyMoneyEconomy` / `ScoreboardEconomy` | `economy/Provider` / `Service` / `LegacyMoney` / `Scoreboard` | 去掉四个重复前缀 |
+| `Economy` / `EconomyService` / `LegacyMoneyEconomy` / `ScoreboardEconomy` | `economy/Provider` / `Service` / `LegacyMoney` / `ScoreboardBackend` | 去掉重复前缀；`Scoreboard` 与引擎同名类型冲突，加 Backend |
 | `DebugLog` / `LogFile` / `TransactionLog` / `DiscardLog` / `LogRotation` | `log/Debug` / `Files` / `Transaction` / `Discard` / `Rotation` | 日志统一进 `log/` |
-| `mod/Text` + `shop/Text` | `i18n/Text`（树 + 渲染）、`Locale`（装载 + 翻译）、`Message`（发送） | 实际是三件事，不合并 |
+| `mod/Text` + `shop/Text` | `i18n/Text`（树）、`Locale`（装载 + 翻译 + 渲染）、`Message`（发送） | 实际是三件事，不合并 |
 | `TradeGate` | `trade/ClickCooldown` | 它只是连点冷却 |
-| `StockView` | `trade/Units` | struct，不是视图 |
+| `StockView` | `trade/UnitCount` | struct，不是视图；`Units` 已被 `ChangeReason::Units` 占用 |
 | `ProductRules` | `shop/BundleRules` | 26 行只有一个函数，只判收纳袋 |
 
 规则：不加 `Bds` 后缀；不用 `Info` + `Data` 双后缀；监听与 hook 按注册方式命名（`*Listener` 走事件、`*Hook` 打函数）。
@@ -111,3 +111,22 @@ MVC 的三个角色横跨两侧：View 是 `form/`，Controller 是 `event/` 加
 - 「目录移动 + 改名 + 砍镜像」被当成零行为变化。实际上引擎类型迁移会改变维度表达与对象生命周期，必须独立成高风险步骤。
 
 分区依据也试过按业务域（`sign/ trade/ protection/ chest/`）和按后端分层词（`app/ platform/ integration/`），前者拆散同类回调，后者在插件语境里不成立。
+
+## 实施进度（2026-11-05）
+
+`refact` 分支，六个提交，每次构建通过。
+
+| 步骤 | 状态 | 提交 |
+| --- | --- | --- |
+| 1 纯移动 + include 改写 + 删测试设施 | 完成 | `000b3c3` |
+| 2a 文件名去后缀、ContainerFinder 拆分、Time 合并、economy 改名 | 完成 | `5bc0edc` |
+| 2b `ShopOwner`/`TradeGate`/`StockView` 标识符改名 | 完成 | `bb36fc9` |
+| 2c `ShopInfo` → `ShopInfoData` / `Reason` / `ShopFormRole` / `FormModel` | 完成 | `5dd5d4e` |
+| 2d `ShopService` → `SignEditPlan` / `ShopReader` / `ShopInspector` | 完成 | `90ff1ed` |
+| 2e `Text` → `Text` / `Locale` / `Message` | 完成 | `eda8b7d` |
+| 2f `ShopForm` → `InfoForm` + `ConfirmForm` | **未做** | — |
+| 3 引擎类型迁移与镜像删除 | 未开始 | — |
+| 4 删测试设施 | **提前到步骤 1**（目录移动后 `src/shop/**` 不存在，`ShopTests` 无法定位） | `000b3c3` |
+| 5 `/shoptest` | 未开始 | — |
+
+与原计划的偏差：`StockView` 改名为 `UnitCount` 而不是 `Units`（`ChangeReason::Units` 已占用该名字）；`ScoreboardEconomy` 改为 `ScoreboardBackend` 而不是 `Scoreboard`（后者与引擎的 `Scoreboard` 类型同名）；测试设施在步骤 1 一并删除，否则中间状态无法构建。
