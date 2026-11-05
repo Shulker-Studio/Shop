@@ -127,6 +127,6 @@ MVC 的三个角色横跨两侧：View 是 `form/`，Controller 是 `event/` 加
 | 2f `ShopForm` 拆成信息 / 管理 / 份数 / 确认四张表单 | 完成（比原计划细：多出 `FormSupport`、`ActionDispatch`、`ManageView`） | `73105ad` |
 | 3 引擎类型迁移与镜像删除 | 未开始 | — |
 | 4 删测试设施 | **提前到步骤 1**（目录移动后 `src/shop/**` 不存在，`ShopTests` 无法定位） | `000b3c3` |
-| 5 `/shoptest` | 未开始 | — |
+| 5 `/shoptest`（buy / compensate） | 完成 | `7b35178` |
 
 与原计划的偏差：`StockView` 改名为 `UnitCount` 而不是 `Units`（`ChangeReason::Units` 已占用该名字）；`ScoreboardEconomy` 改为 `ScoreboardBackend` 而不是 `Scoreboard`（后者与引擎的 `Scoreboard` 类型同名）；测试设施在步骤 1 一并删除，否则中间状态无法构建。

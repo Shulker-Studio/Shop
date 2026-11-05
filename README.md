@@ -199,7 +199,7 @@ xmake -y          # 构建 Shop.dll
 
 产物在 `bin/Shop/`。
 
-回归验收不进 CI：进服务器用 `/shoptest buy|reject|partial|compensate|admin` 跑一遍交易场景（见 ADR-0007）。
+回归验收不进 CI：进服务器用 `/shoptest buy|compensate` 跑一遍交易场景（见 ADR-0007）。
 
 `tests/` 与 `xmake test` 的目标是删除（目录合并时一并处理）：项目只针对 LL 一个平台，
 不需要为一层“能脱离引擎编译”的代码付维护成本。
