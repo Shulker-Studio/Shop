@@ -1,0 +1,122 @@
+#include "util/log/LogRotation.h"
+
+#include <chrono>
+#include <cstddef>
+
+namespace ss::shop {
+namespace {
+
+/// 我们自己的流水文件后缀。`.jsonl.gz` 不以它结尾，所以「已经压过的」自然被排除。
+constexpr std::string_view kLogExtension        = ".jsonl";
+constexpr std::string_view kCompressedExtension = ".gz";
+
+/// 日期在文件名里占的宽度（`YYYY-MM-DD`）与它前面那个分隔符。
+constexpr std::size_t kDateLength = 10;
+
+/// `YYYY-MM-DD` → 天数。长度、分隔符、数字、以及「2026-13-01」「2026-02-30」这样的假日期
+/// 都返回空。用 `std::chrono::year_month_day` 判日历合法性，不自己算闰年。
+std::optional<std::chrono::sys_days> parseDate(std::string_view text) {
+    if (text.size() != kDateLength || text[4] != '-' || text[7] != '-') {
+        return std::nullopt;
+    }
+
+    int         digits[8] = {}; // YYYYMMDD
+    std::size_t at        = 0;
+    for (std::size_t i = 0; i < text.size(); ++i) {
+        if (i == 4 || i == 7) {
+            continue;
+        }
+        if (text[i] < '0' || text[i] > '9') {
+            return std::nullopt;
+        }
+        digits[at++] = text[i] - '0';
+    }
+
+    int const      year  = digits[0] * 1000 + digits[1] * 100 + digits[2] * 10 + digits[3];
+    unsigned const month = static_cast<unsigned>(digits[4] * 10 + digits[5]);
+    unsigned const day   = static_cast<unsigned>(digits[6] * 10 + digits[7]);
+
+    std::chrono::year_month_day const date{std::chrono::year{year}, std::chrono::month{month}, std::chrono::day{day}};
+    if (!date.ok()) {
+        return std::nullopt;
+    }
+    return std::chrono::sys_days{date};
+}
+
+} // namespace
+
+std::string_view isoDateOf(std::string_view ts) {
+    constexpr std::size_t kIsoDateLength = 10; // `YYYY-MM-DD`
+    return ts.size() < kIsoDateLength ? ts : ts.substr(0, kIsoDateLength);
+}
+
+std::optional<std::string> logFileDate(std::string_view fileName) {
+    if (!fileName.ends_with(kLogExtension)) {
+        return std::nullopt;
+    }
+    auto const stem = fileName.substr(0, fileName.size() - kLogExtension.size());
+    // **只认裸日期**（新布局 `transactions/2026-11-01.jsonl`：类型由目录区分，文件名不再带前缀）。
+    // 旧布局的 `transactions-2026-11-01.jsonl` 是 `relocatedLogFile` 的活（搬家），不归压缩——
+    // 否则服主自己放进日志目录的 `backup-2026-11-01.jsonl` 也会被压缩并删掉原文件。
+    if (stem.size() != kDateLength) {
+        return std::nullopt;
+    }
+    if (!parseDate(stem)) {
+        return std::nullopt;
+    }
+    return std::string{stem};
+}
+
+bool shouldCompress(std::string_view fileDate, std::string_view today, int days) {
+    if (days <= 0) {
+        return false; // 0 = 永不压缩
+    }
+    auto const fileDay  = parseDate(fileDate);
+    auto const todayDay = parseDate(today);
+    if (!fileDay || !todayDay) {
+        return false; // 认不出来的文件不动
+    }
+    // 严格早于「今天 − N 天」：正好 N 天的文件今天不压，N+1 天才压。
+    return *fileDay < *todayDay - std::chrono::days{days};
+}
+
+std::optional<RelocatedLogFile> relocatedLogFile(std::string_view fileName) {
+    struct Prefix {
+        std::string_view prefix;
+        std::string_view subdirectory;
+    };
+    // 顺序无所谓：两个前缀互不为前缀。
+    constexpr Prefix kPrefixes[] = {
+        {"transactions-", "transactions"},
+        {"discarded-",    "discarded"   },
+    };
+    for (auto const& candidate : kPrefixes) {
+        if (!fileName.starts_with(candidate.prefix)) {
+            continue;
+        }
+        auto const rest = fileName.substr(candidate.prefix.size());
+        // 去掉前缀后应当是 `YYYY-MM-DD.jsonl` 或 `YYYY-MM-DD.jsonl.gz`。
+        // 这里不复用 `logFileDate`：那个函数只管**新布局的裸日期名**（压缩用），
+        // 而搬家要认的正是带前缀的旧名字。两者的判据不同，不能合并。
+        auto const body =
+            rest.ends_with(kCompressedExtension) ? rest.substr(0, rest.size() - kCompressedExtension.size()) : rest;
+        if (!body.ends_with(kLogExtension)) {
+            return std::nullopt;
+        }
+        auto const date = body.substr(0, body.size() - kLogExtension.size());
+        if (!parseDate(date)) {
+            return std::nullopt; // 日期不合法：不是我们写的（或者写坏了），不搬
+        }
+        return RelocatedLogFile{std::string{candidate.subdirectory}, std::string{rest}};
+    }
+    return std::nullopt;
+}
+
+std::string compressedLogFileName(std::string_view fileName) {
+    if (fileName.ends_with(".gz")) {
+        return std::string{fileName};
+    }
+    return std::string{fileName} + ".gz";
+}
+
+} // namespace ss::shop

@@ -1,0 +1,37 @@
+#include "event/HookSlots.h"
+
+#include "Shop.h"
+
+#include <iterator>
+#include "util/i18n/TextRender.h"
+
+namespace ss::shop {
+
+void attachHooks(std::span<HookSlot> slots) {
+    for (HookSlot& slot : slots) {
+        // 重复注册 = 同一条路径被拦两次；已经挂上的不重复挂（enable 不该被调两次，这里只是幂等）
+        if (slot.attached) {
+            continue;
+        }
+        int const status = slot.attach();
+        slot.lastReturn = status; // 只给 `/shop status` 看，不拿来判成败
+        slot.attempted  = true;    // 永不回退：解绑之后仍能看出「这一条曾经挂过」
+        if (status != 0) {
+            Shop::getInstance().getSelf().getLogger().warn(ui::msg("shop.log.hook.attach_returned", status, slot.name)
+            );
+        }
+        slot.attached = true;
+    }
+}
+
+void detachHooks(std::span<HookSlot> slots) {
+    for (auto slot = std::rbegin(slots); slot != std::rend(slots); ++slot) {
+        if (!slot->attached) {
+            continue;
+        }
+        slot->detach();
+        slot->attached = false;
+    }
+}
+
+} // namespace ss::shop
