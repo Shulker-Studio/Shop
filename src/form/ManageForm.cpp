@@ -1,7 +1,6 @@
 #include "form/ManageForm.h"
 #include "util/i18n/Text.h"
 
-#include "util/i18n/Text.h"
 
 #include <charconv>
 #include <cstdint>

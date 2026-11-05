@@ -38,7 +38,7 @@ bool validate(ShopConfig& config, ll::io::Logger& logger) {
         return false;
     }
     // 上界不是「拍脑袋的限制」：份数上限同时是一份的件数上限，而件数 = 份数 × 每份件数
-    // 在表单里用 int 算（`UnitsForm` / `ShopForm`）。32768² = 1.07e9 < INT_MAX，所以
+    // 在表单里用 int 算（`UnitsForm` / `InfoForm`）。32768² = 1.07e9 < INT_MAX，所以
     // 只要它不超过这个数，表单层的乘法就不会溢出。再大只能靠 int64 兜，而牌面本身也会先变得不可读。
     constexpr int kMaxShopAmountLimit = 32'768;
     if (config.maxShopAmount > kMaxShopAmountLimit) {

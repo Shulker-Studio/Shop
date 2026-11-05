@@ -1,13 +1,19 @@
 #pragma once
 
 #include "core/shop/ShopInfoData.h"
+#include "core/sign/SignGeometry.h"
 #include "core/trade/TradePlan.h"
+#include "core/trade/TradeService.h"
+
+#include "util/i18n/Text.h"
 
 #include <cstdint>
 #include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
+
+class Player;
 
 namespace ss::shop {
 
@@ -98,5 +104,18 @@ struct RequestedUnits {
 /// `choiceIndex` 越界、自定义输入为空/非整数/超出 `maxUnits` 都算非法，
 /// 不允许悄悄夹到上限——玩家填 100 却只成交 4 份比直接报错更让人困惑。
 RequestedUnits resolveRequestedUnits(UnitsFormModel const& model, int choiceIndex, std::string_view customText);
+
+/// 打开「几份」表单（DESIGN §10.1 第 3 步）。买卖共用：档位与上限都是「份数」的事。
+///
+/// `maxUnits` 由调用方算好（货的份数、收货方容量、付款方余额三者取最小）；这里只负责
+/// 把它变成下拉框与正文，并把玩家选的份数交给 `submitTradeForm`。
+/// 表单值不是权威数据：提交时会按最新状态再算一遍（DESIGN §10.4）。
+void openTradeForm(Player& viewer, Cell const& sign, TradeDirection direction, ShopInfoData const& data, int maxUnits);
+
+/// 把表单提交交给对应的方向。买卖两条路只差这一处，别为它各写一整张表单。
+void submitTradeForm(Player& player, Cell const& sign, TradeDirection direction, TradeSubmission const& submission);
+
+/// 表单上显示的那个金额（买入是扣款、卖出是收入）。价格缺失时没有可对照的数。
+std::optional<std::int64_t> visibleTotal(ShopInfoData const& data, TradeDirection direction, int units);
 
 } // namespace ss::shop

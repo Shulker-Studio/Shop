@@ -7,7 +7,7 @@
 #include "core/container/ContainerFinder.h"
 #include "util/log/Debug.h"
 #include "Shop.h"
-#include "form/ShopForm.h"
+#include "form/InfoForm.h"
 #include "core/shop/ShopInspector.h"
 #include "core/sign/SignProtection.h"
 #include "core/trade/ClickCooldown.h"

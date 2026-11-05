@@ -1,24 +1,24 @@
-#include "form/ShopForm.h"
-#include "util/i18n/Reason.h"
+#include "form/ManageView.h"
+
+#include "core/container/ContainerFinder.h"
+#include "core/sign/ShopSign.h"
+#include "core/sign/SignProtection.h"
+#include "core/shop/ShopInspector.h"
+#include "core/shop/SignOwner.h"
+#include "event/BlockResync.h"
+#include "form/ActionDispatch.h"
+#include "form/FormSupport.h"
+#include "form/ManageForm.h"
+#include "util/config/Config.h"
 #include "util/i18n/Locale.h"
 #include "util/i18n/Message.h"
+#include "util/i18n/Reason.h"
 #include "util/i18n/Text.h"
 
-#include "event/BlockResync.h"
-#include "core/container/ContainerFinder.h"
-#include "core/economy/Service.h"
 #include "Shop.h"
-#include "core/shop/SignOwner.h"
-#include "core/shop/ShopInspector.h"
-#include "core/trade/TradeService.h"
-#include "form/ManageForm.h"
-#include "core/sign/SignProtection.h"
-#include "core/trade/TradePricing.h"
-#include "form/UnitsForm.h"
 
 #include "ll/api/form/CustomForm.h"
 #include "ll/api/form/SimpleForm.h"
-#include "ll/api/thread/ServerThreadExecutor.h"
 
 #include "mc/world/actor/player/Player.h"
 #include "mc/world/level/BlockPos.h"
@@ -26,7 +26,6 @@
 #include "mc/world/level/block/actor/SignBlockActor.h"
 #include "mc/world/level/block/actor/SignTextSide.h"
 
-#include <functional>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -36,133 +35,6 @@
 namespace ss::shop {
 namespace {
 
-/// 表单里几个控件的名字。读回来时用它们取值，写错就是静默拿不到值，所以只写一次。
-/// 买卖两张份数表单共用前两个：同一时刻只会有一张开着。
-constexpr std::string_view kUnitChoiceField  = "units";
-constexpr std::string_view kCustomUnitsField = "custom_units";
-constexpr std::string_view kBuyPriceField    = "buy_price";
-constexpr std::string_view kSellPriceField   = "sell_price";
-constexpr std::string_view kAmountField      = "amount";
-
-/// 提交时牌子已经不在了（改价与改件数共用这一句，所以说「这次的改动」）。
-constexpr std::string_view kSignGoneMessage = "shop.protection.sign_gone";
-
-/// 按钮按下之后干什么：买卖各自弹份数表单，管理入口进管理表单，管理表单上的按钮进各自的输入框。
-///
-/// 这里是**动作分发**的唯一一处：加动作时编译器会提醒这里漏了一个。
-/// 两张表单共用它：管理表单上的动作不会出现在第一张表单上，但接线是同一条。
-/// （动作×文案/校验的那张表不在这里，在 `manageInputField`：一个是分发，一个是数据。）
-/// 回调可能在非主线程触发（DESIGN §14），所以这里不碰世界，只把工作交给 `request*`。
-void onButton(Player& player, Cell const& sign, ShopFormAction action) {
-    switch (action) {
-    case ShopFormAction::Buy:
-        requestBuyForm(player, sign);
-        return;
-    case ShopFormAction::Sell:
-        requestSellForm(player, sign);
-        return;
-    case ShopFormAction::Manage:
-        requestManageForm(player, sign);
-        return;
-    case ShopFormAction::ManageBuyPrice:
-    case ShopFormAction::ManageSellPrice:
-    case ShopFormAction::ManageAmount:
-        requestManageInputForm(player, sign, action);
-        return;
-    case ShopFormAction::ToggleClosed:
-        // 停业不需要输入框：直接走提交那一段（与三个输入框共用 `submitManageEdit` 的链）。
-        requestManageToggleClosed(player, sign);
-        return;
-    case ShopFormAction::ManageRefreshItemName:
-        // 与停业同构：没有输入框，直接把牌面第 4 行按箱子里的商品重写。
-        requestManageRefreshItemName(player, sign);
-        return;
-    }
-}
-
-/// 表单回调不能假设线程（DESIGN §14）：回调里**只读 XUID 与维度两个纯标量**（不读方块、不读容器、不发包），
-/// 真正要读世界或写牌时先切回服务端线程。
-///
-/// 与交易的 `onServerThread` 同一条口径：玩家下线、换了维度、配置不可用都直接放弃——
-/// 这时那块牌已经不在他眼前，弹表单或写牌都没有意义。换维度时会给玩家一句提示（发包在服务端线程）。
-void onSignServerThread(Player& player, std::function<void(Player&, ShopConfig const&)> task) {
-    std::string const xuid      = player.getXuid();
-    int const         dimension = player.getDimensionId();
-
-    ll::thread::ServerThreadExecutor::getDefault().execute([xuid, dimension, task = std::move(task)] {
-        auto& logger       = Shop::getInstance().getSelf().getLogger();
-        auto const& config = Shop::getInstance().config();
-        if (!config) {
-            logger.debug(ui::msg("shop.log.form.dropped_no_config", xuid));
-            return;
-        }
-        Player* resolved = onlinePlayer(xuid);
-        if (resolved == nullptr) {
-            logger.debug(ui::msg("shop.log.form.dropped_offline", xuid));
-            return;
-        }
-        if (resolved->getDimensionId() != dimension) {
-            // 与管理/交易两条链同一口径：写了也不生效（那块牌子不在他眼前），
-            // 但必须说一句——静默 `return` 会让玩家以为按钮坏了。
-            ui::send(*resolved, ui::Tone::Warning, "shop.trade.wrong_dimension");
-            return;
-        }
-        task(*resolved, *config);
-    });
-}
-
-/// 下拉框的回调结果读成下标；读不到就当「没选」（交给 `resolveRequestedUnits` 报错）。
-///
-/// **LeviLamina 回传的是选中项的文案，不是下标**：`Dropdown::parseResult` 里返回的是
-/// `mOptions[index]`（字符串）。旧版本/别处直接给下标的情况也一并接住，两种都认。
-int dropdownIndex(ll::form::CustomFormResult const& result, UnitsFormModel const& model) {
-    if (!result) {
-        return -1;
-    }
-    auto it = result->find(std::string{kUnitChoiceField});
-    if (it == result->end()) {
-        return -1;
-    }
-    if (auto const* index = std::get_if<uint64>(&it->second)) {
-        return static_cast<int>(*index);
-    }
-    if (auto const* index = std::get_if<double>(&it->second)) {
-        return static_cast<int>(*index);
-    }
-    if (auto const* text = std::get_if<std::string>(&it->second)) {
-        return choiceIndexForOption(model, *text);
-    }
-    return -1;
-}
-
-/// 输入框的回调结果读成文本。
-///
-/// 返回空 = **拿不到这个控件的值**（没这个字段，或者类型不是字符串），与「玩家留空」不是一回事：
-/// 空输入框是合法的「不做这一侧生意」，读不到却是表单出问题了，两者不能混成一个空串
-/// （DESIGN §10.1 的坑：把下拉当 `uint64` 读，恒为 -1）。
-std::optional<std::string> formInput(ll::form::CustomFormResult const& result, std::string_view field) {
-    if (!result) {
-        return std::nullopt;
-    }
-    auto it = result->find(std::string{field});
-    if (it == result->end()) {
-        return std::nullopt;
-    }
-    if (auto const* text = std::get_if<std::string>(&it->second)) {
-        return *text;
-    }
-    return std::nullopt;
-}
-
-/// 供应 `inputText` 的份数表单用：读不到就是空串（交给 `resolveRequestedUnits` 报「没填」）。
-std::string inputText(ll::form::CustomFormResult const& result) {
-    return formInput(result, kCustomUnitsField).value_or(std::string{});
-}
-
-/// 重新看一眼这块牌，得出「能不能管理」的结论。`message` 非空 = 给玩家一句话就此结束。
-///
-/// 每一次进管理表单、每一次提交都重新走这一遍：表单可能挂了一阵子，店可能已经换主、
-/// 箱子可能已经被拆。判据不重写：身份问 `canManageShop`（spec 的「判据注意」）。
 struct ManageTarget {
     std::optional<ShopSnapshot> shop;
     bool                        waxed = false;
@@ -460,44 +332,7 @@ void openManageInputForm(
     );
 }
 
-/// 把表单提交交给对应的方向。买卖两条路只差这一处，别为它各写一整张表单。
-void submit(Player& player, Cell const& sign, TradeDirection direction, TradeSubmission const& submission) {
-    if (direction == TradeDirection::Sell) {
-        submitSell(player, sign, submission);
-        return;
-    }
-    submitBuy(player, sign, submission);
-}
-
-/// 表单上显示的那个金额（买入是扣款、卖出是收入）。价格缺失时没有可对照的数。
-std::optional<std::int64_t> visibleTotal(ShopInfoData const& data, TradeDirection direction, int units) {
-    auto const price = unitPriceOf(data, direction);
-    if (!price) {
-        return std::nullopt;
-    }
-    return totalPrice(*price, units);
-}
-
 } // namespace
-
-void openShopForm(Player& viewer, Cell const& sign, ShopInfoData const& data, ShopFormRole role, bool canManage) {
-    auto const localeCode = viewer.getLocaleCode();
-    ll::form::SimpleForm form{
-        text::render(shopFormTitle(data), localeCode),
-        text::renderLines(shopFormContent(data), localeCode)
-    };
-
-    for (auto const& button : shopFormButtons(data, role, canManage)) {
-        // 按钮回调可能在非主线程触发：回调里不碰方块与容器。
-        // 买卖把工作交给 `requestBuyForm` / `requestSellForm`，管理入口交给 `requestManageForm`
-        // （两者都会先切回服务端线程）。
-        form.appendButton(text::render(button.label, localeCode), [action = button.action, sign](Player& player) {
-            onButton(player, sign, action);
-        });
-    }
-
-    form.sendTo(viewer);
-}
 
 void requestManageForm(Player& viewer, Cell const& sign) {
     // 管理表单要读牌面与容器（正文里的库存、余额），所以先切回服务端线程。
@@ -543,103 +378,6 @@ void requestManageRefreshItemName(Player& viewer, Cell const& sign) {
         ManageChange{&withRefreshedItemName, &refreshedItemNameMessage, ItemLineSource::ChestProduct},
         std::string{}
     );
-}
-
-void openTradeForm(Player& viewer, Cell const& sign, TradeDirection direction, ShopInfoData const& data, int maxUnits) {
-    auto const model = makeUnitsFormModel(maxUnits);
-
-    auto const localeCode = viewer.getLocaleCode();
-    ll::form::CustomForm form{text::render(shopFormTitle(data), localeCode)};
-    form.appendLabel(text::renderLines(unitsFormContent(direction, data, model), localeCode));
-    form.appendDropdown(
-        std::string{kUnitChoiceField},
-        text::render(text::keyed(
-            direction == TradeDirection::Buy ? "shop.form.units_field.buy" : "shop.form.units_field.sell",
-            ss::shop::Tone::Label
-        )),
-        unitsFormOptions(model, localeCode),
-        /*defaultVal=*/0
-    );
-    form.appendInput(
-        std::string{kCustomUnitsField},
-        text::render(
-            text::sequence({
-                text::keyed("shop.form.custom_units", ss::shop::Tone::Label),
-                text::keyed("shop.form.custom_units_hint", ss::shop::Tone::Muted),
-            }),
-            localeCode
-        ),
-        "1"
-    );
-
-    form.sendTo(viewer, [sign, model, data, direction](Player& player, ll::form::CustomFormResult const& result, auto) {
-        // 玩家选了「取消」：什么都不做，别发一条莫名其妙的提示。
-        if (!result) {
-            return;
-        }
-        auto const requested = resolveRequestedUnits(model, dropdownIndex(result, model), inputText(result));
-        if (!requested.units) {
-            // 同上：表单回调线程不确定，发包走服务端线程。
-            onSignServerThread(player, [error = requested.error](Player& who, ShopConfig const&) {
-                ui::send(who, ui::Tone::Failure, error);
-            });
-            return;
-        }
-        // 把「表单上看到的金额」与「共 N 个」一起交上去：两屏之间箱子里的货、店主改价或
-        // 改份量都会让它们过期，`buyUnits` / `sellUnits` 会先返回确认表单，
-        // 而不是按新价直接成交。
-        // 与份数表单上「共 N 个」共用 `itemsForUnits`：两屏写同一个数，且用 int64 算再夹到 int。
-        int const expectedItems = itemsForUnits(*requested.units, data.amountPerUnit);
-        submit(
-            player,
-            sign,
-            direction,
-            TradeSubmission{
-                *requested.units,
-                expectedItems,
-                visibleTotal(data, direction, *requested.units),
-                /*confirmed=*/false
-            }
-        );
-    });
-}
-
-void openTradeConfirmForm(
-    Player&            viewer,
-    Cell const&        sign,
-    TradeDirection     direction,
-    TradePlan const&   plan,
-    Text const&        content
-) {
-    auto const localeCode = viewer.getLocaleCode();
-    ll::form::SimpleForm form{
-        text::render(text::keyed("shop.form.confirm_title", ss::shop::Tone::Title), localeCode),
-        text::render(content, localeCode)
-    };
-
-    // 按钮文字不上色：按钮底有浅灰与深绿两种状态，固定颜色必在其一里失效。
-    auto const verb = text::render(text::keyed(
-        direction == TradeDirection::Buy ? "shop.form.confirm_buy" : "shop.form.confirm_sell",
-        ss::shop::Tone::Default,
-        {text::lit(std::to_string(plan.units))}
-    ), localeCode);
-    form.appendButton(verb, [sign, plan, direction](Player& player) {
-        // 已经看过真实份数与金额了：带着它们再确认一次，后续若又变就按实际成交并报告。
-        submit(
-            player,
-            sign,
-            direction,
-            TradeSubmission{
-                plan.units,
-                plan.items,
-                std::optional<std::int64_t>{plan.total},
-                /*confirmed=*/true
-            }
-        );
-    });
-    form.appendButton(text::render(text::keyed("shop.form.cancel", ss::shop::Tone::Default), localeCode), [](Player&) {});
-
-    form.sendTo(viewer);
 }
 
 } // namespace ss::shop
