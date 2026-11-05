@@ -1,12 +1,12 @@
-#include "core/economy/EconomyService.h"
+#include "core/economy/Service.h"
 
 #include "util/i18n/TextRender.h"
 
-#include "util/log/DebugLog.h"
+#include "util/log/Debug.h"
 
 #include "util/config/Config.h"
-#include "core/economy/LegacyMoneyEconomy.h"
-#include "core/economy/ScoreboardEconomy.h"
+#include "core/economy/LegacyMoney.h"
+#include "core/economy/ScoreboardBackend.h"
 #include "Shop.h"
 
 #include "ll/api/event/EventBus.h"
@@ -144,16 +144,16 @@ bool resolveProvider(ShopConfig const& config) {
     auto const probes = economy::probesFor(backend);
 
     // 1. LegacyMoney：模块探测不需要世界，`enable()` 之后随时能问。
-    std::shared_ptr<LegacyMoneyEconomy> legacy;
+    std::shared_ptr<LegacyMoney> legacy;
     if (probes.legacyMoney) {
         ProbeIssue issue = ProbeIssue::None;
-        legacy           = LegacyMoneyEconomy::create(issue);
+        legacy           = LegacyMoney::create(issue);
         candidates.legacyMoney = {legacy != nullptr, issue};
     }
 
     // 2. 记分板：只有配置写着 `scoreboard` 才碰它（没有降级链了，不再需要看别的后端脸色）。
     //    这里才需要世界（目标在 `Level` 的记分板上），也是唯一会建目标的地方。
-    std::shared_ptr<ScoreboardEconomy> scoreboard;
+    std::shared_ptr<ScoreboardBackend> scoreboard;
     if (probes.scoreboard) {
         auto const level = ll::service::bedrock::getLevel();
         if (!level) {
@@ -164,7 +164,7 @@ bool resolveProvider(ShopConfig const& config) {
             return false;
         }
         ProbeIssue issue = ProbeIssue::None;
-        scoreboard       = ScoreboardEconomy::create(
+        scoreboard       = ScoreboardBackend::create(
             config.economy.scoreboardObjective,
             config.economy.createObjectiveIfMissing,
             issue
@@ -172,7 +172,7 @@ bool resolveProvider(ShopConfig const& config) {
         candidates.scoreboard = {scoreboard != nullptr, issue};
     }
 
-    // 3. 选谁由纯函数决定（DESIGN §8.4 的候选顺序只在 `shop/Economy.cpp` 写一次）。
+    // 3. 选谁由纯函数决定（DESIGN §8.4 的候选顺序只在 `core/economy/Provider.cpp` 写一次）。
     BackendSelection const selection = economy::selectBackend(backend, candidates);
     Text const             text      = economy::backendSelectionText(backend, selection);
     gSelectionText                   = text::render(text);

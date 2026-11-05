@@ -4,10 +4,10 @@
 
 #include "event/ContainerProtectionListener.h"
 #include "event/ContentProtectionHooks.h"
-#include "util/log/DebugLog.h"
+#include "util/log/Debug.h"
 #include "event/DestructionProtectionHooks.h"
-#include "core/economy/EconomyService.h"
-#include "util/log/LogFile.h"
+#include "core/economy/Service.h"
+#include "util/log/Files.h"
 #include "event/SignEditListener.h"
 #include "event/SignInteractListener.h"
 #include "core/trade/TradeService.h"

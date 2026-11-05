@@ -27,7 +27,7 @@ struct SignEditResult {
     Text            message;        ///< Rejected 时发给玩家的原因
     std::string     normalizedText; ///< Normalized 时写回 `event.text()`
     /// Normalized 时的归属交接；由事件层在 After 事件里交给 `recordShopOwner`。
-    /// 结构体本身在 `shop/SignProtection.h`（它是纯数据 + 一个判据，可以单测）。
+    /// 结构体本身在 `core/sign/SignProtection.h`（它是纯数据 + 一个判据，可以单测）。
     SignOwnerHandoff ownerHandoff;
 };
 

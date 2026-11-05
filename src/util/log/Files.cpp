@@ -1,10 +1,10 @@
-#include "util/log/LogFile.h"
+#include "util/log/Files.h"
 
 #include "util/i18n/TextRender.h"
 
 #include "Shop.h"
-#include "util/time/WallClock.h"
-#include "util/log/LogRotation.h"
+#include "util/time/Time.h"
+#include "util/log/Rotation.h"
 
 #include "ll/api/io/Logger.h"
 

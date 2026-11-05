@@ -1,4 +1,4 @@
-#include "util/log/DebugLog.h"
+#include "util/log/Debug.h"
 
 #include "Shop.h"
 

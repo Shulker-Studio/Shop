@@ -1,8 +1,8 @@
-#include "util/log/TransactionLog.h"
+#include "util/log/Transaction.h"
 
-#include "util/log/LogFile.h"
+#include "util/log/Files.h"
 #include "Shop.h"
-#include "util/log/LogRotation.h"
+#include "util/log/Rotation.h"
 
 #include <string>
 #include <vector>

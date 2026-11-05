@@ -73,7 +73,7 @@ std::optional<int> parseAmountLine(std::string_view line, int maxAmount);
 
 /// 第 2 行（一份的件数）不合法时给玩家的话。
 ///
-/// 手写编辑（`src/mod/ShopService.cpp` 的 `messageFor`）与管理表单改件数共用这一句：
+/// 手写编辑（`core/shop/ShopService.cpp` 的 `messageFor`）与管理表单改件数共用这一句：
 /// 上限来自 `maxShopAmount`，改配置时两处一起变。
 Text amountOutOfRangeMessage(int maxShopAmount);
 

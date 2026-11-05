@@ -2,7 +2,7 @@
 
 #include "util/config/Config.h"
 #include "core/shop/ShopOwner.h"
-#include "core/sign/ContainerFinder.h"
+#include "core/sign/SignGeometry.h"
 #include "core/shop/ItemBanList.h"
 #include "core/shop/ShopInfo.h" // BoxCell：盒内内容要在表单上显示
 
@@ -39,7 +39,7 @@ enum class ContainerError {
     BannedItem,
     /// 商品里**有收纳袋**（它自己就是，或者装在潜影盒里）：收纳袋的内容存在服务端的动态容器
     /// 注册表里，读不出来，于是既不能核对里面有什么，也没法把内容算进商品身份 —— 所以不许当商品
-    /// （`shop/ProductRules.h` 的 `isBundleItemId` + `productHoldsBundle` 的递归）。
+    /// （`core/shop/BundleRules.h` 的 `isBundleItemId` + `productHoldsBundle` 的递归）。
     /// 这一条**不分店的性质**：它是能力限制（读不到内容），不是服主的政策，管理员店也一样。
     BundleProduct,
     /// 这个容器已经被另一块合法商店牌绑定了。
@@ -244,7 +244,7 @@ shopSignsWithAttachedCell(BlockSource& region, BlockPos const& attachedCell, Sho
 ///
 /// 投掷器靠它决定把物品喷向哪一格（DESIGN §6.2 H2d）：`pushOutItems` 只拿到 `BlockSource`，
 /// 朝向只能从方块状态读。读不到返回空，调用方放行——脏状态不该让一次搬运被误拦。
-/// 方向编号换成坐标这一步在纯逻辑层（`shop/ContentProtection.h` 的 `cellInDirection`）。
+/// 方向编号换成坐标这一步在纯逻辑层（`core/container/ContentProtection.h` 的 `cellInDirection`）。
 std::optional<int> facingDirectionAt(BlockSource& region, BlockPos const& pos);
 
 /// 这一格是不是被商店占用的方块：商店牌本身，或绑着商店牌的容器（DESIGN §9.3）。

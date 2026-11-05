@@ -1,6 +1,6 @@
 #pragma once
 
-#include "core/economy/Economy.h"
+#include "core/economy/Provider.h"
 
 #include <memory>
 #include <string>
@@ -21,7 +21,7 @@ namespace ss::shop {
 ///
 /// 分值内部是 `int32`，每次写入前都过 `economy::toScoreValue`，超出范围直接拒绝，
 /// 不静默截断（DESIGN §8.2）。
-class ScoreboardEconomy final : public economy::EconomyProvider {
+class ScoreboardBackend final : public economy::EconomyProvider {
 public:
     /// 目标不存在时按配置决定建不建（DESIGN §8.4 / §15 的 `createObjectiveIfMissing`）。
     ///
@@ -33,7 +33,7 @@ public:
     /// @param issue 拿不到时写明原因：没开自动创建是 `ObjectiveMissing`，
     ///        开了但没建成（判据缺失 / 引擎拒绝）是 `ObjectiveCreateFailed`。
     /// @return 空指针表示这个后端不可用，调用方降级到下一个候选。
-    static std::shared_ptr<ScoreboardEconomy>
+    static std::shared_ptr<ScoreboardBackend>
     create(std::string objectiveName, bool createIfMissing, economy::ProbeIssue& issue);
 
     std::string_view name() const override { return "scoreboard"; }
@@ -56,7 +56,7 @@ public:
     bool reduce(economy::Account const& account, std::int64_t amount, bool allowNegative = false) override;
 
 private:
-    explicit ScoreboardEconomy(std::string objectiveName);
+    explicit ScoreboardBackend(std::string objectiveName);
 
     /// 写入一个已经过范围检查的分值。
     bool writeScore(economy::Account const& account, int value) const;

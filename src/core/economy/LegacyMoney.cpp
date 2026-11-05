@@ -1,4 +1,4 @@
-#include "core/economy/LegacyMoneyEconomy.h"
+#include "core/economy/LegacyMoney.h"
 
 #include "util/i18n/Text.h"
 
@@ -35,9 +35,9 @@ Fn resolveExport(HMODULE module, char const* name) {
 
 } // namespace
 
-LegacyMoneyEconomy::LegacyMoneyEconomy(Exports exports) : mExports(exports) {}
+LegacyMoney::LegacyMoney(Exports exports) : mExports(exports) {}
 
-std::shared_ptr<LegacyMoneyEconomy> LegacyMoneyEconomy::create(economy::ProbeIssue& issue) {
+std::shared_ptr<LegacyMoney> LegacyMoney::create(economy::ProbeIssue& issue) {
     // 顺序就是 DESIGN §8.4：先看模块在不在，再看导出齐不齐。
     HMODULE const module = GetModuleHandleW(kModuleName);
     if (module == nullptr) {
@@ -62,10 +62,10 @@ std::shared_ptr<LegacyMoneyEconomy> LegacyMoneyEconomy::create(economy::ProbeIss
 
     issue = economy::ProbeIssue::None;
     // 构造函数私有，所以用不了 `std::make_shared`（故意的：探测成功才允许有实例）。
-    return std::shared_ptr<LegacyMoneyEconomy>{new LegacyMoneyEconomy(exports)};
+    return std::shared_ptr<LegacyMoney>{new LegacyMoney(exports)};
 }
 
-bool LegacyMoneyEconomy::modulePresent() const {
+bool LegacyMoney::modulePresent() const {
     if (GetModuleHandleW(kModuleName) != nullptr) {
         return true;
     }
@@ -77,7 +77,7 @@ bool LegacyMoneyEconomy::modulePresent() const {
     return false;
 }
 
-std::optional<std::int64_t> LegacyMoneyEconomy::get(economy::Account const& account) const {
+std::optional<std::int64_t> LegacyMoney::get(economy::Account const& account) const {
     if (account.empty() || !modulePresent()) {
         return std::nullopt;
     }
@@ -90,14 +90,14 @@ std::optional<std::int64_t> LegacyMoneyEconomy::get(economy::Account const& acco
     return static_cast<std::int64_t>(money);
 }
 
-bool LegacyMoneyEconomy::set(economy::Account const& account, std::int64_t amount) {
+bool LegacyMoney::set(economy::Account const& account, std::int64_t amount) {
     if (account.empty() || !modulePresent()) {
         return false;
     }
     return mExports.set(account, amount);
 }
 
-bool LegacyMoneyEconomy::add(economy::Account const& account, std::int64_t amount) {
+bool LegacyMoney::add(economy::Account const& account, std::int64_t amount) {
     if (account.empty() || amount <= 0 || !modulePresent()) {
         return false;
     }
@@ -109,7 +109,7 @@ bool LegacyMoneyEconomy::add(economy::Account const& account, std::int64_t amoun
     return mExports.add(account, amount);
 }
 
-void LegacyMoneyEconomy::warnNegativeOnce() const {
+void LegacyMoney::warnNegativeOnce() const {
     if (mNegativeWarned) {
         return;
     }
@@ -119,7 +119,7 @@ void LegacyMoneyEconomy::warnNegativeOnce() const {
     );
 }
 
-bool LegacyMoneyEconomy::reduce(economy::Account const& account, std::int64_t amount, bool allowNegative) {
+bool LegacyMoney::reduce(economy::Account const& account, std::int64_t amount, bool allowNegative) {
     if (account.empty() || amount <= 0 || !modulePresent()) {
         return false;
     }
@@ -130,7 +130,7 @@ bool LegacyMoneyEconomy::reduce(economy::Account const& account, std::int64_t am
     return mExports.reduce(account, amount);
 }
 
-economy::TransferResult LegacyMoneyEconomy::transfer(
+economy::TransferResult LegacyMoney::transfer(
     economy::Account const& from,
     economy::Account const& to,
     std::int64_t            amount,

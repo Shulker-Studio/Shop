@@ -1,4 +1,4 @@
-#include "util/log/LogRotation.h"
+#include "util/log/Rotation.h"
 
 #include <chrono>
 #include <cstddef>

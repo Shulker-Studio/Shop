@@ -1,6 +1,6 @@
-#include "core/economy/ScoreboardEconomy.h"
+#include "core/economy/ScoreboardBackend.h"
 
-#include "core/economy/EconomyService.h"
+#include "core/economy/Service.h"
 
 #include "ll/api/service/Bedrock.h"
 #include "ll/api/service/PlayerInfo.h"
@@ -105,10 +105,10 @@ std::optional<ScoreTarget> resolveTarget(std::string const& objectiveName, econo
 
 } // namespace
 
-ScoreboardEconomy::ScoreboardEconomy(std::string objectiveName) : mObjectiveName(std::move(objectiveName)) {}
+ScoreboardBackend::ScoreboardBackend(std::string objectiveName) : mObjectiveName(std::move(objectiveName)) {}
 
-std::shared_ptr<ScoreboardEconomy>
-ScoreboardEconomy::create(std::string objectiveName, bool createIfMissing, economy::ProbeIssue& issue) {
+std::shared_ptr<ScoreboardBackend>
+ScoreboardBackend::create(std::string objectiveName, bool createIfMissing, economy::ProbeIssue& issue) {
     issue = economy::ProbeIssue::ObjectiveMissing;
     auto level = ll::service::bedrock::getLevel();
     if (!level) {
@@ -136,10 +136,10 @@ ScoreboardEconomy::create(std::string objectiveName, bool createIfMissing, econo
             return nullptr;
         }
     }
-    return std::shared_ptr<ScoreboardEconomy>{new ScoreboardEconomy(std::move(objectiveName))};
+    return std::shared_ptr<ScoreboardBackend>{new ScoreboardBackend(std::move(objectiveName))};
 }
 
-std::optional<std::int64_t> ScoreboardEconomy::get(economy::Account const& account) const {
+std::optional<std::int64_t> ScoreboardBackend::get(economy::Account const& account) const {
     auto const target = resolveTarget(mObjectiveName, account);
     if (!target) {
         // 账户不可记账（不在线、目标没了、没有记分板身份）：返回空，不能报成 0 元。
@@ -150,7 +150,7 @@ std::optional<std::int64_t> ScoreboardEconomy::get(economy::Account const& accou
     return score.mValid ? score.mValue : 0;
 }
 
-bool ScoreboardEconomy::writeScore(economy::Account const& account, int value) const {
+bool ScoreboardBackend::writeScore(economy::Account const& account, int value) const {
     auto const target = resolveTarget(mObjectiveName, account);
     if (!target) {
         return false;
@@ -162,7 +162,7 @@ bool ScoreboardEconomy::writeScore(economy::Account const& account, int value) c
     return result == ScoreboardOperationResult::Success;
 }
 
-bool ScoreboardEconomy::set(economy::Account const& account, std::int64_t amount) {
+bool ScoreboardBackend::set(economy::Account const& account, std::int64_t amount) {
     auto const value = economy::toScoreValue(amount);
     if (!value) {
         return false; // 超出 int32：拒绝，不截断（DESIGN §8.2）
@@ -170,7 +170,7 @@ bool ScoreboardEconomy::set(economy::Account const& account, std::int64_t amount
     return writeScore(account, *value);
 }
 
-bool ScoreboardEconomy::add(economy::Account const& account, std::int64_t amount) {
+bool ScoreboardBackend::add(economy::Account const& account, std::int64_t amount) {
     if (amount <= 0) {
         return false;
     }
@@ -185,7 +185,7 @@ bool ScoreboardEconomy::add(economy::Account const& account, std::int64_t amount
     return set(account, *current + amount);
 }
 
-bool ScoreboardEconomy::reduce(economy::Account const& account, std::int64_t amount, bool allowNegative) {
+bool ScoreboardBackend::reduce(economy::Account const& account, std::int64_t amount, bool allowNegative) {
     if (amount <= 0) {
         return false;
     }

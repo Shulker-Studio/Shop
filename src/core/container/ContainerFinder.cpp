@@ -1,8 +1,8 @@
-#include "core/container/ContainerFinderBds.h"
+#include "core/container/ContainerFinder.h"
 
 #include "core/container/SampleSlot.h"
 
-#include "util/log/DebugLog.h"
+#include "util/log/Debug.h"
 #include "Shop.h"
 #include "core/shop/ShopOwner.h"
 
@@ -20,7 +20,7 @@
 #include "mc/world/level/block/states/BlockState.h"
 #include "mc/world/level/block/states/BlockStateInstance.h"
 #include "core/container/DestructionProtection.h"
-#include "core/shop/ProductRules.h"
+#include "core/shop/BundleRules.h"
 #include "core/sign/ShopSign.h"
 
 #include <algorithm>
@@ -140,7 +140,7 @@ bool isAllowedType(std::string const& typeName, std::vector<std::string> const& 
 /// 商品模板 = 商店箱里（双箱合并）第一个非空槽位的物品（附着那一半优先，DESIGN §5.3）。
 ///
 /// 管理员店管这一格叫**样品槽**（票 03）。「第一个非空」这条规则本身在纯逻辑层
-/// （`shop/SampleSlot.h` 的 `sampleSlotIndex`），这里只负责回答「第 i 格空不空」——
+/// （`core/container/SampleSlot.h` 的 `sampleSlotIndex`），这里只负责回答「第 i 格空不空」——
 /// 于是「0 号空、1 号有钻石」这种情形能在单测里直接断言，不必造容器。
 ///
 /// 返回的是**合并顺序里的下标**而不是裸指针：样品槽永不出售，计数与扣货都要知道「第几格」，
@@ -158,7 +158,7 @@ CompoundTag const* cellCompound(Tag const& cell) {
 }
 
 /// 用户数据里的 `Items` 列表：潜影盒的内容在这里（收纳袋不在这里——它的内容在服务端的
-/// 动态容器注册表里，只剩一个引用，所以它整类不许当商品，见 `shop/ProductRules.h`）。
+/// 动态容器注册表里，只剩一个引用，所以它整类不许当商品，见 `core/shop/BundleRules.h`）。
 ///
 /// 只认 `Items` 这个名字（顶层，或 `BlockEntityTag` 里的一层），**不猜别的名字**：猜错会把
 /// 附魔书、旗帜图案这类“本来就有 tag 的物品”当成盒子。读不出来时返回空，于是上层退到
@@ -750,7 +750,7 @@ inspectAttachedContainer(BlockSource& region, BlockPos const& signPos, Container
     result.boxContents = productBoxContents(*product->stack);
 
     // 收纳袋永远不能当商品，**装在潜影盒里也一样**：内容在服务端的动态容器注册表里，
-    // 读不出来（`ProductRules.h`），于是没法核对里面有什么、也没法把内容算进身份。
+    // 读不出来（`BundleRules.h`），于是没法核对里面有什么、也没法把内容算进身份。
     // 不分店的性质，所以排在禁售（只管普通店）**前面**——它是能力限制，不是政策。
     if (productHoldsBundle(*product->stack)) {
         result.error = ContainerError::BundleProduct;

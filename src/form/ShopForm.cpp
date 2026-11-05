@@ -3,8 +3,8 @@
 #include "util/i18n/Text.h"
 
 #include "event/BlockResync.h"
-#include "core/container/ContainerFinderBds.h"
-#include "core/economy/EconomyService.h"
+#include "core/container/ContainerFinder.h"
+#include "core/economy/Service.h"
 #include "Shop.h"
 #include "core/shop/ShopOwner.h"
 #include "core/shop/ShopService.h"

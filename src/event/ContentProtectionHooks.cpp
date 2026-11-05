@@ -2,8 +2,8 @@
 
 #include "util/i18n/TextRender.h"
 
-#include "core/container/ContainerFinderBds.h"
-#include "util/log/DebugLog.h"
+#include "core/container/ContainerFinder.h"
+#include "util/log/Debug.h"
 #include "event/HookSlots.h"
 #include "Shop.h"
 #include "core/container/ContentProtection.h"
@@ -279,7 +279,7 @@ LL_TYPE_INSTANCE_HOOK(
 // 注册 / 反注册
 // ---------------------------------------------------------------------------
 
-/// 这一条 hook 的名单。表结构与「挂上 / 逆序解开」的实现在 `mod/HookSlots.h`，
+/// 这一条 hook 的名单。表结构与「挂上 / 逆序解开」的实现在 `event/HookSlots.h`，
 /// 与 08 的破坏防护共用一份。
 HookSlot gContentSlots[] = {
     {"Hopper::_tryPullInItemsFromAboveContainer",

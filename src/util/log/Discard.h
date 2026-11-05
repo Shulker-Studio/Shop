@@ -1,6 +1,6 @@
 #pragma once
 
-#include "core/sign/ContainerFinder.h"
+#include "core/sign/SignGeometry.h"
 #include "core/trade/DiscardRecord.h"
 
 #include "mc/world/item/ItemStack.h"

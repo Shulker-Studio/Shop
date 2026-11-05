@@ -1,16 +1,16 @@
 #include "core/trade/TradeService.h"
 #include "util/i18n/TextRender.h"
 
-#include "util/time/Clock.h"
-#include "core/container/ContainerFinderBds.h"
-#include "util/log/DebugLog.h"
-#include "util/log/DiscardLog.h"
-#include "core/economy/EconomyService.h"
+#include "util/time/Time.h"
+#include "core/container/ContainerFinder.h"
+#include "util/log/Debug.h"
+#include "util/log/Discard.h"
+#include "core/economy/Service.h"
 #include "Shop.h"
 #include "form/ShopForm.h"
 #include "core/shop/ShopService.h"
-#include "util/log/TransactionLog.h"
-#include "util/time/WallClock.h"
+#include "util/log/Transaction.h"
+#include "util/time/Time.h"
 #include "core/shop/ShopInfo.h"
 #include "core/container/SampleSlot.h"
 #include "core/trade/TradeGate.h"
@@ -700,7 +700,7 @@ PreparedTrade prepareCommon(
         };
     }
     // 收纳袋一律不能当商品，装在潜影盒里也一样：内容在服务端的动态容器注册表里，
-    // 读不出来（`ProductRules.h` / `productHoldsBundle`）。
+    // 读不出来（`BundleRules.h` / `productHoldsBundle`）。
     // 与禁售不同，这一条**不分店的性质**：读不到内容是能力限制，管理员店也一样。
     if (productHoldsBundle(*product->stack)) {
         return {

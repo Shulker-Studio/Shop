@@ -1,6 +1,6 @@
 #pragma once
 
-#include "core/economy/Economy.h"
+#include "core/economy/Provider.h"
 
 #include <memory>
 #include <string>
@@ -14,18 +14,18 @@ namespace ss::shop {
 /// 连加载都会失败——可选后端就没了。这里只用 `GetModuleHandleW` + `GetProcAddress`
 /// 拿 C 导出（x64 下是未修饰名，如 `LLMoney_Get`），函数指针的定义只在 `.cpp` 里。
 ///
-/// 接口对照（`src/shop/Economy.h`）：
+/// 接口对照（`core/economy/Provider.h`）：
 /// * 键就是 XUID，与 LegacyMoney 的存储键一致，不做 UUID 反查（DESIGN §8.7 第 1 条）；
 /// * `transfer` 只走一次 `LLMoney_Trans`（SQLite 事务，天然原子，且它自己会应用 `pay_tax`），
 ///   绝不自己拼 Reduce + Add（会漏税或重复扣税，见 §8.7 第 2 条）；
 /// * `to` 为空 = 付给系统（销毁）：这条正是商店税的落点（§8.9）。
-class LegacyMoneyEconomy final : public economy::EconomyProvider {
+class LegacyMoney final : public economy::EconomyProvider {
 public:
     /// 探测：模块在进程里 + 五个导出都拿得到。
     ///
     /// @param issue 拿不到时写明原因（`ModuleMissing` / `ExportsMissing`），供降级日志使用。
     /// @return 空指针表示不可用（不抛异常：本工程不开异常）。
-    static std::shared_ptr<LegacyMoneyEconomy> create(economy::ProbeIssue& issue);
+    static std::shared_ptr<LegacyMoney> create(economy::ProbeIssue& issue);
 
     std::string_view name() const override { return "legacy_money"; }
     /// LegacyMoney 按 XUID 记账，与玩家在不在线无关（DESIGN §8.5）。
@@ -76,7 +76,7 @@ private:
         TransFn  trans  = nullptr;
     };
 
-    explicit LegacyMoneyEconomy(Exports exports);
+    explicit LegacyMoney(Exports exports);
 
     /// `allowNegative` 不支持：只在第一次被要求时记一条 debug（DESIGN §8.7 第 5 条）。
     void warnNegativeOnce() const;

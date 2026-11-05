@@ -1,7 +1,7 @@
 #include "core/trade/TradePlan.h"
 #include "util/i18n/Text.h"
 
-#include "core/economy/Economy.h"
+#include "core/economy/Provider.h"
 #include "core/shop/ShopInfo.h"
 #include "core/trade/TradePricing.h"
 

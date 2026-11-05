@@ -1,6 +1,6 @@
 #include "event/DestructionProtectionHooks.h"
 
-#include "core/container/ContainerFinderBds.h"
+#include "core/container/ContainerFinder.h"
 #include "event/HookSlots.h"
 #include "Shop.h"
 #include "core/container/DestructionProtection.h"
@@ -184,7 +184,7 @@ LL_TYPE_INSTANCE_HOOK(
 }
 
 /// 这一条 hook 的注册/反注册与它的状态；接线方式与 09 的内容防偷完全相同，
-/// 所以表结构与「挂上 / 逆序解开」的实现在 `mod/HookSlots.h`，这里只列名单。
+/// 所以表结构与「挂上 / 逆序解开」的实现在 `event/HookSlots.h`，这里只列名单。
 HookSlot gDestructionSlots[] = {
     {"BlockEventCoordinator::sendEvent",
      [] { return ExplosionStartedHook::hook(); },

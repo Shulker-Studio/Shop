@@ -1,6 +1,6 @@
 #pragma once
 
-#include "core/economy/Economy.h"
+#include "core/economy/Provider.h"
 #include "core/sign/ShopSign.h"
 
 #include <filesystem>

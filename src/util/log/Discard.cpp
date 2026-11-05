@@ -1,8 +1,8 @@
-#include "util/log/DiscardLog.h"
+#include "util/log/Discard.h"
 
-#include "util/log/LogFile.h"
+#include "util/log/Files.h"
 #include "Shop.h"
-#include "util/log/LogRotation.h"
+#include "util/log/Rotation.h"
 
 #include "mc/deps/nbt/CompoundTag.h"
 #include "mc/deps/nbt/Tag.h"

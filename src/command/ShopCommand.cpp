@@ -1,9 +1,9 @@
 #include "command/ShopCommand.h"
 
-#include "util/log/DebugLog.h"
-#include "core/economy/EconomyService.h"
+#include "util/log/Debug.h"
+#include "core/economy/Service.h"
 #include "event/HookSlots.h"
-#include "util/log/LogFile.h"
+#include "util/log/Files.h"
 #include "Shop.h"
 #include "util/i18n/TextRender.h"
 #include "core/trade/TradeService.h"
