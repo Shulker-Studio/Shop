@@ -1,8 +1,8 @@
 #include "form/UnitsForm.h"
-#include "util/i18n/Text.h"
-
-#include "util/i18n/Text.h"
+#include "core/shop/ShopInfoData.h"
 #include "core/trade/TradePricing.h"
+#include "util/i18n/Reason.h"
+#include "util/i18n/Text.h"
 
 #include <algorithm>
 #include <array>

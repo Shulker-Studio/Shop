@@ -4,7 +4,7 @@
 #include "core/shop/SignOwner.h"
 #include "core/sign/SignGeometry.h"
 #include "core/shop/ItemBanList.h"
-#include "core/shop/ShopInfo.h" // BoxCell：盒内内容要在表单上显示
+#include "core/shop/ShopInfoData.h" // BoxCell：盒内内容要在表单上显示
 
 #include <cstdint>
 #include <optional>

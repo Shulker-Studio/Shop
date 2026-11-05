@@ -1,6 +1,7 @@
 #pragma once
 
-#include "core/shop/ShopInfo.h"
+#include "core/shop/ShopInfoData.h"
+#include "form/FormModel.h"
 #include "core/sign/ShopSign.h"
 
 #include <optional>

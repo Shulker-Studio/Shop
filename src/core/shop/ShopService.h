@@ -1,7 +1,8 @@
 #pragma once
 
 #include "util/config/Config.h"
-#include "core/shop/ShopInfo.h"
+#include "core/shop/ShopInfoData.h"
+#include "core/shop/ShopFormRole.h"
 #include "core/sign/ShopSign.h"
 #include "core/sign/SignProtection.h"
 

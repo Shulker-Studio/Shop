@@ -2,7 +2,8 @@
 #include "util/i18n/Text.h"
 
 #include "core/economy/Provider.h"
-#include "core/shop/ShopInfo.h"
+#include "core/trade/UnitCount.h"
+#include "util/i18n/Reason.h"
 #include "core/trade/TradePricing.h"
 
 #include <algorithm>

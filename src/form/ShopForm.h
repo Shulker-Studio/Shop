@@ -1,7 +1,9 @@
 #pragma once
 
 #include "core/sign/SignGeometry.h"
-#include "core/shop/ShopInfo.h"
+#include "core/shop/ShopInfoData.h"
+#include "core/shop/ShopFormRole.h"
+#include "form/FormModel.h"
 #include "core/trade/TradePlan.h"
 
 #include <string>

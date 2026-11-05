@@ -1,6 +1,6 @@
 #pragma once
 
-#include "core/shop/ShopInfo.h"
+#include "core/shop/ShopInfoData.h"
 #include "core/trade/TradePlan.h"
 
 #include <cstdint>
