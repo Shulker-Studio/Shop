@@ -7,7 +7,7 @@
 #include "util/log/Debug.h"
 #include "Shop.h"
 #include "form/ShopForm.h"
-#include "core/shop/ShopService.h"
+#include "core/shop/ShopInspector.h"
 #include "core/sign/SignProtection.h"
 #include "core/trade/ClickCooldown.h"
 

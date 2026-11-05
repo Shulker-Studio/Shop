@@ -8,7 +8,7 @@
 #include "core/economy/Service.h"
 #include "Shop.h"
 #include "core/shop/SignOwner.h"
-#include "core/shop/ShopService.h"
+#include "core/shop/ShopInspector.h"
 #include "core/trade/TradeService.h"
 #include "form/ManageForm.h"
 #include "core/sign/SignProtection.h"

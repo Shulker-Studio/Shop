@@ -5,7 +5,7 @@
 #include "util/log/Debug.h"
 #include "Shop.h"
 #include "core/shop/SignOwner.h"
-#include "core/shop/ShopService.h"
+#include "core/sign/SignEditPlan.h"
 
 #include "ila/event/world/actor/player/PlayerEditSignEvent.h"
 #include "ll/api/event/EventBus.h"
