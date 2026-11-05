@@ -5,7 +5,8 @@
 #include "event/HookSlots.h"
 #include "util/log/Files.h"
 #include "Shop.h"
-#include "util/i18n/TextRender.h"
+#include "util/i18n/Locale.h"
+#include "util/i18n/Message.h"
 #include "core/trade/TradeService.h"
 
 #include "ll/api/command/CommandHandle.h"

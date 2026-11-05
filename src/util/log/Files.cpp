@@ -1,6 +1,7 @@
 #include "util/log/Files.h"
 
-#include "util/i18n/TextRender.h"
+#include "util/i18n/Locale.h"
+#include "util/i18n/Message.h"
 
 #include "Shop.h"
 #include "util/time/Time.h"

@@ -1,5 +1,6 @@
 #include "event/ContainerProtectionListener.h"
-#include "util/i18n/TextRender.h"
+#include "util/i18n/Locale.h"
+#include "util/i18n/Message.h"
 
 #include "event/BlockResync.h"
 #include "core/container/ContainerFinder.h"

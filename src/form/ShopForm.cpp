@@ -1,6 +1,7 @@
 #include "form/ShopForm.h"
 #include "util/i18n/Reason.h"
-#include "util/i18n/TextRender.h"
+#include "util/i18n/Locale.h"
+#include "util/i18n/Message.h"
 #include "util/i18n/Text.h"
 
 #include "event/BlockResync.h"

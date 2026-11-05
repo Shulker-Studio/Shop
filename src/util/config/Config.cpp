@@ -1,6 +1,7 @@
 #include "util/config/Config.h"
 
-#include "util/i18n/TextRender.h"
+#include "util/i18n/Locale.h"
+#include "util/i18n/Message.h"
 #include "ll/api/Config.h"
 #include "ll/api/io/FileUtils.h"
 #include "ll/api/io/Logger.h"

@@ -1,6 +1,7 @@
 #include "event/ContentProtectionHooks.h"
 
-#include "util/i18n/TextRender.h"
+#include "util/i18n/Locale.h"
+#include "util/i18n/Message.h"
 
 #include "core/container/ContainerFinder.h"
 #include "util/log/Debug.h"

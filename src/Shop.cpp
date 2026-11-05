@@ -1,5 +1,6 @@
 #include "Shop.h"
-#include "util/i18n/TextRender.h"
+#include "util/i18n/Locale.h"
+#include "util/i18n/Message.h"
 #include "command/ShopCommand.h"
 
 #include "event/ContainerProtectionListener.h"
