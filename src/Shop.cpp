@@ -2,6 +2,7 @@
 #include "util/i18n/Locale.h"
 #include "util/i18n/Message.h"
 #include "command/ShopCommand.h"
+#include "command/TestCommand.h"
 
 #include "event/ContainerProtectionListener.h"
 #include "event/ContentProtectionHooks.h"
@@ -122,6 +123,7 @@ bool Shop::enable() {
     registerContentProtectionHooks();
     // 命令只服务观测：注册失败不影响模组，不影响上面的任何一条接线。
     registerShopCommand();
+    registerTestCommand();
     return true;
 }
 
