@@ -226,7 +226,13 @@ void onDestroyBlock(DestroyBlockEvent& event) {
         .mTickSchedulingEnabled = false,
     };
     for (auto const& sign : subject->boundSigns) {
-        player.getLevel().destroyBlock(region, toBlockPos(sign.sign.pos), /*dropResources=*/true, changeSource);
+        player.getLevel().destroyBlock(
+            region,
+            toBlockPos(sign.sign.pos),
+            /*dropResources=*/true,
+            changeSource,
+            /*destroySound=*/BlockDestroySound::Play
+        );
     }
 }
 

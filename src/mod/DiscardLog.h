@@ -27,7 +27,7 @@ std::vector<DiscardRecord> describeDiscardedItems(
     std::vector<ItemStack> const& stacks
 );
 
-/// 追加写到 `plugins/Shop/logs/discarded-YYYY-MM-DD.jsonl`。
+/// 追加写到 `mods/Shop/logs/discarded-YYYY-MM-DD.jsonl`。
 ///
 /// 失败只 `warn`：走到这里交易**已经成交**，留档写不进去也不能把玩家那笔生意判成失败
 /// （spec D5 / 票 02）。同一批记录共用同一个 `ts`，所以文件名取第一条的日期；

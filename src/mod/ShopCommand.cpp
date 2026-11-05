@@ -127,8 +127,8 @@ void appendHookLines(std::vector<Text>& lines, Text title, std::span<HookSlot co
 
 /// 显示用路径：把 `\` 换成 `/`。
 ///
-/// `getPluginDir()` 给的是 `./plugins/Shop`（正斜杠），`/ "logs"` 拼出来的尾部却是平台
-/// 分隔符，于是同一条路径里两种斜杠混着出现（`./plugins/Shop\logs`），看着像坏了。
+/// `getPluginDir()` 给的是 `./mods/Shop`（正斜杠），`/ "logs"` 拼出来的尾部却是平台
+/// 分隔符，于是同一条路径里两种斜杠混着出现（`./mods/Shop\logs`），看着像坏了。
 /// 正斜杠在 Windows 的资源管理器、`cd`、`ls` 里都认。
 std::string displayPath(std::filesystem::path const& path) {
     auto text = path.string();

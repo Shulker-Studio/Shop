@@ -4,7 +4,7 @@
 
 namespace ss::shop {
 
-/// 追加写一条成交流水到 `plugins/Shop/logs/transactions-YYYY-MM-DD.jsonl`（spec D1）。
+/// 追加写一条成交流水到 `mods/Shop/logs/transactions-YYYY-MM-DD.jsonl`（spec D1）。
 ///
 /// 只写**终态**，而且「哪种终态值得记」由调用方（`finishTrade`）决定：
 /// `NeedsConfirm` 不是终态，写进去就是噪音，还会被读成「失败」。

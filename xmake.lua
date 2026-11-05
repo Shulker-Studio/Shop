@@ -3,9 +3,9 @@ add_rules("mode.debug", "mode.release")
 add_repositories("levimc-repo https://github.com/LiteLDev/xmake-repo.git")
 
 -- Shop 是纯服务端模组
-add_requires("levilamina 26.51.8", {configs = {target_type = "server"}})
+add_requires("levilamina 26.60.1", {configs = {target_type = "server"}})
 -- 事件层依赖 iListenAttentively（告示牌编辑、开箱、爆炸/活塞/凋灵/火焰、双箱、货币事件）
-add_requires("ilistenattentively", {configs = {target_type = "server"}})
+add_requires("ilistenattentively 0.18.0", {configs = {target_type = "server"}})
 add_requires("levibuildscript")
 -- 纯逻辑层的单元测试（header-only），只被 ShopTests 使用，不进入 Shop.dll
 add_requires("doctest 2.5.3")

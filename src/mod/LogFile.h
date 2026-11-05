@@ -7,15 +7,15 @@
 
 namespace ss::shop {
 
-/// 日志根目录：`plugins/Shop/logs/`。
+/// 日志根目录：`mods/Shop/logs/`。
 ///
-/// 用 `getModDir()`（= 模组目录 `plugins/Shop`）拼，**不是** `getConfigDir()`：
-/// 后者是 `plugins/Shop/config`（配置文件所在的那一层），拿它拼会变成
-/// `plugins/Shop/config/logs/` —— 与 README、票面和服主的预期都不一样。
-/// 也不自己写死 `plugins/Shop`：模组装在哪由加载器决定。
+/// 用 `getModDir()`（= 模组目录 `mods/Shop`）拼，**不是** `getConfigDir()`：
+/// 后者是 `mods/Shop/config`（配置文件所在的那一层），拿它拼会变成
+/// `mods/Shop/config/logs/` —— 与 README、票面和服主的预期都不一样。
+/// 也不自己写死 `mods/Shop`：模组装在哪由加载器决定。
 std::filesystem::path logDirectory();
 
-/// 业务流水目录：`plugins/Shop/logs/transactions/`。
+/// 业务流水目录：`mods/Shop/logs/transactions/`。
 ///
 /// 两类记录分目录放，因为它们**体量差两个数量级**：业务流水一行几十字节，销毁留档一行可能几十 KB
 /// （完整 SNBT）。分开之后 `du -sh logs/*` 一眼能看出是谁在涨，`zcat transactions/*.gz` 查历史账时
@@ -23,7 +23,7 @@ std::filesystem::path logDirectory();
 /// 不再叠年月子目录：一年才 365 个文件，目录不会失控。
 std::filesystem::path transactionLogDirectory();
 
-/// 销毁留档目录：`plugins/Shop/logs/discarded/`。见 `transactionLogDirectory()`。
+/// 销毁留档目录：`mods/Shop/logs/discarded/`。见 `transactionLogDirectory()`。
 std::filesystem::path discardLogDirectory();
 
 /// 把旧布局（所有文件平铺在 `logs/` 根下、带 `transactions-` / `discarded-` 前缀）搬进新布局。

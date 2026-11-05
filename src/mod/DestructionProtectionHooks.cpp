@@ -145,7 +145,8 @@ LL_TYPE_INSTANCE_HOOK(
     BlockSource&              region,
     BlockPos const&           pos,
     bool                      dropResources,
-    BlockChangeContext const& changeSourceContext
+    BlockChangeContext const& changeSourceContext,
+    BlockDestroySound         destroySound
 ) {
     if (witherDestroyInProgress()) {
         auto const* config = currentShopConfig();
@@ -154,7 +155,7 @@ LL_TYPE_INSTANCE_HOOK(
             return false;
         }
     }
-    return origin(region, pos, dropResources, changeSourceContext);
+    return origin(region, pos, dropResources, changeSourceContext, destroySound);
 }
 
 // ---------------------------------------------------------------------------

@@ -5,6 +5,19 @@
 格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [26.60.0] - 2026-11-05
+
+适配 LeviLamina 26.60 / BDS 1.26.60.6（`bedrockdata v26.60.6-server.7`）。
+
+### 变更
+
+- 依赖 LeviLamina `>=26.60.1 <=26.70.0`、iListenAttentively `>=0.18.0`。26.60.0 把牌面写入、投掷器与铜傀儡搬运的
+  几个符号标成了 `MCNAPI`（链接期缺符号），26.60.1 已恢复为 `MCAPI`，所以下限是 `26.60.1` 而不是 `26.60.0`。
+- 安装目录随加载器由 `plugins/Shop/` 改为 `mods/Shop/`（`tooth.json` 的 `dest`、`README` 与代码注释同步）。
+  运行时路径仍走 `getModDir()` 解析，代码里没有写死的目录名。
+- `Level::destroyBlock` 在 26.60 多了第五个参数 `BlockDestroySound`：拆双箱时连带打掉绑着的商店牌传 `Play`，
+  凋灵逐格守卫的 hook 原样透传。
+
 ## [26.51.0] - 2026-11-04
 
 首个公开发布。设计取舍与踩过的坑记在 `DESIGN.md` 与 `docs/adr/`。

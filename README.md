@@ -91,7 +91,7 @@ lang/zh_CN.json   中文（值是模板，例如 "shop.form.units_reduced.buy": 
 lang/en_US.json   英文
 ```
 
-- 文件名就是 locale code，放在 `plugins/Shop/lang/`（安装包里已带）。
+- 文件名就是 locale code，放在 `mods/Shop/lang/`（安装包里已带）。
 - 模板里的 `{}` 由代码按顺序填入（价格、份数、玩家名），所以**数字在句子里的位置由译文决定**，
   不需要为了语序去改代码。
 - **`lang/` 是必需的，不是可选装饰**：代码里没有中文原文，缺 `lang/` 时玩家看到的是
@@ -111,19 +111,19 @@ lang/en_US.json   英文
 
 ### 交易流水（JSONL，P1）
 
-每笔**终态**交易自己留一行，位置 `plugins/Shop/logs/transactions/YYYY-MM-DD.jsonl`（按天分文件，服务器本地时间）。
+每笔**终态**交易自己留一行，位置 `mods/Shop/logs/transactions/YYYY-MM-DD.jsonl`（按天分文件，服务器本地时间）。
 一行一个 JSON 对象（NDJSON）、键序固定、UTF-8 无 BOM、中文不转义，`jq` / `duckdb` 直接读。
 
 `result` 只有三种：`ok`（成交）、`fail`（拒绝或没成交，带机器可读的 `reason`，如 `no_money` / `no_stock` /
 `no_space` / `owner_offline` / `shop_closed` / `frozen_pair`）、`frozen`（补偿失败被冻结，
 `reason` 为 `compensation_failed`，同时有一条 `fatal` 日志）。等待玩家确认的那一屏**不记**——它不是终态。
 
-管理员店卖出时被**销毁**的货另写一个目录 `plugins/Shop/logs/discarded/YYYY-MM-DD.jsonl`：一行一件物品堆，
+管理员店卖出时被**销毁**的货另写一个目录 `mods/Shop/logs/discarded/YYYY-MM-DD.jsonl`：一行一件物品堆，
 `item.nbt` 是完整 SNBT（紧凑单行，如 `{Count:1b,Damage:0s,Name:"minecraft:diamond",wasPickedUp:0b}`）。
 两类记录**分目录**放，因为它们体量差两个数量级（业务流水一行几十字节，留档一行可能几十 KB）：
 
 ```
-plugins/Shop/logs/
+mods/Shop/logs/
 ├── transactions/2026-11-01.jsonl       ← 业务流水
 ├── transactions/2026-10-25.jsonl.gz    ← 超期压缩后
 ├── discarded/2026-11-01.jsonl          ← 销毁留档（NBT 很胖）
@@ -144,13 +144,13 @@ plugins/Shop/logs/
 
 ```bash
 # 1. 今天卖了什么：只看成交，挑几个字段
-jq 'select(.result=="ok") | {ts, dir, item: .item.name, units, total}' plugins/Shop/logs/transactions/2026-11-01.jsonl
+jq 'select(.result=="ok") | {ts, dir, item: .item.name, units, total}' mods/Shop/logs/transactions/2026-11-01.jsonl
 
 # 2. 查已压缩的历史（.jsonl.gz 直接 zcat 进 jq）
-zcat plugins/Shop/logs/transactions/2026-10-2*.jsonl.gz | jq -c 'select(.player.xuid=="2535400000000002")'
+zcat mods/Shop/logs/transactions/2026-10-2*.jsonl.gz | jq -c 'select(.player.xuid=="2535400000000002")'
 
 # 3. 用 duckdb 聚合（.jsonl 与 .jsonl.gz 都能直读）
-duckdb -c "SELECT owner.name, sum(total) AS 营业额 FROM read_json_auto('plugins/Shop/logs/transactions/*.jsonl*') WHERE result='ok' GROUP BY 1 ORDER BY 2 DESC"
+duckdb -c "SELECT owner.name, sum(total) AS 营业额 FROM read_json_auto('mods/Shop/logs/transactions/*.jsonl*') WHERE result='ok' GROUP BY 1 ORDER BY 2 DESC"
 ```
 
 ### 配置项（P0 已生效）
@@ -174,8 +174,8 @@ duckdb -c "SELECT owner.name, sum(total) AS 营业额 FROM read_json_auto('plugi
 
 ### 配置文件与补齐规则
 
-配置文件在 `plugins/Shop/config/config.json`（日志在 `plugins/Shop/logs/transactions/` 与
-`plugins/Shop/logs/discarded/`，是**不同**的两层目录）。
+配置文件在 `mods/Shop/config/config.json`（日志在 `mods/Shop/logs/transactions/` 与
+`mods/Shop/logs/discarded/`，是**不同**的两层目录）。
 
 **缺键不会让模组拒绝加载。** 加载时永远拿本版的默认值打底、用文件里的值覆盖，所以：
 
@@ -216,7 +216,7 @@ xmake test        # 构建并运行纯逻辑层单元测试（doctest）
 lip install github.com/Shulker-Studio/Shop
 ```
 
-或手动把 `bin/Shop/` 放到服务器的 `plugins/Shop/`。
+或手动把 `bin/Shop/` 放到服务器的 `mods/Shop/`。
 
 ## 文档
 
