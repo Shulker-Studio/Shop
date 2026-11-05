@@ -364,5 +364,7 @@
   "shop.command.test.sold_through": "This one went through: the inventory could still accept the goods, so the compensation path was not triggered",
   "shop.command.test.no_balance": "Cannot read balance, unable to tell whether the refund happened",
   "shop.command.test.refund_ok": "Refund correct: balance unchanged ({})",
-  "shop.command.test.refund_missing": "Balance changed from {} to {}: no refund"
+  "shop.command.test.refund_missing": "Balance changed from {} to {}: no refund",
+  "shop.log.text.no_lang_dir": "No lang/ directory ({}): player-facing text will show key ids, please reinstall the mod",
+  "shop.log.text.load_failed": "Failed to load lang/ ({}): {}; player-facing text will show key ids, please reinstall the mod"
 }

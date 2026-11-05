@@ -364,5 +364,7 @@
   "shop.command.test.sold_through": "这次成交了：背包仍能接收这批货，前置条件没满足——补偿路径没有被触发",
   "shop.command.test.no_balance": "读不到余额，无法判断是否退款",
   "shop.command.test.refund_ok": "退款正确：余额未变（{}）",
-  "shop.command.test.refund_missing": "余额从 {} 变成 {}：没有退款"
+  "shop.command.test.refund_missing": "余额从 {} 变成 {}：没有退款",
+  "shop.log.text.no_lang_dir": "没有 lang/ 目录（{}）：玩家文本会显示成 key id，请重新安装本模组",
+  "shop.log.text.load_failed": "载入 lang/ 失败（{}）：{}；玩家文本会显示成 key id，请重新安装本模组"
 }

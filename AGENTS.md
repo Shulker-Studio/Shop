@@ -31,5 +31,7 @@ Issue 与 spec 以 markdown 文件存在 `.scratch/<feature>/`，不走 GitHub I
   `Locale` 管装载与渲染（`loadTexts` / `renderText` / `plain`）。
 - 新增文案必须同时写进 `lang/zh_CN.json` 与 `lang/en_US.json`，key 形如 `shop.<域>.<用途>`。
 - 命令输出也进词表：用 `ui::plain(text::keyed(...))`。别拿「只有管理员看」当理由绕过去。
-- 唯一例外是 `Locale.cpp` 里 `loadTexts()` 自己的两条启动日志——词表还没载入时查表只会拿到
-  key id，比中文更难读。`static_assert` 的编译期消息不算运行时文案。
+- 日志（`logger.debug/info/warn/error`）一律用 `ui::msg("shop.log.xxx", args...)`，不传裸字符串。
+- 唯一的中文兜底是 `Locale.cpp` 的 `kBootMessages`（`loadTexts()` 自己的两条启动日志）：
+  词表还没载入时它作为查表链的最后一环，日志仍走同一条 `ui::msg` 通道。
+  `static_assert` 的编译期消息不算运行时文案，`Debug` 的 `[shop/dbg]` 前缀与 `dim=`/`x=` 是调试字段，都不是文案。

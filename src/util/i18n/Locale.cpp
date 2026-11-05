@@ -9,7 +9,10 @@
 #include "ll/api/i18n/I18n.h"
 #include "mc/world/actor/player/Player.h"
 
+#include <array>
 #include <filesystem>
+#include <string_view>
+#include <utility>
 
 namespace ss::shop::ui {
 namespace {
@@ -20,14 +23,45 @@ namespace {
 /// 记一笔，省掉每条消息都去查一次空表。
 bool gLoaded = false;
 
+/// 词表不可用时的兜底文案。
+///
+/// 只有**两条**：`loadTexts()` 自己的启动日志。它们必须在「没有词表」的情况下也能读，
+/// 所以不能只放在 `lang/*.json` 里——那时查表只会拿到 key id，比中文原文更难读。
+///
+/// 注意这不是「硬编码例外」：这两条日志照样走 `ui::msg` → `renderText` 的同一条通道，
+/// 兜底表只是查表链的最后一环。`renderText` 与 `text::installLookup` 都经过 `lookupOrBoot`，
+/// 所以词表在的时候用词表，不在的时候用这里。
+constexpr std::array kBootMessages{
+    std::pair{
+        std::string_view{"shop.log.text.no_lang_dir"},
+        std::string_view{"没有 lang/ 目录（{}）：玩家文本会显示成 key id，请重新安装本模组"}
+    },
+    std::pair{
+        std::string_view{"shop.log.text.load_failed"},
+        std::string_view{"载入 lang/ 失败（{}）：{}；玩家文本会显示成 key id，请重新安装本模组"}
+    },
+};
+
+/// 查表：先问 `ll::i18n`，再问内置兜底表，都没有就返回空（由调用方决定怎么退化）。
+std::string_view lookupOrBoot(std::string_view key, std::string_view locale) {
+    auto const pattern = ll::i18n::getInstance().get(key, locale);
+    if (!pattern.empty()) {
+        return pattern;
+    }
+    for (auto const& [bootKey, bootText] : kBootMessages) {
+        if (bootKey == key) {
+            return bootText;
+        }
+    }
+    return {};
+}
+
 } // namespace
 
 void loadTexts() {
     // 纯逻辑层的表单文本走同一张表：把 `ll::i18n` 的查表注入进去。
     // 就算没有语言文件也注入——查不到条目时 `get` 返回空，`text::tr` 会退回中文原文。
-    text::installLookup([](std::string_view key) -> std::string_view {
-        return ll::i18n::getInstance().get(key, {});
-    });
+    text::installLookup([](std::string_view key) -> std::string_view { return lookupOrBoot(key, {}); });
     text::installRenderer(&renderText);
 
     auto&                       logger = Shop::getInstance().getSelf().getLogger();
@@ -39,20 +73,15 @@ void loadTexts() {
         // 玩家看到的每一句话都从词表来。缺 `lang/` 的后果是全部显示成 key id
         // （`shop.form.button.buy` 之类），所以这里必须是 warn，不能是 debug。
         //
-        // 这条与下面那条「载入失败」**故意不走 i18n**：它们就是这个 i18n 自己的启动日志，
-        // 此刻词表还没载入，查表只会拿到 key id，比中文原文更难读。这是全项目**仅有的
-        // 两处**硬编码中文运行时输出，属于不可避免的 bootstrap 例外，不要"顺手统一"掉。
-        logger.warn("没有 lang/ 目录（{}）：玩家文本会显示成 key id，请重新安装本模组", dir.string());
+        // 这条与下面那条「载入失败」是 i18n 自己的启动日志：此刻词表还没载入，
+        // 查表只会拿到 key id。它们靠 `kBootMessages` 兜底（见上），所以照样走词表通道。
+        logger.warn(ui::msg("shop.log.text.no_lang_dir", dir.string()));
         return;
     }
 
     gLoaded = false;
     if (auto loaded = ll::i18n::getInstance().load(dir); !loaded) {
-        logger.warn(
-            "载入 lang/ 失败（{}）：{}；玩家文本会显示成 key id，请重新安装本模组",
-            dir.string(),
-            loaded.error().message()
-        );
+        logger.warn(ui::msg("shop.log.text.load_failed", dir.string(), loaded.error().message()));
         return;
     }
     gLoaded = true;
@@ -77,7 +106,7 @@ std::string renderText(ss::shop::Text const& text, std::string_view localeCode) 
     std::string body = text.key.empty()
                          ? text.literal
                          : std::string{[&] {
-                               auto const pattern = ll::i18n::getInstance().get(text.key, effectiveLocale);
+                               auto const pattern = lookupOrBoot(text.key, effectiveLocale);
                                return pattern.empty() ? std::string_view{text.key} : pattern;
                            }()};
     if (!text.args.empty()) {
